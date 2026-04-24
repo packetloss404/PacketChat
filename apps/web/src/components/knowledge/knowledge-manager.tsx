@@ -1,66 +1,74 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { authFetch } from "../../lib/auth-client";
-import { ConfirmButton, EmptyState, LoadingBlock, StatusBadge, useToast } from "../ui";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { apiClient, type KnowledgeBase, type KnowledgeDocument, type KnowledgeSearchResult } from "../../lib/api-client";
+import { ConfirmButton, EmptyState, ErrorState, LoadingBlock, StatusBadge, useToast } from "../ui";
 
-type KnowledgeBase = {
-  id: string;
+type KnowledgeDraft = {
   name: string;
-  description: string | null;
-  status: string;
-  document_count: number;
+  description: string;
 };
 
-type KnowledgeDocument = {
-  id: string;
-  title: string;
-  mime_type: string | null;
-  ingest_status: string;
-  source_metadata?: { error?: string } | null;
-  size_bytes: string | number | null;
-  created_at: string;
-};
+function draftFromKnowledgeBase(kb: KnowledgeBase | null): KnowledgeDraft {
+  return { name: kb?.name ?? "", description: kb?.description ?? "" };
+}
 
-type SearchResult = {
-  documentId: string;
-  chunkId: string;
-  chunkIndex: number;
-  title: string;
-  score: number;
-  lexicalScore?: number;
-  semanticScore?: number;
-  snippet: string;
-  citation: string;
-};
+function metadataValue(document: KnowledgeDocument, key: string) {
+  const metadata = document.source_metadata;
+  if (!metadata || typeof metadata !== "object") return null;
+  const value = (metadata as Record<string, unknown>)[key];
+  if (value === undefined || value === null) return null;
+  return String(value);
+}
+
+function formatSize(value?: string | number | null) {
+  if (value == null) return "Unknown size";
+  const bytes = typeof value === "string" ? Number(value) : value;
+  if (!Number.isFinite(bytes)) return String(value);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 
 export function KnowledgeManager() {
   const toast = useToast();
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [selectedId, setSelectedId] = useState("");
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
+  const [createDraft, setCreateDraft] = useState<KnowledgeDraft>({ name: "", description: "" });
+  const [editDraft, setEditDraft] = useState<KnowledgeDraft>({ name: "", description: "" });
+  const [documentTitles, setDocumentTitles] = useState<Record<string, string>>({});
   const [file, setFile] = useState<File | null>(null);
   const [query, setQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [limit, setLimit] = useState(5);
+  const [searchResults, setSearchResults] = useState<KnowledgeSearchResult[]>([]);
+  const [embeddingNotice, setEmbeddingNotice] = useState("");
   const [message, setMessage] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const [loadingBases, setLoadingBases] = useState(true);
   const [loadingDocuments, setLoadingDocuments] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [savingKb, setSavingKb] = useState(false);
+  const [reembedding, setReembedding] = useState(false);
 
-  async function api(path: string, init: RequestInit = {}) {
-    const response = await authFetch(path, init);
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data?.error?.message ?? "Request failed");
-    return data;
-  }
+  const selectedKb = useMemo(() => knowledgeBases.find((kb) => kb.id === selectedId) ?? null, [knowledgeBases, selectedId]);
+  const readyDocuments = documents.filter((document) => document.ingest_status === "ready").length;
+  const failedDocuments = documents.filter((document) => document.ingest_status === "failed").length;
+  const processingDocuments = documents.filter((document) => ["queued", "processing"].includes(document.ingest_status)).length;
+  const selectedArchived = selectedKb?.status === "archived";
 
   async function loadKnowledgeBases() {
     setLoadingBases(true);
+    setError(null);
     try {
-      const data = await api("/api/knowledge");
-      setKnowledgeBases(data.knowledgeBases ?? []);
-      setSelectedId((current) => current || data.knowledgeBases?.[0]?.id || "");
+      const data = await apiClient.knowledge.list();
+      const bases = data.knowledgeBases ?? [];
+      setKnowledgeBases(bases);
+      setSelectedId((current) => current || bases[0]?.id || "");
+    } catch (err) {
+      const nextError = err instanceof Error ? err.message : String(err);
+      setError(nextError);
+      toast({ title: "Unable to load knowledge bases", message: nextError, variant: "error" });
     } finally {
       setLoadingBases(false);
     }
@@ -73,125 +81,139 @@ export function KnowledgeManager() {
     }
     setLoadingDocuments(true);
     try {
-      const data = await api(`/api/knowledge/${knowledgeBaseId}/documents`);
-      setDocuments(data.documents ?? []);
+      const data = await apiClient.knowledge.documents(knowledgeBaseId);
+      const nextDocuments = data.documents ?? [];
+      setDocuments(nextDocuments);
+      setDocumentTitles(Object.fromEntries(nextDocuments.map((document) => [document.id, document.title])));
+    } catch (err) {
+      const nextError = err instanceof Error ? err.message : String(err);
+      setError(nextError);
+      toast({ title: "Unable to load documents", message: nextError, variant: "error" });
     } finally {
       setLoadingDocuments(false);
     }
   }
 
   useEffect(() => {
-    loadKnowledgeBases().catch((error) => setMessage(error.message));
+    void loadKnowledgeBases();
   }, []);
 
   useEffect(() => {
-    loadDocuments(selectedId).catch((error) => setMessage(error.message));
-  }, [selectedId]);
+    setEditDraft(draftFromKnowledgeBase(selectedKb));
+    setSearchResults([]);
+    setEmbeddingNotice("");
+    void loadDocuments(selectedId);
+  }, [selectedId, selectedKb?.id]);
 
-  async function createKnowledgeBase(event: React.FormEvent) {
+  async function createKnowledgeBase(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMessage("");
+    setError(null);
     try {
-      const data = await api("/api/knowledge", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name, description })
-      });
-      setName("");
-      setDescription("");
+      const name = createDraft.name.trim();
+      if (!name) throw new Error("Knowledge base name is required.");
+      const data = await apiClient.knowledge.create({ name, description: createDraft.description.trim() });
+      setCreateDraft({ name: "", description: "" });
       setSelectedId(data.knowledgeBaseId);
       await loadKnowledgeBases();
       setMessage("Knowledge base created.");
       toast({ message: "Knowledge base created.", variant: "success" });
-    } catch (error) {
-      const nextError = error instanceof Error ? error.message : String(error);
-      setMessage(nextError);
+    } catch (err) {
+      const nextError = err instanceof Error ? err.message : String(err);
+      setError(nextError);
       toast({ title: "Unable to create knowledge base", message: nextError, variant: "error" });
     }
   }
 
-  async function uploadFile(event: React.FormEvent) {
+  async function saveKnowledgeBase(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedKb) return;
+    setSavingKb(true);
+    setMessage("");
+    setError(null);
+    try {
+      const name = editDraft.name.trim();
+      if (!name) throw new Error("Knowledge base name is required.");
+      const data = await apiClient.knowledge.update(selectedKb.id, { name, description: editDraft.description.trim() || null });
+      setKnowledgeBases((current) => current.map((kb) => (kb.id === selectedKb.id ? { ...kb, ...data.knowledgeBase } : kb)));
+      setEditDraft(draftFromKnowledgeBase(data.knowledgeBase));
+      setMessage("Knowledge base updated.");
+      toast({ message: "Knowledge base updated.", variant: "success" });
+    } catch (err) {
+      const nextError = err instanceof Error ? err.message : String(err);
+      setError(nextError);
+      toast({ title: "Unable to update knowledge base", message: nextError, variant: "error" });
+    } finally {
+      setSavingKb(false);
+    }
+  }
+
+  async function uploadFile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!file || !selectedId) return;
+    setUploading(true);
     setMessage("");
+    setError(null);
     try {
       const form = new FormData();
       form.set("knowledgeBaseId", selectedId);
       form.set("file", file);
-      await api("/api/files/upload", { method: "POST", body: form });
+      await apiClient.knowledge.uploadFile(form);
       setFile(null);
       await loadDocuments(selectedId);
       await loadKnowledgeBases();
       setMessage("File uploaded and queued for ingestion.");
       toast({ message: "File uploaded and queued for ingestion.", variant: "success" });
-    } catch (error) {
-      const nextError = error instanceof Error ? error.message : String(error);
-      setMessage(nextError);
+    } catch (err) {
+      const nextError = err instanceof Error ? err.message : String(err);
+      setError(nextError);
       toast({ title: "Unable to upload file", message: nextError, variant: "error" });
+    } finally {
+      setUploading(false);
     }
   }
 
-  async function searchKnowledge(event: React.FormEvent) {
+  async function searchKnowledge(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedId || !query.trim()) return;
     setMessage("");
+    setError(null);
+    setEmbeddingNotice("");
     try {
-      const data = await api(`/api/knowledge/${selectedId}/search`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ query })
-      });
+      const data = await apiClient.knowledge.search(selectedId, { query, limit });
       setSearchResults(data.results ?? []);
+      const embeddings = data.embeddings as { fallback?: boolean; missing?: number; outdated?: number; invalid?: number };
+      if (embeddings?.fallback || embeddings?.missing || embeddings?.outdated || embeddings?.invalid) {
+        setEmbeddingNotice(`Embedding fallback detected: ${embeddings.missing ?? 0} missing, ${embeddings.outdated ?? 0} outdated, ${embeddings.invalid ?? 0} invalid.`);
+      }
       setMessage((data.results ?? []).length ? "Search complete." : "No matching chunks found.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  async function updateKnowledgeBase(kb: KnowledgeBase) {
-    const nextName = window.prompt("Knowledge base name", kb.name);
-    if (nextName == null) return;
-    const nextDescription = window.prompt("Knowledge base description", kb.description ?? "");
-    if (nextDescription == null) return;
-    setMessage("");
-    try {
-      await api(`/api/knowledge/${kb.id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: nextName, description: nextDescription })
-      });
-      await loadKnowledgeBases();
-      setMessage("Knowledge base updated.");
-      toast({ message: "Knowledge base updated.", variant: "success" });
-    } catch (error) {
-      const nextError = error instanceof Error ? error.message : String(error);
-      setMessage(nextError);
-      toast({ title: "Unable to update knowledge base", message: nextError, variant: "error" });
+    } catch (err) {
+      const nextError = err instanceof Error ? err.message : String(err);
+      setError(nextError);
+      toast({ title: "Knowledge search failed", message: nextError, variant: "error" });
     }
   }
 
   async function archiveKnowledgeBase(kb: KnowledgeBase) {
     setMessage("");
+    setError(null);
     try {
-      await api(`/api/knowledge/${kb.id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ archived: true })
-      });
-      await loadKnowledgeBases();
+      const data = await apiClient.knowledge.update(kb.id, { archived: true });
+      setKnowledgeBases((current) => current.map((item) => (item.id === kb.id ? { ...item, ...data.knowledgeBase } : item)));
       setMessage("Knowledge base archived.");
       toast({ message: "Knowledge base archived.", variant: "success" });
-    } catch (error) {
-      const nextError = error instanceof Error ? error.message : String(error);
-      setMessage(nextError);
+    } catch (err) {
+      const nextError = err instanceof Error ? err.message : String(err);
+      setError(nextError);
       toast({ title: "Unable to archive knowledge base", message: nextError, variant: "error" });
     }
   }
 
   async function deleteKnowledgeBase(kb: KnowledgeBase) {
     setMessage("");
+    setError(null);
     try {
-      await api(`/api/knowledge/${kb.id}`, { method: "DELETE" });
+      await apiClient.knowledge.delete(kb.id);
       setKnowledgeBases((current) => current.filter((item) => item.id !== kb.id));
       if (selectedId === kb.id) {
         setSelectedId("");
@@ -200,30 +222,30 @@ export function KnowledgeManager() {
       }
       setMessage("Knowledge base deleted.");
       toast({ message: "Knowledge base deleted.", variant: "success" });
-    } catch (error) {
-      const nextError = error instanceof Error ? error.message : String(error);
-      setMessage(nextError);
+    } catch (err) {
+      const nextError = err instanceof Error ? err.message : String(err);
+      setError(nextError);
       toast({ title: "Unable to delete knowledge base", message: nextError, variant: "error" });
     }
   }
 
   async function renameDocument(document: KnowledgeDocument) {
     if (!selectedId) return;
-    const title = window.prompt("Document title", document.title);
-    if (title == null) return;
+    const title = documentTitles[document.id]?.trim();
+    if (!title) {
+      setError("Document title is required.");
+      return;
+    }
     setMessage("");
+    setError(null);
     try {
-      await api(`/api/knowledge/${selectedId}/documents/${document.id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title })
-      });
+      await apiClient.knowledge.updateDocument(selectedId, document.id, { title });
       await loadDocuments(selectedId);
       setMessage("Document renamed.");
       toast({ message: "Document renamed.", variant: "success" });
-    } catch (error) {
-      const nextError = error instanceof Error ? error.message : String(error);
-      setMessage(nextError);
+    } catch (err) {
+      const nextError = err instanceof Error ? err.message : String(err);
+      setError(nextError);
       toast({ title: "Unable to rename document", message: nextError, variant: "error" });
     }
   }
@@ -231,120 +253,210 @@ export function KnowledgeManager() {
   async function deleteDocument(document: KnowledgeDocument) {
     if (!selectedId) return;
     setMessage("");
+    setError(null);
     try {
-      await api(`/api/knowledge/${selectedId}/documents/${document.id}`, { method: "DELETE" });
+      await apiClient.knowledge.deleteDocument(selectedId, document.id);
       setDocuments((current) => current.filter((item) => item.id !== document.id));
       await loadKnowledgeBases();
       setMessage("Document deleted.");
       toast({ message: "Document deleted.", variant: "success" });
-    } catch (error) {
-      const nextError = error instanceof Error ? error.message : String(error);
-      setMessage(nextError);
+    } catch (err) {
+      const nextError = err instanceof Error ? err.message : String(err);
+      setError(nextError);
       toast({ title: "Unable to delete document", message: nextError, variant: "error" });
     }
   }
 
+  async function reembedKnowledgeBase() {
+    if (!selectedId) return;
+    setReembedding(true);
+    setMessage("");
+    setError(null);
+    try {
+      const result = await apiClient.knowledge.reembed(selectedId, { limit: 100 });
+      setMessage(`Re-embed scanned ${result.scanned} chunks and updated ${result.updated}.`);
+      toast({ title: "Embeddings refreshed", message: `${result.updated} chunks updated.`, variant: "success" });
+    } catch (err) {
+      const nextError = err instanceof Error ? err.message : String(err);
+      setError(nextError);
+      toast({ title: "Unable to refresh embeddings", message: nextError, variant: "error" });
+    } finally {
+      setReembedding(false);
+    }
+  }
+
   return (
-    <div className="grid knowledge-page">
-      <section className="card">
-        <div className="eyebrow">Knowledge</div>
-        <h1>Private knowledge bases</h1>
-        <p className="muted">Create user-owned knowledge bases, ingest documents, and search ready chunks with hybrid local retrieval.</p>
-        {message ? <p className={message.toLowerCase().includes("failed") || message.toLowerCase().includes("missing") ? "error-state" : "notice"} role="status">{message}</p> : null}
+    <section className="knowledge-library">
+      <div className="card card--hero knowledge-hero">
+        <div>
+          <div className="eyebrow">Knowledge</div>
+          <h1>Knowledge library</h1>
+          <p className="muted">Create private document collections, upload files, and test local hybrid retrieval before attaching knowledge to chats or agents.</p>
+        </div>
+        <button className="button" type="button" onClick={() => void loadKnowledgeBases()} disabled={loadingBases}>{loadingBases ? "Refreshing..." : "Refresh"}</button>
+      </div>
 
-        <form onSubmit={createKnowledgeBase}>
-          <label>
-            Name
-              <input className="input" aria-label="Knowledge base name" value={name} onChange={(event) => setName(event.target.value)} required />
-          </label>
-          <label>
-            Description
-              <textarea aria-label="Knowledge base description" value={description} onChange={(event) => setDescription(event.target.value)} rows={3} />
-          </label>
-          <button className="button" type="submit">Create knowledge base</button>
-        </form>
-      </section>
+      {message ? <p className="notice" role="status">{message}</p> : null}
+      {error ? <ErrorState message={error} onRetry={() => void loadKnowledgeBases()} /> : null}
 
-      <section className="card">
-        <h2>Upload file</h2>
-        <form onSubmit={uploadFile}>
-          <label>
-            Knowledge base
-              <select aria-label="Knowledge base" value={selectedId} onChange={(event) => setSelectedId(event.target.value)} required>
-              <option value="">Select a knowledge base</option>
-              {knowledgeBases.map((kb) => (
-                <option value={kb.id} key={kb.id}>{kb.name}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            File
-              <input className="input" aria-label="File to upload" type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} required />
-          </label>
-          <button className="button" type="submit" disabled={!selectedId || !file}>Upload and queue</button>
-        </form>
-      </section>
-
-      <section className="card">
-        <h2>Your knowledge bases</h2>
-        <button className="button secondary" type="button" onClick={() => loadKnowledgeBases().catch((error) => setMessage(error.message))}>
-          Refresh list
-        </button>
-        {loadingBases ? <LoadingBlock title="Loading knowledge bases" /> : null}
-        {!loadingBases && knowledgeBases.length === 0 ? <EmptyState title="No knowledge bases" description="Create one before uploading documents." /> : null}
-        {knowledgeBases.map((kb) => (
-          <div className="card" key={kb.id} style={{ boxShadow: "none" }}>
-            <button className="input" type="button" onClick={() => setSelectedId(kb.id)}>
-              {kb.name} ({kb.document_count} docs) <StatusBadge>{kb.status}</StatusBadge>
-            </button>
-            {kb.description ? <p className="muted">{kb.description}</p> : null}
-            <div className="actions-row">
-              <button className="button secondary" type="button" onClick={() => updateKnowledgeBase(kb)}>Edit</button>
-              <ConfirmButton message={`Archive ${kb.name}?`} disabled={kb.status === "archived"} onConfirm={() => archiveKnowledgeBase(kb)}>Archive</ConfirmButton>
-              <ConfirmButton message={`Delete ${kb.name} and its documents?`} confirmLabel="Delete" onConfirm={() => deleteKnowledgeBase(kb)}>Delete</ConfirmButton>
+      <div className="knowledge-layout">
+        <aside className="card knowledge-sidebar" aria-label="Knowledge bases">
+          <form className="knowledge-create" onSubmit={(event) => void createKnowledgeBase(event)}>
+            <div>
+              <div className="eyebrow">Create</div>
+              <h2>New base</h2>
             </div>
+            <label>
+              Name
+              <input className="input" value={createDraft.name} onChange={(event) => setCreateDraft((current) => ({ ...current, name: event.target.value }))} required />
+            </label>
+            <label>
+              Description
+              <textarea value={createDraft.description} onChange={(event) => setCreateDraft((current) => ({ ...current, description: event.target.value }))} rows={3} />
+            </label>
+            <button className="button" type="submit">Create knowledge base</button>
+          </form>
+
+          {loadingBases ? <LoadingBlock title="Loading bases" /> : null}
+          {!loadingBases && knowledgeBases.length === 0 ? <EmptyState title="No knowledge bases" description="Create one before uploading documents." /> : null}
+
+          <div className="knowledge-base-list">
+            {knowledgeBases.map((kb) => (
+              <button className="knowledge-base-card" key={kb.id} type="button" aria-pressed={kb.id === selectedId} onClick={() => setSelectedId(kb.id)}>
+                <span className="knowledge-base-card__title">{kb.name}</span>
+                <span className="knowledge-base-card__meta">{kb.document_count ?? 0} docs</span>
+                <StatusBadge>{kb.status}</StatusBadge>
+              </button>
+            ))}
           </div>
-        ))}
-      </section>
+        </aside>
 
-      <section className="card">
-        <h2>Documents</h2>
-        <button className="button secondary" type="button" disabled={!selectedId} onClick={() => loadDocuments(selectedId).catch((error) => setMessage(error.message))}>
-          Refresh documents
-        </button>
-        {loadingDocuments ? <LoadingBlock title="Loading documents" /> : null}
-        {!loadingDocuments && documents.length === 0 ? <EmptyState title="No documents" description="No documents are queued for this knowledge base." /> : null}
-        {documents.map((document) => (
-          <article className="card" key={document.id} style={{ boxShadow: "none" }}>
-            <strong>{document.title}</strong><br />
-            <span className="muted"><StatusBadge>{document.ingest_status}</StatusBadge> {document.mime_type ?? "unknown type"}</span>
-            {document.source_metadata?.error ? <><br /><span className="muted">{document.source_metadata.error}</span></> : null}
-            <div className="actions-row knowledge-document-actions">
-              <button className="button secondary" type="button" onClick={() => renameDocument(document)}>Rename</button>
-              <ConfirmButton message={`Delete ${document.title}?`} confirmLabel="Delete" onConfirm={() => deleteDocument(document)}>Delete</ConfirmButton>
-            </div>
-          </article>
-        ))}
-      </section>
+        <main className="knowledge-workspace" aria-label="Selected knowledge base">
+          {!selectedKb ? (
+            <EmptyState title="Select a knowledge base" description="Choose a base from the library or create a new one." />
+          ) : (
+            <>
+              <section className="card knowledge-summary">
+                <div className="panel-title">
+                  <div>
+                    <div className="eyebrow">Selected base</div>
+                    <h2>{selectedKb.name}</h2>
+                    <p className="muted">{selectedKb.description || "No description"}</p>
+                  </div>
+                  <div className="knowledge-metric-row">
+                    <span><strong>{documents.length}</strong> documents</span>
+                    <span><strong>{readyDocuments}</strong> ready</span>
+                    <span><strong>{processingDocuments}</strong> processing</span>
+                    <span><strong>{failedDocuments}</strong> failed</span>
+                  </div>
+                </div>
 
-      <section className="card">
-        <h2>Search</h2>
-        <form onSubmit={searchKnowledge}>
-          <label>
-            Query
-             <input className="input" aria-label="Search query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search ready documents" required />
-          </label>
-          <button className="button" type="submit" disabled={!selectedId || !query.trim()}>Search knowledge</button>
-        </form>
-        {!query && searchResults.length === 0 ? <EmptyState title="No search yet" description="Search results will appear here after documents finish ingestion." /> : null}
-        {searchResults.map((result) => (
-          <article key={result.chunkId} className="card">
-            <strong>{result.title}</strong>
-            <p className="muted">{result.citation} - score {result.score} - lexical {result.lexicalScore ?? 0} - semantic {result.semanticScore ?? 0}</p>
-            <p>{result.snippet}</p>
-          </article>
-        ))}
-      </section>
-    </div>
+                <form className="knowledge-edit-form" onSubmit={(event) => void saveKnowledgeBase(event)}>
+                  <label>
+                    Name
+                    <input className="input" value={editDraft.name} onChange={(event) => setEditDraft((current) => ({ ...current, name: event.target.value }))} required />
+                  </label>
+                  <label>
+                    Description
+                    <textarea value={editDraft.description} onChange={(event) => setEditDraft((current) => ({ ...current, description: event.target.value }))} rows={3} />
+                  </label>
+                  <div className="actions-row">
+                    <button className="button" type="submit" disabled={savingKb}>{savingKb ? "Saving..." : "Save base"}</button>
+                    <ConfirmButton message={`Archive ${selectedKb.name}?`} disabled={selectedArchived} onConfirm={() => archiveKnowledgeBase(selectedKb)}>Archive</ConfirmButton>
+                    <ConfirmButton className="button button--danger" message={`Delete ${selectedKb.name} and its documents?`} confirmLabel="Delete" onConfirm={() => deleteKnowledgeBase(selectedKb)}>Delete</ConfirmButton>
+                  </div>
+                </form>
+              </section>
+
+              <section className="card knowledge-upload">
+                <div>
+                  <div className="eyebrow">Upload</div>
+                  <h2>Ingest documents</h2>
+                  <p className="muted">Supports text, markdown, JSON, CSV, embedded-text PDFs, images via English OCR, and modern Office files. Scanned PDFs are not OCR'd directly.</p>
+                </div>
+                <form className="knowledge-upload-form" onSubmit={(event) => void uploadFile(event)}>
+                  <label>
+                    File
+                    <input className="input" aria-label="File to upload" type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} disabled={selectedArchived} required />
+                  </label>
+                  <button className="button" type="submit" disabled={selectedArchived || !file || uploading}>{uploading ? "Uploading..." : "Upload and queue"}</button>
+                </form>
+                {selectedArchived ? <p className="warning" role="status">Archived knowledge bases cannot receive uploads or searches.</p> : null}
+              </section>
+
+              <section className="card knowledge-documents">
+                <div className="panel-title">
+                  <div>
+                    <div className="eyebrow">Documents</div>
+                    <h2>Ingestion status</h2>
+                  </div>
+                  <button className="button button--ghost" type="button" disabled={!selectedId} onClick={() => void loadDocuments(selectedId)}>Refresh documents</button>
+                </div>
+                {loadingDocuments ? <LoadingBlock title="Loading documents" /> : null}
+                {!loadingDocuments && documents.length === 0 ? <EmptyState title="No documents" description="Upload a file to queue extraction, chunking, and embeddings." /> : null}
+                <div className="knowledge-document-list">
+                  {documents.map((document) => (
+                    <article className="knowledge-document-card" key={document.id}>
+                      <div>
+                        <input className="input" value={documentTitles[document.id] ?? document.title} onChange={(event) => setDocumentTitles((current) => ({ ...current, [document.id]: event.target.value }))} aria-label={`Title for ${document.title}`} />
+                        <div className="knowledge-document-meta">
+                          <StatusBadge>{document.ingest_status}</StatusBadge>
+                          <span>{document.mime_type ?? metadataValue(document, "detectedType") ?? "unknown type"}</span>
+                          <span>{formatSize(document.size_bytes)}</span>
+                          {metadataValue(document, "chunkCount") ? <span>{metadataValue(document, "chunkCount")} chunks</span> : null}
+                        </div>
+                        {metadataValue(document, "error") ? <p className="error-state" role="alert">{metadataValue(document, "error")}</p> : null}
+                      </div>
+                      <div className="actions-row knowledge-document-actions">
+                        <button className="button button--ghost" type="button" onClick={() => void renameDocument(document)}>Rename</button>
+                        <ConfirmButton className="button button--danger" message={`Delete ${document.title}?`} confirmLabel="Delete" onConfirm={() => deleteDocument(document)}>Delete</ConfirmButton>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+
+              <section className="card knowledge-search">
+                <div className="panel-title">
+                  <div>
+                    <div className="eyebrow">Retrieval</div>
+                    <h2>Test search</h2>
+                  </div>
+                  <button className="button button--ghost" type="button" disabled={selectedArchived || reembedding} onClick={() => void reembedKnowledgeBase()}>{reembedding ? "Refreshing..." : "Refresh embeddings"}</button>
+                </div>
+                <form className="knowledge-search-form" onSubmit={(event) => void searchKnowledge(event)}>
+                  <label>
+                    Query
+                    <input className="input" aria-label="Search query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search ready documents" required />
+                  </label>
+                  <label>
+                    Results
+                    <input className="input" type="number" min={1} max={50} value={limit} onChange={(event) => setLimit(Number(event.target.value))} />
+                  </label>
+                  <button className="button" type="submit" disabled={selectedArchived || !query.trim()}>Search knowledge</button>
+                </form>
+                {embeddingNotice ? <p className="warning" role="status">{embeddingNotice}</p> : null}
+                {!query && searchResults.length === 0 ? <EmptyState title="No search yet" description="Search results will appear here after documents finish ingestion." /> : null}
+                <div className="knowledge-search-results">
+                  {searchResults.map((result) => (
+                    <article key={result.chunkId} className="knowledge-search-result">
+                      <strong>{result.title}</strong>
+                      <p>{result.snippet}</p>
+                      <div className="knowledge-score-row">
+                        <span>{result.citation}</span>
+                        <span>score {result.score}</span>
+                        <span>lexical {result.lexicalScore ?? 0}</span>
+                        <span>semantic {result.semanticScore ?? 0}</span>
+                        {result.embeddingStatus ? <span>{result.embeddingStatus}</span> : null}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            </>
+          )}
+        </main>
+      </div>
+    </section>
   );
 }

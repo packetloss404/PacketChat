@@ -37,8 +37,8 @@ type ProvidersResponse = {
 };
 
 const providers: { id: ProviderId; label: string; hint: string }[] = [
-  { id: "openai-compatible", label: "OpenAI-compatible", hint: "Use for OpenAI or compatible base URLs." },
-  { id: "azure-openai", label: "Azure OpenAI", hint: "Requires Azure endpoint details when applicable." },
+  { id: "openai-compatible", label: "OpenAI-compatible", hint: "Use the root host for OpenAI-compatible services. PacketChat appends /v1 routes." },
+  { id: "azure-openai", label: "Azure OpenAI", hint: "Use your Azure resource endpoint; chat model names are deployment names." },
   { id: "anthropic", label: "Anthropic", hint: "Claude API provider account." },
   { id: "perplexity", label: "Perplexity", hint: "Hosted search-aware model provider." },
   { id: "minimax", label: "Minimax", hint: "Minimax model provider account." }
@@ -273,6 +273,9 @@ export function ProvidersManager() {
     acc[model.provider_account_id] = [...(acc[model.provider_account_id] ?? []), model];
     return acc;
   }, {});
+  const enabledAccounts = accounts.filter((account) => account.status === "enabled").length;
+  const globalAccounts = accounts.filter((account) => account.scope === "global").length;
+  const userAccounts = accounts.filter((account) => account.scope === "user").length;
 
   return (
     <section className="providers-page">
@@ -298,6 +301,24 @@ export function ProvidersManager() {
       {message ? <div className="success-state" role="status">{message}</div> : null}
       {error ? <ErrorState title="Provider request failed" message={error} onRetry={() => void loadProviders()} /> : null}
 
+      <div className="providers-summary-grid">
+        <div className="card card--compact providers-summary-card">
+          <span className="eyebrow">Enabled routes</span>
+          <strong>{enabledAccounts}</strong>
+          <span className="muted">usable provider accounts</span>
+        </div>
+        <div className="card card--compact providers-summary-card">
+          <span className="eyebrow">Global</span>
+          <strong>{globalAccounts}</strong>
+          <span className="muted">admin-managed accounts</span>
+        </div>
+        <div className="card card--compact providers-summary-card">
+          <span className="eyebrow">BYOK</span>
+          <strong>{userAccounts}</strong>
+          <span className="muted">user-scoped accounts / {byokEnabled ? "enabled" : "disabled"}</span>
+        </div>
+      </div>
+
       <div className="providers-layout">
         <form className="card providers-form" onSubmit={createProvider}>
           <h2>Add provider</h2>
@@ -314,7 +335,7 @@ export function ProvidersManager() {
           <label>
             Scope
             <select aria-label="Provider account scope" value={form.scope} onChange={(event) => setForm({ ...form, scope: event.target.value as ProviderScope })}>
-              <option value="global">Global</option>
+              <option value="global">Global (admin managed)</option>
               <option value="user" disabled={userScopeDisabled}>User BYOK</option>
             </select>
           </label>
@@ -332,7 +353,7 @@ export function ProvidersManager() {
           <div className="providers-row">
             <label>
               Base URL
-              <input className="input" value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" />
+              <input className="input" value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder={baseUrlPlaceholder(form.provider)} />
             </label>
             <label>
               API version
@@ -360,7 +381,7 @@ export function ProvidersManager() {
           {loading ? <LoadingBlock title="Loading provider accounts" description="Checking configured accounts and synced models." /> : null}
           {!loading && accounts.length === 0 ? <EmptyState title="No provider accounts" description="Add a provider account with a valid key to enable chat, agents, and model sync." /> : null}
           {accounts.map((account) => (
-            <article className="providers-account" key={account.id}>
+            <article className={`providers-account ${account.status !== "enabled" ? "providers-account--disabled" : ""}`} key={account.id}>
               {editingId === account.id ? (
                 <div className="providers-form">
                   <label>
@@ -398,17 +419,27 @@ export function ProvidersManager() {
               ) : (
                 <div>
                   <h3>{account.display_name}</h3>
-                  <p className="muted">
-                    {providerLabel(account.provider)} / {account.scope === "user" ? "User BYOK" : "Global"} <StatusBadge>{account.status}</StatusBadge>
-                  </p>
+                  <div className="providers-badge-row">
+                    <StatusBadge tone="info">{providerLabel(account.provider)}</StatusBadge>
+                    <StatusBadge tone={account.scope === "user" ? "warning" : "success"}>{account.scope === "user" ? "Your BYOK" : "Global"}</StatusBadge>
+                    <StatusBadge>{account.status}</StatusBadge>
+                  </div>
                   <p className="muted providers-meta">
                     {[account.base_url, account.api_version, account.region].filter(Boolean).join(" / ") || "No endpoint metadata"}
                   </p>
-                  <p className="muted providers-meta">
-                    {(modelsByAccount[account.id] ?? []).length
-                      ? `Models: ${(modelsByAccount[account.id] ?? []).map((model) => model.display_name ?? model.model).filter(Boolean).join(", ")}`
-                      : "No models discovered yet"}
-                  </p>
+                  <div className="providers-model-strip" aria-label={`Synced models for ${account.display_name}`}>
+                    {(modelsByAccount[account.id] ?? []).length ? (
+                      <>
+                        <span className="providers-pill">{(modelsByAccount[account.id] ?? []).length} models</span>
+                        {(modelsByAccount[account.id] ?? []).slice(0, 4).map((model) => (
+                          <span className="providers-model-chip" key={model.id}>{model.display_name ?? model.model}</span>
+                        ))}
+                        {(modelsByAccount[account.id] ?? []).length > 4 ? <span className="muted">+{(modelsByAccount[account.id] ?? []).length - 4} more</span> : null}
+                      </>
+                    ) : (
+                      <span className="muted">No models discovered yet. Use manual model entry in chat or sync models.</span>
+                    )}
+                  </div>
                   <div className="providers-row">
                     <input className="input" aria-label={`New API key for ${account.display_name}`} type="password" value={keyInputs[account.id] ?? ""} onChange={(event) => setKeyInputs({ ...keyInputs, [account.id]: event.target.value })} placeholder="New API key" />
                     <button className="button" onClick={() => void rotateKey(account)} disabled={rotatingId === account.id} type="button">
@@ -430,7 +461,7 @@ export function ProvidersManager() {
                   <button className="button" onClick={() => startEdit(account)} type="button">Edit</button>
                 )}
                 <button className="button" onClick={() => void testProvider(account)} disabled={testingId === account.id} type="button">
-                  {testingId === account.id ? "Testing..." : "Test"}
+                  {testingId === account.id ? "Testing..." : "Test connection"}
                 </button>
                 <button className="button" onClick={() => void syncModels(account)} disabled={syncingId === account.id} type="button">
                   {syncingId === account.id ? "Syncing..." : "Sync models"}
@@ -449,4 +480,12 @@ export function ProvidersManager() {
 
 function providerLabel(providerId: ProviderId) {
   return providers.find((provider) => provider.id === providerId)?.label ?? providerId;
+}
+
+function baseUrlPlaceholder(providerId: ProviderId) {
+  if (providerId === "azure-openai") return "https://your-resource.openai.azure.com";
+  if (providerId === "anthropic") return "https://api.anthropic.com";
+  if (providerId === "perplexity") return "https://api.perplexity.ai";
+  if (providerId === "minimax") return "https://api.minimax.io";
+  return "https://api.openai.com or compatible root host";
 }

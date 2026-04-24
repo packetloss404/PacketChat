@@ -352,6 +352,7 @@ export default function AgentsPage() {
   const selectedProviderModels = draft?.spec.providerAccountId
     ? modelBindings.filter((binding) => binding.provider_account_id === draft.spec.providerAccountId)
     : [];
+  const selectedAgent = agents.find((agent) => agent.id === selectedId) ?? null;
 
   function updateSpec(next: Partial<Draft["spec"]>) {
     if (!draft) return;
@@ -371,211 +372,213 @@ export default function AgentsPage() {
   }
 
   return (
-    <section className="card agents-page">
-      <div className="eyebrow">Agents</div>
-      <h1>Agent builder</h1>
-      <p className="muted">Create agents, edit drafts, publish immutable versions, and run published agents.</p>
+    <section className="agents-builder">
+      <div className="card card--hero agents-builder__header">
+        <div>
+          <div className="eyebrow">Agents</div>
+          <h1>Agent builder</h1>
+          <p className="muted">Create agents, edit drafts, publish immutable versions, and test published behavior with trace output.</p>
+        </div>
+        <div className="agents-lifecycle">
+          <StatusBadge>{draft ? draft.status : selectedAgent?.status ?? "draft"}</StatusBadge>
+          <span>Revision {draft?.revision ?? "-"}</span>
+          <span>{selectedAgent?.published_version_id ? "Published" : "Draft only"}</span>
+        </div>
+      </div>
+
       {providerAccounts.length === 0 ? (
         <div className="warning" role="status">
           Agent drafts need a provider account and model before they can run. Configure provider keys in <a className="link-button" href="/providers">Providers</a>.
         </div>
       ) : null}
 
-      <div className="grid agents-layout">
-        <div className="card nested-card agents-create">
-          <h2>Create</h2>
-          <label>Name</label>
-          <input className="input" value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Support triage" />
-          <label>Description</label>
-          <textarea value={newDescription} onChange={(event) => setNewDescription(event.target.value)} rows={3} />
-          <button className="button" type="button" disabled={isBusy} onClick={createAgent}>Create agent</button>
-        </div>
+      <div className="agents-builder__layout">
+        <aside className="agents-builder__sidebar" aria-label="Agents list">
+          <section className="card agents-create-card">
+            <div>
+              <div className="eyebrow">Create</div>
+              <h2>New agent</h2>
+            </div>
+            <label>
+              Name
+              <input className="input" value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Support triage" />
+            </label>
+            <label>
+              Description
+              <textarea value={newDescription} onChange={(event) => setNewDescription(event.target.value)} rows={3} />
+            </label>
+            <button className="button" type="button" disabled={isBusy} onClick={() => void createAgent()}>Create agent</button>
+          </section>
 
-        <div className="card nested-card">
-          <h2>Agents</h2>
-          {isBusy && agents.length === 0 ? <LoadingBlock title="Loading agents" /> : null}
-          {!isBusy && agents.length === 0 ? <EmptyState title="No agents" description="Create one to start a draft." /> : null}
-          <div className="item-list">
-            {agents.map((agent) => (
-              <div key={agent.id} style={{ display: "grid", gap: 8 }}>
-                <button
-                  className="selectable-card"
-                  type="button"
-                  onClick={() => setSelectedId(agent.id)}
-                  aria-pressed={selectedId === agent.id}
-                >
-                  <strong>{agent.name}</strong>
-                  <div className="muted"><StatusBadge>{agent.status}</StatusBadge> {agent.published_version_id ? "published" : "draft only"}</div>
-                </button>
+          <section className="card agents-list-card">
+            <div>
+              <div className="eyebrow">Library</div>
+              <h2>Agents</h2>
+            </div>
+            {isBusy && agents.length === 0 ? <LoadingBlock title="Loading agents" /> : null}
+            {!isBusy && agents.length === 0 ? <EmptyState title="No agents" description="Create one to start a draft." /> : null}
+            <div className="item-list">
+              {agents.map((agent) => (
+                <div className="agent-list-item" key={agent.id}>
+                  <button className="selectable-card" type="button" onClick={() => setSelectedId(agent.id)} aria-pressed={selectedId === agent.id}>
+                    <strong>{agent.name}</strong>
+                    <div className="agent-list-item__meta"><StatusBadge>{agent.status}</StatusBadge> <span>{agent.published_version_id ? "published" : "draft only"}</span></div>
+                  </button>
+                  <div className="actions-row">
+                    <ConfirmButton message={`Archive ${agent.name}?`} disabled={isBusy || agent.status === "archived"} onConfirm={() => archiveAgent(agent)}>Archive</ConfirmButton>
+                    <ConfirmButton className="button button--danger" message={`Delete ${agent.name}?`} confirmLabel="Delete" disabled={isBusy} onConfirm={() => deleteAgent(agent)}>Delete</ConfirmButton>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </aside>
+
+        <main className="agents-builder__main" aria-label="Agent draft and test console">
+          <section className="card agent-draft-card">
+            <div className="panel-title">
+              <div>
+                <div className="eyebrow">Draft</div>
+                <h2>{draft ? draft.spec.name ?? draft.name : "No draft selected"}</h2>
+                <p className="muted">Draft changes are saved explicitly, then published into immutable versions.</p>
+              </div>
+              <div className="actions-row">
+                <button className="button" type="button" disabled={isBusy || !draft} onClick={() => void saveDraft()}>Save draft</button>
+                <button className="button button--ghost" type="button" disabled={isBusy || !draft} onClick={() => void publishDraft()}>Publish</button>
+              </div>
+            </div>
+
+            {!draft ? <EmptyState title="No draft selected" description="Select or create an agent to edit its draft." /> : (
+              <>
+                <div className="agent-form-section">
+                  <label>
+                    Name
+                    <input className="input" value={draft.spec.name ?? draft.name} onChange={(event) => updateSpec({ name: event.target.value })} />
+                  </label>
+                  <label>
+                    Description
+                    <textarea value={draft.spec.description ?? draft.description ?? ""} onChange={(event) => updateSpec({ description: event.target.value })} rows={3} />
+                  </label>
+                  <label>
+                    Instructions
+                    <textarea value={draft.spec.instructions ?? ""} onChange={(event) => updateSpec({ instructions: event.target.value })} rows={8} placeholder="Describe the agent's role, tone, constraints, and when it should use selected context." />
+                  </label>
+                </div>
+
+                <div className="agent-form-grid">
+                  <label>
+                    Provider account
+                    <select
+                      aria-label="Agent provider account"
+                      value={draft.spec.providerAccountId ?? ""}
+                      onChange={(event) => {
+                        const account = providerAccounts.find((item) => item.id === event.target.value);
+                        updateSpec({ providerAccountId: event.target.value || undefined, provider: account?.provider, model: undefined });
+                      }}
+                    >
+                      <option value="">Select a provider account</option>
+                      {providerAccounts.map((account) => (
+                        <option key={account.id} value={account.id}>{account.display_name} ({account.provider})</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Model or deployment
+                    {selectedProviderModels.length > 0 ? (
+                      <select value={draft.spec.model ?? ""} onChange={(event) => updateSpec({ model: event.target.value || undefined })}>
+                        <option value="">Select a synced model</option>
+                        {selectedProviderModels.map((binding) => (
+                          <option key={binding.id} value={binding.model}>{binding.display_name || binding.model}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input className="input" aria-label="Agent model or deployment" value={draft.spec.model ?? ""} onChange={(event) => updateSpec({ model: event.target.value })} placeholder="gpt-4.1-mini or Azure deployment name" />
+                    )}
+                  </label>
+                  <label>
+                    Temperature
+                    <input className="input" type="number" min="0" max="2" step="0.1" value={draft.spec.temperature ?? 0.7} onChange={(event) => updateSpec({ temperature: Number(event.target.value) })} />
+                  </label>
+                  <label>
+                    Max output tokens
+                    <input className="input" type="number" min="1" max="32000" step="1" value={draft.spec.maxOutputTokens ?? 1024} onChange={(event) => updateSpec({ maxOutputTokens: Number(event.target.value) })} />
+                  </label>
+                </div>
+
+                <div className="agent-tool-grid">
+                  <label className="agent-tool-card">
+                    <input type="checkbox" checked={Boolean(draft.spec.tools?.knowledgeSearch)} onChange={(event) => updateTool("knowledgeSearch", event.target.checked)} />
+                    <span><strong>Knowledge search</strong><small>Add selected snippets before the model call.</small></span>
+                  </label>
+                  <label className="agent-tool-card">
+                    <input type="checkbox" checked={Boolean(draft.spec.tools?.calculator)} onChange={(event) => updateTool("calculator", event.target.checked)} />
+                    <span><strong>Calculator</strong><small>Run simple arithmetic helpers.</small></span>
+                  </label>
+                  <label className="agent-tool-card">
+                    <input type="checkbox" checked={Boolean(draft.spec.tools?.urlFetch)} onChange={(event) => updateTool("urlFetch", event.target.checked)} />
+                    <span><strong>URL fetch</strong><small>Fetch public URLs as read-only context.</small></span>
+                  </label>
+                </div>
+
+                <div className="agent-form-grid">
+                  <label>
+                    Knowledge result limit
+                    <input className="input" type="number" min="1" max="10" value={draft.spec.knowledgeLimit ?? 5} onChange={(event) => updateSpec({ knowledgeLimit: Number(event.target.value) })} />
+                  </label>
+                  <div className="agent-form-section">
+                    <h3>Attached knowledge</h3>
+                    {knowledgeBases.length === 0 ? <EmptyState title="No knowledge bases" description="Create a knowledge base before attaching one to an agent." /> : null}
+                    <div className="checkbox-list">
+                      {knowledgeBases.map((kb) => (
+                        <label key={kb.id} className="checkbox-row">
+                          <input type="checkbox" checked={(draft.spec.knowledgeBaseIds ?? []).includes(kb.id)} onChange={(event) => toggleKnowledgeBase(kb.id, event.target.checked)} />
+                          {kb.name} ({kb.document_count} docs)
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </section>
+
+          <section className="card agent-run-card">
+            <div>
+              <div className="eyebrow">Test run</div>
+              <h2>Run published agent</h2>
+            </div>
+            {!draft ? <EmptyState title="No agent selected" description="Select an agent before running." /> : (
+              <>
+                <label>
+                  Input
+                  <textarea aria-label="Agent run input" value={runInput} onChange={(event) => setRunInput(event.target.value)} rows={4} placeholder="Ask the agent to do something." />
+                </label>
                 <div className="actions-row">
-                  <ConfirmButton message={`Archive ${agent.name}?`} disabled={isBusy || agent.status === "archived"} onConfirm={() => archiveAgent(agent)}>Archive</ConfirmButton>
-                  <ConfirmButton message={`Delete ${agent.name}?`} confirmLabel="Delete" disabled={isBusy} onConfirm={() => deleteAgent(agent)}>Delete</ConfirmButton>
+                  <button className="button" type="button" disabled={isBusy} onClick={() => void runPublishedAgent()}>Run published version</button>
+                  {runId ? <StatusBadge>{runStatus ?? "running"}</StatusBadge> : null}
                 </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="card nested-card agents-panel">
-        <h2>Draft</h2>
-        {!draft ? <EmptyState title="No draft selected" description="Select or create an agent to edit its draft." /> : (
-          <>
-            <label>Name</label>
-            <input
-              className="input"
-              value={draft.spec.name ?? draft.name}
-              onChange={(event) => updateSpec({ name: event.target.value })}
-            />
-            <label>Description</label>
-            <textarea
-              value={draft.spec.description ?? draft.description ?? ""}
-              onChange={(event) => updateSpec({ description: event.target.value })}
-              rows={3}
-            />
-            <label>Instructions</label>
-            <textarea
-              value={draft.spec.instructions ?? ""}
-              onChange={(event) => updateSpec({ instructions: event.target.value })}
-              rows={8}
-              placeholder="Describe the agent's role, tone, constraints, and when it should use selected context."
-            />
-            <div className="grid agents-field-grid">
-              <div>
-                <label>Provider account</label>
-                <select
-                  aria-label="Agent provider account"
-                  value={draft.spec.providerAccountId ?? ""}
-                  onChange={(event) => {
-                    const account = providerAccounts.find((item) => item.id === event.target.value);
-                    updateSpec({ providerAccountId: event.target.value || undefined, provider: account?.provider, model: undefined });
-                  }}
-                >
-                  <option value="">Select a provider account</option>
-                  {providerAccounts.map((account) => (
-                    <option key={account.id} value={account.id}>{account.display_name} ({account.provider})</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label>Model or deployment</label>
-                {selectedProviderModels.length > 0 ? (
-                  <select value={draft.spec.model ?? ""} onChange={(event) => updateSpec({ model: event.target.value || undefined })}>
-                    <option value="">Select a synced model</option>
-                    {selectedProviderModels.map((binding) => (
-                      <option key={binding.id} value={binding.model}>{binding.display_name || binding.model}</option>
-                    ))}
-                  </select>
-                ) : (
-                    <input
-                      className="input"
-                      aria-label="Agent model or deployment"
-                    value={draft.spec.model ?? ""}
-                    onChange={(event) => updateSpec({ model: event.target.value })}
-                    placeholder="gpt-4.1-mini or Azure deployment name"
-                  />
-                )}
-              </div>
-            </div>
-            <p className="muted">Uses existing provider accounts only. Sync models from Providers for a dropdown, or type a deployment/model name manually.</p>
-            <div className="grid agents-field-grid">
-              <div>
-                <label>Temperature</label>
-                <input
-                  className="input"
-                  type="number"
-                  min="0"
-                  max="2"
-                  step="0.1"
-                  value={draft.spec.temperature ?? 0.7}
-                  onChange={(event) => updateSpec({ temperature: Number(event.target.value) })}
-                />
-              </div>
-              <div>
-                <label>Max output tokens</label>
-                <input
-                  className="input"
-                  type="number"
-                  min="1"
-                  max="32000"
-                  step="1"
-                  value={draft.spec.maxOutputTokens ?? 1024}
-                  onChange={(event) => updateSpec({ maxOutputTokens: Number(event.target.value) })}
-                />
-              </div>
-            </div>
-            <h3>Knowledge and tools</h3>
-            <label className="checkbox-row">
-              <input type="checkbox" checked={Boolean(draft.spec.tools?.knowledgeSearch)} onChange={(event) => updateTool("knowledgeSearch", event.target.checked)} />
-              Add selected knowledge search results as pre-run context
-            </label>
-            <label className="checkbox-row">
-              <input type="checkbox" checked={Boolean(draft.spec.tools?.calculator)} onChange={(event) => updateTool("calculator", event.target.checked)} />
-              Calculator for simple arithmetic prompts
-            </label>
-            <label className="checkbox-row">
-              <input type="checkbox" checked={Boolean(draft.spec.tools?.urlFetch)} onChange={(event) => updateTool("urlFetch", event.target.checked)} />
-              Fetch URLs from the prompt as read-only context
-            </label>
-            <div className="grid agents-field-grid">
-              <div>
-                <label>Knowledge result limit</label>
-                <input
-                  className="input"
-                  type="number"
-                  min="1"
-                  max="10"
-                  value={draft.spec.knowledgeLimit ?? 5}
-                  onChange={(event) => updateSpec({ knowledgeLimit: Number(event.target.value) })}
-                />
-              </div>
-              <div>
-                <label>Knowledge bases</label>
-                {knowledgeBases.length === 0 ? <EmptyState title="No knowledge bases" description="Create a knowledge base before attaching one to an agent." /> : null}
-                <div className="checkbox-list">
-                  {knowledgeBases.map((kb) => (
-                    <label key={kb.id} className="checkbox-row">
-                      <input type="checkbox" checked={(draft.spec.knowledgeBaseIds ?? []).includes(kb.id)} onChange={(event) => toggleKnowledgeBase(kb.id, event.target.checked)} />
-                      {kb.name} ({kb.document_count} docs)
-                    </label>
+                {runId ? <p className="muted">Run {runId}</p> : null}
+                {runStatus === "running" ? <LoadingBlock title="Run is in progress" /> : null}
+                {runOutput ? <pre className="agent-trace__entry">{runOutput}</pre> : null}
+                {runSteps.length > 0 ? <h3>Steps</h3> : null}
+                <div className="agent-trace">
+                  {runSteps.map((step) => (
+                    <pre key={step.id} className="agent-trace__entry">{step.sequence_no}. {step.step_type} / {step.status}{"\n"}{JSON.stringify(step.output, null, 2)}</pre>
                   ))}
                 </div>
-              </div>
-            </div>
-            <p className="muted">Revision {draft.revision}</p>
-            <div className="actions-row">
-              <button className="button" type="button" disabled={isBusy} onClick={saveDraft}>Save draft</button>
-              <button className="button" type="button" disabled={isBusy} onClick={publishDraft}>Publish version</button>
-            </div>
-          </>
-        )}
+                {runEvents.length > 0 ? <h3>Trace</h3> : null}
+                <div className="agent-trace">
+                  {runEvents.map((event) => (
+                    <pre key={event.id} className="agent-trace__entry">{event.sequence_no}. {event.event_type}{"\n"}{JSON.stringify(event.payload, null, 2)}</pre>
+                  ))}
+                </div>
+              </>
+            )}
+          </section>
+        </main>
       </div>
 
-      <div className="card nested-card agents-panel">
-        <h2>Run published agent</h2>
-        {!draft ? <EmptyState title="No agent selected" description="Select an agent before running." /> : (
-          <>
-            <label>Input</label>
-            <textarea aria-label="Agent run input" value={runInput} onChange={(event) => setRunInput(event.target.value)} rows={4} placeholder="Ask the agent to do something." />
-            <div className="actions-row">
-              <button className="button" type="button" disabled={isBusy} onClick={runPublishedAgent}>Run published version</button>
-            </div>
-            {runId ? <p className="muted">Run {runId} · {runStatus}</p> : null}
-            {runStatus === "running" ? <LoadingBlock title="Run is in progress" /> : null}
-            {runOutput ? <pre style={{ whiteSpace: "pre-wrap" }}>{runOutput}</pre> : null}
-            {runSteps.length > 0 ? <h3>Steps</h3> : null}
-            {runSteps.map((step) => (
-              <pre key={step.id} style={{ whiteSpace: "pre-wrap" }}>{step.sequence_no}. {step.step_type} · {step.status}\n{JSON.stringify(step.output, null, 2)}</pre>
-            ))}
-            {runEvents.length > 0 ? <h3>Trace</h3> : null}
-            {runEvents.map((event) => (
-              <pre key={event.id} style={{ whiteSpace: "pre-wrap" }}>{event.sequence_no}. {event.event_type}\n{JSON.stringify(event.payload, null, 2)}</pre>
-            ))}
-          </>
-        )}
-      </div>
-
-      <p className={message.toLowerCase().includes("failed") || message.toLowerCase().includes("required") ? "error-state" : "notice"} role="status">{isBusy ? "Working... " : ""}{message}</p>
+      <p className={message.toLowerCase().includes("failed") || message.toLowerCase().includes("required") ? "error-state" : "notice"} role={message.toLowerCase().includes("failed") || message.toLowerCase().includes("required") ? "alert" : "status"}>{isBusy ? "Working... " : ""}{message}</p>
     </section>
   );
 }

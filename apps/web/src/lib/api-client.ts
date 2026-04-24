@@ -329,6 +329,12 @@ export const apiClient = {
     delete: (knowledgeBaseId: string) => apiFetch<{ deleted: true }>(`/api/knowledge/${encodePath(knowledgeBaseId)}`, { method: "DELETE" }),
     documents: (knowledgeBaseId: string, init?: RequestInit) =>
       apiFetch<{ documents: KnowledgeDocument[] }>(`/api/knowledge/${encodePath(knowledgeBaseId)}/documents`, init),
+    updateDocument: (knowledgeBaseId: string, documentId: string, body: { title: string }) =>
+      apiFetch<{ document: KnowledgeDocument }>(`/api/knowledge/${encodePath(knowledgeBaseId)}/documents/${encodePath(documentId)}`, jsonInit("PATCH", body)),
+    deleteDocument: (knowledgeBaseId: string, documentId: string) =>
+      apiFetch<{ deleted: true }>(`/api/knowledge/${encodePath(knowledgeBaseId)}/documents/${encodePath(documentId)}`, { method: "DELETE" }),
+    reembed: (knowledgeBaseId: string, body: { limit?: number; includeCurrent?: boolean } = {}) =>
+      apiFetch<{ knowledgeBaseId: string; scanned: number; updated: number; skippedCurrent: number; reasons: Record<string, number>; hasMore: boolean }>(`/api/knowledge/${encodePath(knowledgeBaseId)}/reembed`, jsonInit("POST", body)),
     search: (knowledgeBaseId: string, body: { query: string; limit?: number; offset?: number; candidateLimit?: number }) =>
       apiFetch<{ query: string; results: KnowledgeSearchResult[]; pagination: Record<string, unknown>; embeddings: Record<string, unknown> }>(`/api/knowledge/${encodePath(knowledgeBaseId)}/search`, jsonInit("POST", body)),
     uploadFile: (body: FormData) => apiFetch<Record<string, unknown>>("/api/files/upload", { method: "POST", body })

@@ -1,54 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { authFetch } from "../../../lib/auth-client";
-
-type SummaryRow = {
-  usage_date: string;
-  provider: string;
-  model: string;
-  user_email: string;
-  request_count: number;
-  input_tokens: number;
-  output_tokens: number;
-  reasoning_tokens: number;
-  search_queries: number;
-  cost_usd: number;
-  unknown_cost_count: number;
-  estimated_count: number;
-};
-
-type RecentRow = {
-  id: string;
-  created_at: string;
-  user_email: string;
-  provider: string | null;
-  model: string | null;
-  input_tokens: number | null;
-  output_tokens: number | null;
-  reasoning_tokens: number | null;
-  search_queries: number | null;
-  cost_usd: number | null;
-  estimated: boolean;
-  unknown_pricing: boolean;
-  conversation_run_id: string | null;
-  agent_run_id: string | null;
-};
-
-type UsageResponse = {
-  summary: SummaryRow[];
-  recent: RecentRow[];
-};
-
-type ApiError = {
-  error?: { message?: string };
-};
-
-async function parseResponse<T>(response: Response): Promise<T> {
-  const data = (await response.json().catch(() => ({}))) as T & ApiError;
-  if (!response.ok) throw new Error(data.error?.message ?? `Request failed with ${response.status}`);
-  return data;
-}
+import { useEffect, useMemo, useState } from "react";
+import { apiClient, type UsageResponse } from "../../../lib/api-client";
+import { ErrorState, LoadingBlock, StatusBadge } from "../../../components/ui";
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
@@ -71,12 +25,14 @@ export function UsageClient() {
   const [data, setData] = useState<UsageResponse>({ summary: [], recent: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [sourceFilter, setSourceFilter] = useState("all");
 
   async function loadUsage() {
     setLoading(true);
     setError(null);
     try {
-      setData(await parseResponse<UsageResponse>(await authFetch("/api/admin/usage", { cache: "no-store" })));
+      setData(await apiClient.admin.usage({ cache: "no-store" }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load usage");
     } finally {
@@ -88,10 +44,28 @@ export function UsageClient() {
     void loadUsage();
   }, []);
 
-  const totalCost = data.summary.reduce((sum, row) => sum + row.cost_usd, 0);
-  const totalRequests = data.summary.reduce((sum, row) => sum + row.request_count, 0);
-  const totalInputTokens = data.summary.reduce((sum, row) => sum + row.input_tokens, 0);
-  const totalOutputTokens = data.summary.reduce((sum, row) => sum + row.output_tokens, 0);
+  const filteredSummary = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return data.summary.filter((row) => {
+      const matchesQuery = !needle || [row.usage_date, row.provider, row.model, row.user_email].some((value) => value.toLowerCase().includes(needle));
+      const matchesSource = sourceFilter === "all" || (sourceFilter === "estimated" ? row.estimated_count > 0 : row.estimated_count === 0);
+      return matchesQuery && matchesSource;
+    });
+  }, [data.summary, query, sourceFilter]);
+  const filteredRecent = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return data.recent.filter((row) => {
+      const matchesQuery = !needle || [row.created_at, row.provider ?? "", row.model ?? "", row.user_email].some((value) => value.toLowerCase().includes(needle));
+      const matchesSource = sourceFilter === "all" || (sourceFilter === "estimated" ? row.estimated : !row.estimated);
+      return matchesQuery && matchesSource;
+    });
+  }, [data.recent, query, sourceFilter]);
+
+  const totalCost = filteredSummary.reduce((sum, row) => sum + row.cost_usd, 0);
+  const totalRequests = filteredSummary.reduce((sum, row) => sum + row.request_count, 0);
+  const totalInputTokens = filteredSummary.reduce((sum, row) => sum + row.input_tokens, 0);
+  const totalOutputTokens = filteredSummary.reduce((sum, row) => sum + row.output_tokens, 0);
+  const unknownCostCount = filteredSummary.reduce((sum, row) => sum + row.unknown_cost_count, 0);
 
   return (
     <div className="usage-page">
@@ -104,26 +78,43 @@ export function UsageClient() {
         <button className="button button--ghost" type="button" onClick={() => void loadUsage()} disabled={loading} aria-label="Refresh usage data">{loading ? "Loading..." : "Refresh"}</button>
       </section>
 
-      {error ? <div className="error-state" role="alert">{error}</div> : null}
-      {loading ? <div className="loading-state" role="status">Loading usage records...</div> : null}
+      {error ? <ErrorState message={error} onRetry={() => void loadUsage()} /> : null}
+      {loading ? <LoadingBlock title="Loading usage records" /> : null}
+
+      <section className="card admin-filter-bar" aria-label="Usage filters">
+        <label>
+          Search usage
+          <input className="input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Provider, model, user, date" />
+        </label>
+        <label>
+          Source
+          <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
+            <option value="all">All sources</option>
+            <option value="provider">Provider usage</option>
+            <option value="estimated">Estimated tokens</option>
+          </select>
+        </label>
+      </section>
 
       <section className="grid">
         <div className="card usage-page__stat"><span className="muted">Requests</span><strong>{number(totalRequests)}</strong></div>
         <div className="card usage-page__stat"><span className="muted">Input tokens</span><strong>{number(totalInputTokens)}</strong></div>
         <div className="card usage-page__stat"><span className="muted">Output tokens</span><strong>{number(totalOutputTokens)}</strong></div>
         <div className="card usage-page__stat"><span className="muted">Estimated cost</span><strong>{formatCost(totalCost)}</strong></div>
+        <div className="card usage-page__stat"><span className="muted">Unknown pricing</span><strong>{number(unknownCostCount)}</strong></div>
       </section>
 
       <section className="card">
         <div className="eyebrow">Summary</div>
         <h2>Totals by date, provider, model, and user</h2>
-        <div className="admin-users__table-wrap">
+        <div className="admin-users__table-wrap" tabIndex={0} aria-label="Scrollable usage summary table">
           <table className="admin-users__table usage-page__table">
-            <thead><tr><th>Date</th><th>Provider</th><th>Model</th><th>User</th><th>Requests</th><th>Tokens</th><th>Search</th><th>Cost</th><th>Notes</th></tr></thead>
+            <caption className="sr-only">Usage totals by date, provider, model, and user</caption>
+            <thead><tr><th scope="col">Date</th><th scope="col">Provider</th><th scope="col">Model</th><th scope="col">User</th><th scope="col">Requests</th><th scope="col">Tokens</th><th scope="col">Search</th><th scope="col">Cost</th><th scope="col">Notes</th></tr></thead>
             <tbody>
-              {data.summary.map((row) => (
+              {filteredSummary.map((row) => (
                 <tr key={`${row.usage_date}-${row.provider}-${row.model}-${row.user_email}`}>
-                  <td>{formatDay(row.usage_date)}</td>
+                  <th scope="row">{formatDay(row.usage_date)}</th>
                   <td>{row.provider}</td>
                   <td>{row.model}</td>
                   <td>{row.user_email}</td>
@@ -131,10 +122,10 @@ export function UsageClient() {
                   <td>{number(row.input_tokens)} in / {number(row.output_tokens)} out{row.reasoning_tokens ? ` / ${number(row.reasoning_tokens)} reasoning` : ""}</td>
                   <td>{number(row.search_queries)}</td>
                   <td>{formatCost(row.cost_usd)}</td>
-                  <td>{row.estimated_count ? `${row.estimated_count} estimated` : "Provider usage"}{row.unknown_cost_count ? `; ${row.unknown_cost_count} unknown cost` : ""}</td>
+                  <td><div className="admin-badge-row"><StatusBadge tone={row.estimated_count ? "warning" : "success"}>{row.estimated_count ? "estimated" : "provider"}</StatusBadge>{row.unknown_cost_count ? <StatusBadge tone="danger">unknown cost</StatusBadge> : null}</div></td>
                 </tr>
               ))}
-              {!loading && data.summary.length === 0 ? <tr><td colSpan={9}><span className="empty-state">No usage records yet. Chat or agent runs will appear here after provider calls complete.</span></td></tr> : null}
+              {!loading && filteredSummary.length === 0 ? <tr><td colSpan={9}><span className="empty-state">No usage records match the current filters.</span></td></tr> : null}
             </tbody>
           </table>
         </div>
@@ -143,23 +134,24 @@ export function UsageClient() {
       <section className="card">
         <div className="eyebrow">Recent</div>
         <h2>Latest usage records</h2>
-        <div className="admin-users__table-wrap">
+        <div className="admin-users__table-wrap" tabIndex={0} aria-label="Scrollable recent usage table">
           <table className="admin-users__table usage-page__table">
-            <thead><tr><th>Time</th><th>User</th><th>Provider</th><th>Model</th><th>Tokens</th><th>Cost</th><th>Source</th><th>Run</th></tr></thead>
+            <caption className="sr-only">Latest usage records</caption>
+            <thead><tr><th scope="col">Time</th><th scope="col">User</th><th scope="col">Provider</th><th scope="col">Model</th><th scope="col">Tokens</th><th scope="col">Cost</th><th scope="col">Source</th><th scope="col">Run</th></tr></thead>
             <tbody>
-              {data.recent.map((row) => (
+              {filteredRecent.map((row) => (
                 <tr key={row.id}>
-                  <td>{formatDate(row.created_at)}</td>
+                  <th scope="row">{formatDate(row.created_at)}</th>
                   <td>{row.user_email}</td>
                   <td>{row.provider ?? "unknown"}</td>
                   <td>{row.model ?? "unknown"}</td>
                   <td>{number(row.input_tokens)} in / {number(row.output_tokens)} out</td>
                   <td>{formatCost(row.cost_usd)}</td>
-                  <td>{row.estimated ? "Estimated tokens" : "Provider usage"}{row.unknown_pricing ? "; unknown price" : ""}</td>
+                  <td><div className="admin-badge-row"><StatusBadge tone={row.estimated ? "warning" : "success"}>{row.estimated ? "estimated" : "provider"}</StatusBadge>{row.unknown_pricing ? <StatusBadge tone="danger">unknown price</StatusBadge> : null}</div></td>
                   <td>{row.conversation_run_id ? "Chat" : row.agent_run_id ? "Agent" : "Other"}</td>
                 </tr>
               ))}
-              {!loading && data.recent.length === 0 ? <tr><td colSpan={8}><span className="empty-state">No recent usage records.</span></td></tr> : null}
+              {!loading && filteredRecent.length === 0 ? <tr><td colSpan={8}><span className="empty-state">No recent usage records match the current filters.</span></td></tr> : null}
             </tbody>
           </table>
         </div>
