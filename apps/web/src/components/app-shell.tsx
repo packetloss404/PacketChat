@@ -27,12 +27,13 @@ const primaryNav: NavItem[] = [
 ];
 
 const pluginsNav: NavItem[] = [
-  { id: "marketplace", label: "Agent Marketplace", href: "/plugins/marketplace", icon: <Icon.layers /> }
+  { id: "marketplace", label: "Agent Marketplace", href: "/plugins/marketplace", icon: <Icon.layers /> },
+  { id: "plugins", label: "Plugins", href: "/plugins", icon: <Icon.mcp /> }
 ];
 
 const routeTitles: Array<{ match: (p: string) => boolean; title: string }> = [
   { match: (p) => p.startsWith("/plugins/marketplace"), title: "Agent Marketplace" },
-  { match: (p) => p.startsWith("/plugins"), title: "Plugins" },
+  { match: (p) => p === "/plugins" || p.startsWith("/plugins/"), title: "Plugins" },
   { match: (p) => p.startsWith("/agents"), title: "Agents" },
   { match: (p) => p.startsWith("/providers"), title: "Providers" },
   { match: (p) => p.startsWith("/projects"), title: "Projects" },
@@ -176,9 +177,9 @@ function LeftRail() {
       </nav>
 
       <div className="lr__section">
-        Plugins <span className="ch"><Icon.chev /></span>
+        packetchat+ <span className="ch"><Icon.chev /></span>
       </div>
-      <nav className="lr__nav" aria-label="Plugins">
+      <nav className="lr__nav" aria-label="packetchat+">
         {pluginsNav.map((item) => {
           const active = isActivePath(pathname, item.href);
           return (

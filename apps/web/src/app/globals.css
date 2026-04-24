@@ -771,6 +771,107 @@ select {
   color: var(--ink-3);
 }
 
+/* Coming-soon splash */
+.coming-soon {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  min-height: 0;
+  padding: 48px 24px 120px;
+  text-align: center;
+}
+.coming-soon__art {
+  width: min(420px, 80%);
+  height: auto;
+  display: block;
+  filter: drop-shadow(0 18px 60px rgba(217, 119, 87, 0.12));
+}
+.coming-soon__caption {
+  font-size: 14px;
+  letter-spacing: 0.14em;
+  text-transform: lowercase;
+  color: var(--ink-3);
+  font-weight: 500;
+}
+
+/* Plugins — marketplace card grid */
+.plugin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+  margin-top: 8px;
+}
+.plugin-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-2);
+}
+.plugin-card__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.plugin-card__logo {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+.plugin-card__meta {
+  min-width: 0;
+}
+.plugin-card__name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-card__author {
+  font-size: 12px;
+  color: var(--ink-3);
+  margin-top: 1px;
+}
+.plugin-card__summary {
+  flex: 1;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+.plugin-card__foot {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin-top: 2px;
+}
+.plugin-card__pending {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  background: var(--bg-3);
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
 /* Projects — cards in shell */
 .pgrid {
   display: grid;
