@@ -1,15 +1,17 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import type { ProviderId } from "@packetchat/contracts";
 import { getAccessToken } from "../../lib/auth-client";
 import { apiClient, type Conversation, type ConversationMessage, type ProviderAccount, type ProviderModelBinding } from "../../lib/api-client";
-import { ConfirmButton } from "../../components/ui";
+import { Icon } from "../../components/icons";
 
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  createdAt?: string;
 };
 
 type StreamEvent =
@@ -45,9 +47,20 @@ function isErrorStatus(status: string) {
   return value.includes("error") || value.includes("failed") || value.includes("required") || value.includes("not found") || value.includes("no access") || value.includes("unauthenticated");
 }
 
-function formatDate(value?: string) {
-  if (!value) return "Not updated yet";
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+function greeting(hour: number) {
+  if (hour < 12) return "morning";
+  if (hour < 18) return "afternoon";
+  return "evening";
+}
+
+function renderBody(body: string) {
+  const parts = body.split(/(`[^`]+`)/g);
+  return parts.map((part, index) => {
+    if (part.startsWith("`") && part.endsWith("`") && part.length > 1) {
+      return <code key={index}>{part.slice(1, -1)}</code>;
+    }
+    return <span key={index}>{part}</span>;
+  });
 }
 
 export default function ChatPage() {
@@ -60,17 +73,27 @@ export default function ChatPage() {
   const [model, setModel] = useState("");
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [renameDraft, setRenameDraft] = useState("");
   const [loadingAccounts, setLoadingAccounts] = useState(true);
-  const [loadingConversation, setLoadingConversation] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [status, setStatus] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
+  const [displayName, setDisplayName] = useState("there");
   const abortRef = useRef<AbortController | null>(null);
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
 
   const selectedAccount = useMemo(() => accounts.find((account) => account.id === accountId), [accountId, accounts]);
-  const selectedConversation = useMemo(() => conversations.find((conversation) => conversation.id === conversationId), [conversationId, conversations]);
-  const selectedModelBindings = useMemo(() => modelBindings.filter((binding) => binding.provider_account_id === accountId && binding.model), [accountId, modelBindings]);
-  const composerDisabled = isStreaming || loadingAccounts || !input.trim() || !accountId || !model.trim() || (selectedAccount ? selectedAccount.provider !== provider : false);
+  const selectedModelBindings = useMemo(
+    () => modelBindings.filter((binding) => binding.provider_account_id === accountId && binding.model),
+    [accountId, modelBindings]
+  );
+  const providerMismatch = !!(selectedAccount && selectedAccount.provider !== provider);
+  const composerDisabled = isStreaming || loadingAccounts || !input.trim() || !accountId || !model.trim() || providerMismatch;
+  const hasMessages = messages.length > 0;
+  const headerTitle = useMemo(() => {
+    const active = conversations.find((c) => c.id === conversationId);
+    if (active?.title) return `${active.title} · ${model || "no model"}`;
+    return model ? `New chat · ${model}` : "New chat";
+  }, [conversations, conversationId, model]);
 
   async function loadConversations() {
     const payload = await apiClient.conversations.list();
@@ -80,7 +103,7 @@ export default function ChatPage() {
   useEffect(() => {
     const accessToken = token();
     if (!accessToken) {
-      setStatus("No access token found in localStorage. Sign in before chatting.");
+      setStatus("No access token found. Sign in before chatting.");
       setLoadingAccounts(false);
       return;
     }
@@ -90,20 +113,36 @@ export default function ChatPage() {
       setLoadingAccounts(true);
       setStatus("");
       try {
-        const [providerPayload, conversationPayload] = await Promise.all([apiClient.providers.list(), apiClient.conversations.list()]);
+        const [providerPayload, conversationPayload, meResponse] = await Promise.all([
+          apiClient.providers.list(),
+          apiClient.conversations.list(),
+          fetch("/api/auth/me", { headers: { authorization: `Bearer ${accessToken}` } }).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+        ]);
         if (cancelled) return;
 
         const nextAccounts = providerPayload.accounts ?? [];
         setAccounts(nextAccounts);
         setModelBindings(providerPayload.modelBindings ?? []);
         setConversations(conversationPayload.conversations ?? []);
-        const defaultAccount = nextAccounts.find((account) => account.is_default && account.status === "enabled") ?? nextAccounts.find((account) => account.status === "enabled") ?? nextAccounts[0];
+
+        const me = meResponse?.user ?? meResponse;
+        if (me?.displayName || me?.email) {
+          setDisplayName((me.displayName || me.email.split("@")[0]).toString());
+        }
+
+        const defaultAccount =
+          nextAccounts.find((account) => account.is_default && account.status === "enabled") ??
+          nextAccounts.find((account) => account.status === "enabled") ??
+          nextAccounts[0];
         if (defaultAccount) {
           setAccountId(defaultAccount.id);
           setProvider(defaultAccount.provider);
-          const defaultBinding = (providerPayload.modelBindings ?? []).find((binding) => binding.provider_account_id === defaultAccount.id && binding.model);
+          const defaultBinding = (providerPayload.modelBindings ?? []).find(
+            (binding) => binding.provider_account_id === defaultAccount.id && binding.model
+          );
           setModel(defaultBinding?.model ?? "");
         } else {
+          setShowSettings(true);
           setStatus("No provider accounts are accessible for this user.");
         }
       } catch (error) {
@@ -119,6 +158,12 @@ export default function ChatPage() {
     };
   }, []);
 
+  useEffect(() => {
+    const el = transcriptRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [messages.length, isStreaming]);
+
   function updateAssistantMessage(id: string, updater: (content: string) => string) {
     setMessages((current) => current.map((message) => (message.id === id ? { ...message, content: updater(message.content) } : message)));
   }
@@ -131,115 +176,33 @@ export default function ChatPage() {
     setModel(binding?.model ?? "");
   }
 
-  async function createConversation() {
-    if (isStreaming) return;
-    try {
-      const payload = await apiClient.conversations.create({ title: "New chat" });
-      setConversations((current) => [payload.conversation, ...current]);
-      setConversationId(payload.conversation.id);
-      setRenameDraft(payload.conversation.title);
-      setMessages([]);
-      setStatus("New conversation ready.");
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  async function renameConversation(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!conversationId || isStreaming) return;
-    const trimmed = renameDraft.trim();
-    if (!trimmed) {
-      setStatus("Conversation title is required.");
-      return;
-    }
-    try {
-      const payload = await apiClient.conversations.update(conversationId, { title: trimmed });
-      setConversations((current) => current.map((item) => (item.id === conversationId ? { ...item, ...payload.conversation } : item)));
-      setStatus("Conversation renamed.");
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  async function archiveConversation() {
-    if (!conversationId || isStreaming) return;
-    try {
-      await apiClient.conversations.update(conversationId, { archived: true });
-      setConversations((current) => current.filter((item) => item.id !== conversationId));
-      setConversationId("");
-      setRenameDraft("");
-      setMessages([]);
-      setStatus("Conversation archived.");
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  async function deleteConversation() {
-    if (!conversationId || isStreaming) return;
-    try {
-      await apiClient.conversations.delete(conversationId);
-      setConversations((current) => current.filter((item) => item.id !== conversationId));
-      setConversationId("");
-      setRenameDraft("");
-      setMessages([]);
-      setStatus("Conversation deleted.");
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  async function selectConversation(nextConversationId: string) {
-    if (isStreaming) return;
-    setConversationId(nextConversationId);
-    const nextConversation = conversations.find((conversation) => conversation.id === nextConversationId);
-    setRenameDraft(nextConversation?.title ?? "");
-    if (!nextConversationId) {
-      setMessages([]);
-      return;
-    }
-
-    setLoadingConversation(true);
-    try {
-      const payload = await apiClient.conversations.messages(nextConversationId);
-      setMessages(
-        (payload.messages ?? [])
-          .filter((message) => isChatRole(message.role))
-          .map((message) => ({ id: message.id, role: message.role as ChatMessage["role"], content: textFromConversationMessage(message) }))
-      );
-      setStatus("");
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
-    } finally {
-      setLoadingConversation(false);
-    }
-  }
-
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const content = input.trim();
     const accessToken = token();
     if (!content || isStreaming) return;
     if (!accessToken) {
-      setStatus("No access token found in localStorage. Sign in before chatting.");
+      setStatus("No access token found. Sign in before chatting.");
       return;
     }
     if (!accountId) {
       setStatus("Choose a provider account before sending a message.");
+      setShowSettings(true);
       return;
     }
     if (!model.trim()) {
       setStatus("Enter the provider model or Azure deployment name before sending a message.");
+      setShowSettings(true);
       return;
     }
-    if (selectedAccount && selectedAccount.provider !== provider) {
+    if (providerMismatch) {
       setStatus("Selected provider id must match the selected provider account.");
       return;
     }
 
-    const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content };
-    const assistantMessage: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: "" };
+    const now = new Date().toISOString();
+    const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content, createdAt: now };
+    const assistantMessage: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: "", createdAt: now };
     const requestMessages = [...messages, userMessage];
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setInput("");
@@ -323,163 +286,57 @@ export default function ChatPage() {
     abortRef.current?.abort();
   }
 
-  return (
-    <section className="chat-workspace">
-      <ChatSidebar
-        conversations={conversations}
-        conversationId={conversationId}
-        isStreaming={isStreaming}
-        renameDraft={renameDraft}
-        onRenameDraftChange={setRenameDraft}
-        onCreateConversation={createConversation}
-        onSelectConversation={(id) => void selectConversation(id)}
-        onRenameConversation={(event) => void renameConversation(event)}
-        onArchiveConversation={() => void archiveConversation()}
-        onDeleteConversation={() => void deleteConversation()}
+  function onTextareaKey(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      event.currentTarget.form?.requestSubmit();
+    }
+  }
+
+  const composerNode = (
+    <form className={`composer ${hasMessages ? "composer--float" : ""}`} onSubmit={sendMessage}>
+      <textarea
+        rows={1}
+        placeholder={`Message Claude · ${model || "select a model"}`}
+        aria-label="Message"
+        value={input}
+        onChange={(event) => setInput(event.target.value)}
+        onKeyDown={onTextareaKey}
+        disabled={isStreaming}
       />
-
-      <main className="chat-main" aria-label="Chat workspace">
-        <ChatTopbar conversation={selectedConversation} selectedAccount={selectedAccount} model={model} isStreaming={isStreaming} onStopStreaming={stopStreaming} />
-        <ChatTranscript messages={messages} loadingAccounts={loadingAccounts} loadingConversation={loadingConversation} isStreaming={isStreaming} />
-        <ChatComposer input={input} isStreaming={isStreaming} disabled={composerDisabled} onInputChange={setInput} onSubmit={(event) => void sendMessage(event)} />
-        <ChatStatus status={status} />
-      </main>
-
-      <ChatSettingsPanel
-        accounts={accounts}
-        accountId={accountId}
-        selectedAccount={selectedAccount}
-        selectedModelBindings={selectedModelBindings}
-        provider={provider}
-        model={model}
-        loadingAccounts={loadingAccounts}
-        isStreaming={isStreaming}
-        onAccountChange={handleAccountChange}
-        onModelChange={setModel}
-      />
-    </section>
-  );
-}
-
-function ChatSidebar({
-  conversations,
-  conversationId,
-  isStreaming,
-  renameDraft,
-  onRenameDraftChange,
-  onCreateConversation,
-  onSelectConversation,
-  onRenameConversation,
-  onArchiveConversation,
-  onDeleteConversation
-}: {
-  conversations: Conversation[];
-  conversationId: string;
-  isStreaming: boolean;
-  renameDraft: string;
-  onRenameDraftChange: (value: string) => void;
-  onCreateConversation: () => void;
-  onSelectConversation: (conversationId: string) => void;
-  onRenameConversation: (event: FormEvent<HTMLFormElement>) => void;
-  onArchiveConversation: () => void;
-  onDeleteConversation: () => void;
-}) {
-  const selected = conversations.find((conversation) => conversation.id === conversationId);
-  return (
-    <aside className="chat-sidebar" aria-label="Conversations">
-      <div className="chat-sidebar__header">
-        <div>
-          <div className="eyebrow">Chat</div>
-          <h1>Conversations</h1>
-        </div>
-        <button className="button" type="button" onClick={onCreateConversation} disabled={isStreaming}>
-          New
+      <div className="composer__row">
+        <button className="ib" type="button" title="Attach" aria-label="Attach" disabled={isStreaming}>
+          <Icon.attach />
         </button>
-      </div>
-
-      <div className="chat-thread-list">
-        <button className="chat-thread" type="button" aria-pressed={conversationId === ""} onClick={() => onSelectConversation("")} disabled={isStreaming}>
-          <span className="chat-thread__title">Start a new conversation</span>
-          <span className="chat-thread__meta">Creates on first send</span>
+        <button
+          className="ib"
+          type="button"
+          title="Settings"
+          aria-label="Settings"
+          aria-pressed={showSettings}
+          onClick={() => setShowSettings((v) => !v)}
+        >
+          <Icon.mixer />
         </button>
-        {conversations.map((conversation) => (
-          <button className="chat-thread" key={conversation.id} type="button" aria-pressed={conversation.id === conversationId} onClick={() => onSelectConversation(conversation.id)} disabled={isStreaming}>
-            <span className="chat-thread__title">{conversation.title}</span>
-            <span className="chat-thread__meta">Updated {formatDate(conversation.updated_at)}</span>
+        <div className="spacer" />
+        {isStreaming ? (
+          <button className="ib" type="button" title="Stop" aria-label="Stop" onClick={stopStreaming}>
+            <Icon.dots />
           </button>
-        ))}
-      </div>
-
-      <div className="chat-sidebar__actions">
-        {selected ? (
-          <form className="chat-rename-form" onSubmit={onRenameConversation}>
-            <label>
-              Rename active thread
-              <input className="input" value={renameDraft} onChange={(event) => onRenameDraftChange(event.target.value)} disabled={isStreaming} />
-            </label>
-            <button className="button button--ghost" type="submit" disabled={isStreaming || !renameDraft.trim()}>
-              Rename
-            </button>
-          </form>
         ) : (
-          <p className="muted">Select a saved conversation to rename, archive, or delete it.</p>
+          <button className="ib" type="button" title="Voice input" aria-label="Voice input" disabled>
+            <Icon.mic />
+          </button>
         )}
-        <div className="chat-thread-actions">
-          <ConfirmButton className="button button--ghost" message="Archive selected conversation?" confirmLabel="Archive" disabled={!selected || isStreaming} onConfirm={onArchiveConversation}>
-            Archive
-          </ConfirmButton>
-          <ConfirmButton className="button button--danger" message="Delete selected conversation?" confirmLabel="Delete" disabled={!selected || isStreaming} onConfirm={onDeleteConversation}>
-            Delete
-          </ConfirmButton>
-        </div>
+        <button className="send" type="submit" title="Send" aria-label="Send" disabled={composerDisabled}>
+          <Icon.up />
+        </button>
       </div>
-    </aside>
+    </form>
   );
-}
 
-function ChatTopbar({ conversation, selectedAccount, model, isStreaming, onStopStreaming }: { conversation?: Conversation; selectedAccount?: ProviderAccount; model: string; isStreaming: boolean; onStopStreaming: () => void }) {
-  return (
-    <header className="chat-main__header">
-      <div>
-        <div className="eyebrow">Workspace</div>
-        <h2>{conversation?.title ?? "New conversation"}</h2>
-        <p className="muted">
-          {selectedAccount ? `${selectedAccount.display_name} / ${model || "No model selected"}` : "No provider selected"}
-        </p>
-      </div>
-      <button className="button button--ghost" type="button" onClick={onStopStreaming} disabled={!isStreaming}>
-        Stop
-      </button>
-    </header>
-  );
-}
-
-function ChatSettingsPanel({
-  accounts,
-  accountId,
-  selectedAccount,
-  selectedModelBindings,
-  provider,
-  model,
-  loadingAccounts,
-  isStreaming,
-  onAccountChange,
-  onModelChange
-}: {
-  accounts: ProviderAccount[];
-  accountId: string;
-  selectedAccount?: ProviderAccount;
-  selectedModelBindings: ProviderModelBinding[];
-  provider: ProviderId;
-  model: string;
-  loadingAccounts: boolean;
-  isStreaming: boolean;
-  onAccountChange: (accountId: string) => void;
-  onModelChange: (model: string) => void;
-}) {
-  const modelLabel = selectedAccount?.provider === "azure-openai" ? "Azure deployment" : "Model";
-  return (
-    <aside className="chat-settings card" aria-label="Chat settings">
+  const settingsNode = showSettings ? (
+    <div className="chat-settings" role="region" aria-label="Chat settings">
       <div>
         <div className="eyebrow">Route</div>
         <h2>Model settings</h2>
@@ -488,14 +345,14 @@ function ChatSettingsPanel({
 
       {!loadingAccounts && accounts.length === 0 ? (
         <div className="warning" role="status">
-          Chat requires at least one configured provider account. Add one in <a className="link-button" href="/providers">Providers</a> before sending messages.
+          Chat requires at least one configured provider account. Add one in <Link className="link-button" href="/providers">Providers</Link> before sending messages.
         </div>
       ) : null}
 
       <div className="chat-settings__fields">
         <label>
           Provider account
-          <select aria-label="Provider account" value={accountId} onChange={(event) => onAccountChange(event.target.value)} disabled={loadingAccounts || isStreaming}>
+          <select aria-label="Provider account" value={accountId} onChange={(event) => handleAccountChange(event.target.value)} disabled={loadingAccounts || isStreaming}>
             <option value="">{loadingAccounts ? "Loading accounts..." : "Choose an account"}</option>
             {accounts.map((account) => (
               <option key={account.id} value={account.id} disabled={account.status !== "enabled"}>
@@ -510,9 +367,9 @@ function ChatSettingsPanel({
           <span>{selectedAccount ? `${selectedAccount.scope} / ${selectedAccount.status}` : "Select an account"}</span>
         </div>
         <label>
-          {modelLabel}
+          {selectedAccount?.provider === "azure-openai" ? "Azure deployment" : "Model"}
           {selectedModelBindings.length ? (
-            <select aria-label="Model binding" value={model} onChange={(event) => onModelChange(event.target.value)} disabled={isStreaming}>
+            <select aria-label="Model binding" value={model} onChange={(event) => setModel(event.target.value)} disabled={isStreaming}>
               <option value="">Choose a bound model</option>
               {selectedModelBindings.map((binding) => (
                 <option key={binding.id} value={binding.model ?? ""}>
@@ -521,56 +378,96 @@ function ChatSettingsPanel({
               ))}
             </select>
           ) : (
-            <input className="input" aria-label="Model or Azure deployment name" value={model} onChange={(event) => onModelChange(event.target.value)} placeholder="gpt-4o-mini, claude-3-5-sonnet-latest, deployment-name" disabled={isStreaming} />
+            <input
+              aria-label="Model or Azure deployment name"
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              placeholder="gpt-4o-mini, claude-3-5-sonnet-latest, deployment-name"
+              disabled={isStreaming}
+            />
           )}
         </label>
       </div>
 
-      {selectedAccount && selectedAccount.provider !== provider ? (
+      {providerMismatch ? (
         <p className="warning chat-warning" role="alert">Selected provider id must match the account provider, or the API will reject the request.</p>
       ) : null}
-    </aside>
+
+      {status ? (
+        <p className={isErrorStatus(status) ? "error-state chat-status" : "notice chat-status"} role={isErrorStatus(status) ? "alert" : "status"}>
+          {status}
+        </p>
+      ) : null}
+    </div>
+  ) : null;
+
+  if (!hasMessages) {
+    const hour = new Date().getHours();
+    return (
+      <>
+        <div className="stage">
+          <div className="greet">
+            <span className="logo" aria-hidden="true" />
+            Good {greeting(hour)}, {displayName}
+          </div>
+          {composerNode}
+          {settingsNode}
+        </div>
+        <div className="footer">
+          <Link href="/">PacketChat v0.8.2-rc1</Link> · self-hosted · all traffic stays on your box
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className="doc" ref={transcriptRef} role="log" aria-live="polite" aria-label={headerTitle}>
+        <div className="doc__wrap">
+          {settingsNode}
+          {messages.map((message) => (
+            <Turn key={message.id} message={message} isStreaming={isStreaming} />
+          ))}
+          {status && !isStreaming ? (
+            <p className={isErrorStatus(status) ? "error-state chat-status" : "notice chat-status"} role={isErrorStatus(status) ? "alert" : "status"}>
+              {status}
+            </p>
+          ) : null}
+        </div>
+      </div>
+      {composerNode}
+    </>
   );
 }
 
-function ChatTranscript({ messages, loadingAccounts, loadingConversation, isStreaming }: { messages: ChatMessage[]; loadingAccounts: boolean; loadingConversation: boolean; isStreaming: boolean }) {
+function Turn({ message, isStreaming }: { message: ChatMessage; isStreaming: boolean }) {
+  const isUser = message.role === "user";
+  const placeholder = isStreaming && !isUser && !message.content ? "…" : "";
+  const timestamp = message.createdAt
+    ? new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(message.createdAt))
+    : "—";
   return (
-    <section className="chat-transcript" role="log" aria-live="polite" aria-relevant="additions text" aria-labelledby="chat-transcript-heading">
-      <h2 className="sr-only" id="chat-transcript-heading">Conversation transcript</h2>
-      {loadingAccounts ? <p className="loading-state">Loading provider accounts and conversations...</p> : null}
-      {loadingConversation ? <p className="loading-state">Loading conversation messages...</p> : null}
-      {!loadingAccounts && !loadingConversation && messages.length === 0 ? <p className="empty-state">Choose a route and send a message. Saved conversations appear in the left rail.</p> : null}
-      {messages.map((message) => (
-        <ChatMessageBubble isStreaming={isStreaming} key={message.id} message={message} />
-      ))}
-    </section>
-  );
-}
-
-function ChatMessageBubble({ message, isStreaming }: { message: ChatMessage; isStreaming: boolean }) {
-  const author = message.role === "user" ? "You" : "Assistant";
-  return (
-    <article className={`chat-message chat-message--${message.role}`} aria-label={`Message from ${author.toLowerCase()}`}>
-      <div className="chat-message__author">{author}</div>
-      <p className="chat-message__content">{message.content || (isStreaming && message.role === "assistant" ? "Thinking..." : "")}</p>
+    <article className="turn">
+      <div className="turn__head">
+        <div className={`av ${isUser ? "u" : "a"}`} aria-hidden="true">{isUser ? "OA" : ""}</div>
+        <b>{isUser ? "You" : "Claude"}</b>
+        <span>·</span>
+        <span>{timestamp}</span>
+      </div>
+      <div className="turn__body">{renderBody(message.content || placeholder)}</div>
+      {!isUser && message.content ? (
+        <div className="turn__tools">
+          <button className="ib" type="button" title="Copy" aria-label="Copy">
+            <Icon.copy />
+          </button>
+          <button className="ib" type="button" title="Edit" aria-label="Edit">
+            <Icon.edit />
+          </button>
+          <button className="ib" type="button" title="Bookmark" aria-label="Bookmark">
+            <Icon.bookmark />
+          </button>
+        </div>
+      ) : null}
     </article>
   );
-}
-
-function ChatComposer({ input, isStreaming, disabled, onInputChange, onSubmit }: { input: string; isStreaming: boolean; disabled: boolean; onInputChange: (value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
-  return (
-    <form className="chat-composer" onSubmit={onSubmit}>
-      <textarea className="chat-composer__input" aria-label="Message" value={input} onChange={(event) => onInputChange(event.target.value)} placeholder="Type a message..." rows={4} disabled={isStreaming} />
-      <div className="chat-composer__actions">
-        <button className="button" type="submit" disabled={disabled}>
-          {isStreaming ? "Streaming..." : "Send"}
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function ChatStatus({ status }: { status: string }) {
-  if (!status) return null;
-  return <p className={isErrorStatus(status) ? "error-state chat-status" : "notice chat-status"} role={isErrorStatus(status) ? "alert" : "status"}>{status}</p>;
 }

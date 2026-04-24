@@ -1,5 +1,11 @@
 import { UsageClient } from "./UsageClient";
 
 export default function AdminUsagePage() {
-  return <UsageClient />;
+  return (
+    <div className="sheet">
+      <div className="sheet__inner">
+        <UsageClient />
+      </div>
+    </div>
+  );
 }

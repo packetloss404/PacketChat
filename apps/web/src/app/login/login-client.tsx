@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "../../components/auth-provider";
 import { acceptInvite, completePasswordReset } from "../../lib/auth-client";
@@ -27,6 +27,12 @@ export function LoginClient() {
   const [status, setStatus] = useState<Status | null>(null);
 
   const mode = inviteToken ? "invite" : resetToken ? "reset" : "login";
+  const destination = nextPath ?? "/";
+
+  useEffect(() => {
+    if (mode !== "login") return;
+    if (auth.status === "authenticated") router.replace(destination);
+  }, [auth.status, destination, mode, router]);
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -37,7 +43,7 @@ export function LoginClient() {
       const result = breakGlass ? await auth.breakGlassLogin(email, password) : await auth.login(email, password);
       const name = result.user?.displayName || result.user?.email || "your account";
       setStatus({ tone: "success", message: result.warning ? `${result.warning} Signed in as ${name}.` : `Signed in as ${name}.` });
-      if (nextPath) router.replace(nextPath);
+      router.replace(destination);
     } catch (error) {
       setStatus({ tone: "error", message: error instanceof Error ? error.message : "Sign in failed" });
     } finally {

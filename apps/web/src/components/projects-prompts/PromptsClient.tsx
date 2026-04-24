@@ -13,11 +13,15 @@ type PromptDraft = {
 
 const emptyDraft: PromptDraft = { name: "", description: "", variables: "", body: "" };
 
+function promptVariables(prompt: Prompt): string[] {
+  return Array.isArray(prompt.variables) ? prompt.variables : [];
+}
+
 function draftFromPrompt(prompt: Prompt): PromptDraft {
   return {
     name: prompt.name,
     description: prompt.description ?? "",
-    variables: prompt.variables.join(", "),
+    variables: promptVariables(prompt).join(", "),
     body: prompt.body
   };
 }
@@ -41,7 +45,7 @@ export function PromptsClient() {
   const filteredPrompts = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return prompts;
-    return prompts.filter((prompt) => [prompt.name, prompt.description, prompt.body, prompt.variables.join(" ")].some((value) => value?.toLowerCase().includes(needle)));
+    return prompts.filter((prompt) => [prompt.name, prompt.description, prompt.body, promptVariables(prompt).join(" ")].some((value) => value?.toLowerCase().includes(needle)));
   }, [prompts, query]);
   const variables = variableList(draft.variables);
 
@@ -151,15 +155,18 @@ export function PromptsClient() {
           {!loading && filteredPrompts.length === 0 ? <EmptyState title="No prompts found" description="Create a template to start versioning reusable instructions." /> : null}
 
           <div className="projects-prompts-list">
-            {filteredPrompts.map((prompt) => (
-              <button className="projects-prompts-list-item" key={prompt.id} type="button" aria-pressed={prompt.id === selectedPromptId} onClick={() => selectPrompt(prompt)}>
-                <strong>{prompt.name}</strong>
-                <span>Version {prompt.latest_version_number ?? 1}</span>
-                <span className="projects-prompts-chip-row" aria-label="Variables">
-                  {prompt.variables.length ? prompt.variables.slice(0, 4).map((variable) => <span className="projects-prompts-chip" key={variable}>{variable}</span>) : <span className="muted">No variables</span>}
-                </span>
-              </button>
-            ))}
+            {filteredPrompts.map((prompt) => {
+              const vars = promptVariables(prompt);
+              return (
+                <button className="projects-prompts-list-item" key={prompt.id} type="button" aria-pressed={prompt.id === selectedPromptId} onClick={() => selectPrompt(prompt)}>
+                  <strong>{prompt.name}</strong>
+                  <span>Version {prompt.latest_version_number ?? 1}</span>
+                  <span className="projects-prompts-chip-row" aria-label="Variables">
+                    {vars.length ? vars.slice(0, 4).map((variable) => <span className="projects-prompts-chip" key={variable}>{variable}</span>) : <span className="muted">No variables</span>}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </aside>
 
