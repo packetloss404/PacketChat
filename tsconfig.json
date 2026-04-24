@@ -1,0 +1,29 @@
+{
+  "include": ["apps/**/*.ts", "apps/**/*.tsx", "packages/**/*.ts"],
+  "exclude": ["node_modules", ".next", "dist"],
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "preserve",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "baseUrl": ".",
+    "paths": {
+      "@packetchat/auth": ["packages/auth/src/index.ts"],
+      "@packetchat/config": ["packages/config/src/index.ts"],
+      "@packetchat/contracts": ["packages/contracts/src/index.ts"],
+      "@packetchat/db": ["packages/db/src/index.ts"],
+      "@packetchat/files": ["packages/files/src/index.ts"],
+      "@packetchat/jobs": ["packages/jobs/src/index.ts"],
+      "@packetchat/observability": ["packages/observability/src/index.ts"],
+      "@packetchat/providers": ["packages/providers/src/index.ts"]
+    }
+  }
+}

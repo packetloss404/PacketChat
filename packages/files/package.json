@@ -1,0 +1,19 @@
+{
+  "name": "@packetchat/files",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@packetchat/config": "file:../config",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "jszip": "^3.10.1",
+    "pdf-parse": "^2.4.5",
+    "tesseract.js": "^7.0.0"
+  }
+}

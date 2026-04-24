@@ -1,0 +1,153 @@
+name: packetchat
+
+services:
+  web:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile
+      target: web
+    image: packetchat/web:${PACKETCHAT_IMAGE_TAG:-local}
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: web
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "${PACKETCHAT_WEB_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - packetchat
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile
+      target: worker
+    image: packetchat/worker:${PACKETCHAT_IMAGE_TAG:-local}
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - packetchat
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile
+      target: migrator
+    image: packetchat/migrate:${PACKETCHAT_IMAGE_TAG:-local}
+    profiles: ["tools"]
+    env_file:
+      - ../../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - packetchat
+
+  postgres:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-packetchat}
+      POSTGRES_USER: ${POSTGRES_USER:-packetchat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-packetchat_dev_password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - packetchat
+
+  redis:
+    image: redis:7-bookworm
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - packetchat
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-packetchat}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-packetchat_dev_secret}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - packetchat
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    restart: "no"
+    env_file:
+      - ../../.env
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local $$S3_ENDPOINT $$S3_ACCESS_KEY $$S3_SECRET_KEY;
+      mc mb --ignore-existing local/$$S3_BUCKET_UPLOADS;
+      mc mb --ignore-existing local/$$S3_BUCKET_EXPORTS;
+      mc mb --ignore-existing local/$$S3_BUCKET_ARTIFACTS;
+      mc version enable local/$$S3_BUCKET_UPLOADS || true;
+      mc version enable local/$$S3_BUCKET_EXPORTS || true;
+      mc version enable local/$$S3_BUCKET_ARTIFACTS || true;
+      "
+    networks:
+      - packetchat
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+
+networks:
+  packetchat:
+    driver: bridge

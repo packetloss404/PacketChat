@@ -1,0 +1,22 @@
+{
+  "name": "@packetchat/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -H 0.0.0.0",
+    "build": "next build",
+    "start": "next start -H 0.0.0.0",
+    "lint": "tsc --noEmit -p ../../tsconfig.json"
+  },
+  "dependencies": {
+    "@packetchat/auth": "file:../../packages/auth",
+    "@packetchat/config": "file:../../packages/config",
+    "@packetchat/contracts": "file:../../packages/contracts",
+    "@packetchat/db": "file:../../packages/db",
+    "@packetchat/files": "file:../../packages/files",
+    "@packetchat/jobs": "file:../../packages/jobs",
+    "@packetchat/observability": "file:../../packages/observability",
+    "@packetchat/providers": "file:../../packages/providers"
+  }
+}

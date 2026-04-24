@@ -1,0 +1,15 @@
+{
+  "name": "@packetchat/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "migrate": "tsx src/migrate.ts"
+  },
+  "dependencies": {
+    "@packetchat/config": "file:../config",
+    "@packetchat/observability": "file:../observability"
+  }
+}
