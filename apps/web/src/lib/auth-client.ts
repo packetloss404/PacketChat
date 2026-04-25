@@ -135,6 +135,17 @@ export async function completePasswordReset(token: string, password: string) {
   return postAuth<{ ok: true }>("/api/auth/password-reset/complete", { token, password });
 }
 
+export async function changePassword(currentPassword: string, newPassword: string) {
+  const accessToken = getAccessToken();
+  const response = await fetch("/api/auth/change-password", {
+    method: "POST",
+    headers: authHeaders(accessToken, { "Content-Type": "application/json" }),
+    credentials: "include",
+    body: JSON.stringify({ currentPassword, newPassword })
+  });
+  return readJson<{ ok: true }>(response);
+}
+
 async function postAuth<T>(url: string, body: unknown) {
   const response = await fetch(url, {
     method: "POST",

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { DragEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { apiClient, type KnowledgeBase, type KnowledgeDocument, type KnowledgeSearchResult } from "../../lib/api-client";
 import { ConfirmButton, EmptyState, ErrorState, LoadingBlock, StatusBadge, useToast } from "../ui";
 
@@ -8,6 +8,35 @@ type KnowledgeDraft = {
   name: string;
   description: string;
 };
+
+const ACCEPTED_FILE_TYPES = [
+  ".txt",
+  ".md",
+  ".markdown",
+  ".json",
+  ".csv",
+  ".pdf",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".bmp",
+  ".tiff",
+  ".docx",
+  "text/plain",
+  "text/markdown",
+  "text/csv",
+  "application/json",
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/bmp",
+  "image/tiff",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+].join(",");
 
 function draftFromKnowledgeBase(kb: KnowledgeBase | null): KnowledgeDraft {
   return { name: kb?.name ?? "", description: kb?.description ?? "" };
@@ -38,10 +67,14 @@ export function KnowledgeManager() {
   const [createDraft, setCreateDraft] = useState<KnowledgeDraft>({ name: "", description: "" });
   const [editDraft, setEditDraft] = useState<KnowledgeDraft>({ name: "", description: "" });
   const [documentTitles, setDocumentTitles] = useState<Record<string, string>>({});
+  const [renamingDocId, setRenamingDocId] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [dragActive, setDragActive] = useState(false);
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(5);
   const [searchResults, setSearchResults] = useState<KnowledgeSearchResult[]>([]);
+  const [searched, setSearched] = useState(false);
+  const [searching, setSearching] = useState(false);
   const [embeddingNotice, setEmbeddingNotice] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +82,9 @@ export function KnowledgeManager() {
   const [loadingDocuments, setLoadingDocuments] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [savingKb, setSavingKb] = useState(false);
+  const [creatingKb, setCreatingKb] = useState(false);
   const [reembedding, setReembedding] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedKb = useMemo(() => knowledgeBases.find((kb) => kb.id === selectedId) ?? null, [knowledgeBases, selectedId]);
   const readyDocuments = documents.filter((document) => document.ingest_status === "ready").length;
@@ -101,12 +136,17 @@ export function KnowledgeManager() {
   useEffect(() => {
     setEditDraft(draftFromKnowledgeBase(selectedKb));
     setSearchResults([]);
+    setSearched(false);
     setEmbeddingNotice("");
+    setFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
     void loadDocuments(selectedId);
   }, [selectedId, selectedKb?.id]);
 
   async function createKnowledgeBase(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (creatingKb) return;
+    setCreatingKb(true);
     setMessage("");
     setError(null);
     try {
@@ -122,12 +162,14 @@ export function KnowledgeManager() {
       const nextError = err instanceof Error ? err.message : String(err);
       setError(nextError);
       toast({ title: "Unable to create knowledge base", message: nextError, variant: "error" });
+    } finally {
+      setCreatingKb(false);
     }
   }
 
   async function saveKnowledgeBase(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedKb) return;
+    if (!selectedKb || savingKb) return;
     setSavingKb(true);
     setMessage("");
     setError(null);
@@ -150,7 +192,7 @@ export function KnowledgeManager() {
 
   async function uploadFile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!file || !selectedId) return;
+    if (!file || !selectedId || uploading) return;
     setUploading(true);
     setMessage("");
     setError(null);
@@ -160,6 +202,7 @@ export function KnowledgeManager() {
       form.set("file", file);
       await apiClient.knowledge.uploadFile(form);
       setFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
       await loadDocuments(selectedId);
       await loadKnowledgeBases();
       setMessage("File uploaded and queued for ingestion.");
@@ -173,24 +216,68 @@ export function KnowledgeManager() {
     }
   }
 
-  async function searchKnowledge(event: FormEvent<HTMLFormElement>) {
+  function handleDragEnter(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
-    if (!selectedId || !query.trim()) return;
+    event.stopPropagation();
+    if (selectedArchived || uploading) return;
+    setDragActive(true);
+  }
+
+  function handleDragOver(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (selectedArchived || uploading) return;
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    setDragActive(true);
+  }
+
+  function handleDragLeave(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragActive(false);
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragActive(false);
+    if (selectedArchived || uploading) return;
+    const dropped = event.dataTransfer?.files?.[0];
+    if (!dropped) return;
+    setFile(dropped);
+  }
+
+  async function searchKnowledge(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    if (!selectedId || !query.trim() || searching) return;
+    setSearching(true);
     setMessage("");
     setError(null);
     setEmbeddingNotice("");
+    setSearchResults([]);
+    setSearched(true);
     try {
       const data = await apiClient.knowledge.search(selectedId, { query, limit });
-      setSearchResults(data.results ?? []);
+      const results = data.results ?? [];
+      setSearchResults(results);
       const embeddings = data.embeddings as { fallback?: boolean; missing?: number; outdated?: number; invalid?: number };
       if (embeddings?.fallback || embeddings?.missing || embeddings?.outdated || embeddings?.invalid) {
         setEmbeddingNotice(`Embedding fallback detected: ${embeddings.missing ?? 0} missing, ${embeddings.outdated ?? 0} outdated, ${embeddings.invalid ?? 0} invalid.`);
       }
-      setMessage((data.results ?? []).length ? "Search complete." : "No matching chunks found.");
+      setMessage(results.length ? `Search complete. ${results.length} result${results.length === 1 ? "" : "s"}.` : "No matching chunks found.");
     } catch (err) {
       const nextError = err instanceof Error ? err.message : String(err);
       setError(nextError);
       toast({ title: "Knowledge search failed", message: nextError, variant: "error" });
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  function handleQueryKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void searchKnowledge();
     }
   }
 
@@ -219,6 +306,7 @@ export function KnowledgeManager() {
         setSelectedId("");
         setDocuments([]);
         setSearchResults([]);
+        setSearched(false);
       }
       setMessage("Knowledge base deleted.");
       toast({ message: "Knowledge base deleted.", variant: "success" });
@@ -230,16 +318,23 @@ export function KnowledgeManager() {
   }
 
   async function renameDocument(document: KnowledgeDocument) {
-    if (!selectedId) return;
-    const title = documentTitles[document.id]?.trim();
-    if (!title) {
+    if (!selectedId || renamingDocId) return;
+    const next = (documentTitles[document.id] ?? document.title).trim();
+    if (!next) {
       setError("Document title is required.");
+      toast({ message: "Document title is required.", variant: "error" });
       return;
     }
+    if (next === document.title) {
+      setMessage("No change.");
+      toast({ message: "No change.", variant: "info" });
+      return;
+    }
+    setRenamingDocId(document.id);
     setMessage("");
     setError(null);
     try {
-      await apiClient.knowledge.updateDocument(selectedId, document.id, { title });
+      await apiClient.knowledge.updateDocument(selectedId, document.id, { title: next });
       await loadDocuments(selectedId);
       setMessage("Document renamed.");
       toast({ message: "Document renamed.", variant: "success" });
@@ -247,6 +342,8 @@ export function KnowledgeManager() {
       const nextError = err instanceof Error ? err.message : String(err);
       setError(nextError);
       toast({ title: "Unable to rename document", message: nextError, variant: "error" });
+    } finally {
+      setRenamingDocId(null);
     }
   }
 
@@ -268,14 +365,19 @@ export function KnowledgeManager() {
   }
 
   async function reembedKnowledgeBase() {
-    if (!selectedId) return;
+    if (!selectedId || reembedding) return;
     setReembedding(true);
     setMessage("");
     setError(null);
+    setEmbeddingNotice("");
     try {
       const result = await apiClient.knowledge.reembed(selectedId, { limit: 100 });
-      setMessage(`Re-embed scanned ${result.scanned} chunks and updated ${result.updated}.`);
-      toast({ title: "Embeddings refreshed", message: `${result.updated} chunks updated.`, variant: "success" });
+      const skipped = result.skippedCurrent ?? 0;
+      const reasons = result.reasons ? Object.entries(result.reasons).filter(([, count]) => count > 0).map(([reason, count]) => `${reason}: ${count}`).join(", ") : "";
+      const summary = `Scanned ${result.scanned}, updated ${result.updated}, skipped ${skipped}${result.hasMore ? " (more remaining)" : ""}${reasons ? ` - reasons: ${reasons}` : ""}.`;
+      setEmbeddingNotice(summary);
+      setMessage(summary);
+      toast({ title: "Embeddings refreshed", message: `${result.updated} updated / ${result.scanned} scanned${result.hasMore ? " (run again for remainder)" : ""}.`, variant: "success" });
     } catch (err) {
       const nextError = err instanceof Error ? err.message : String(err);
       setError(nextError);
@@ -284,6 +386,17 @@ export function KnowledgeManager() {
       setReembedding(false);
     }
   }
+
+  const dropZoneStyle = {
+    border: dragActive ? "2px dashed rgb(217, 119, 87)" : "2px dashed rgba(148, 163, 184, 0.45)",
+    borderRadius: 12,
+    padding: "16px",
+    background: dragActive ? "rgba(217, 119, 87, 0.08)" : "rgba(148, 163, 184, 0.04)",
+    transition: "background 120ms ease, border-color 120ms ease",
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 8,
+  };
 
   return (
     <section className="knowledge-library">
@@ -308,13 +421,13 @@ export function KnowledgeManager() {
             </div>
             <label>
               Name
-              <input className="input" value={createDraft.name} onChange={(event) => setCreateDraft((current) => ({ ...current, name: event.target.value }))} required />
+              <input className="input" value={createDraft.name} onChange={(event) => setCreateDraft((current) => ({ ...current, name: event.target.value }))} required disabled={creatingKb} />
             </label>
             <label>
               Description
-              <textarea value={createDraft.description} onChange={(event) => setCreateDraft((current) => ({ ...current, description: event.target.value }))} rows={3} />
+              <textarea value={createDraft.description} onChange={(event) => setCreateDraft((current) => ({ ...current, description: event.target.value }))} rows={3} disabled={creatingKb} />
             </label>
-            <button className="button" type="submit">Create knowledge base</button>
+            <button className="button" type="submit" disabled={creatingKb || !createDraft.name.trim()}>{creatingKb ? "Creating..." : "Create knowledge base"}</button>
           </form>
 
           {loadingBases ? <LoadingBlock title="Loading bases" /> : null}
@@ -354,16 +467,16 @@ export function KnowledgeManager() {
                 <form className="knowledge-edit-form" onSubmit={(event) => void saveKnowledgeBase(event)}>
                   <label>
                     Name
-                    <input className="input" value={editDraft.name} onChange={(event) => setEditDraft((current) => ({ ...current, name: event.target.value }))} required />
+                    <input className="input" value={editDraft.name} onChange={(event) => setEditDraft((current) => ({ ...current, name: event.target.value }))} required disabled={savingKb} />
                   </label>
                   <label>
                     Description
-                    <textarea value={editDraft.description} onChange={(event) => setEditDraft((current) => ({ ...current, description: event.target.value }))} rows={3} />
+                    <textarea value={editDraft.description} onChange={(event) => setEditDraft((current) => ({ ...current, description: event.target.value }))} rows={3} disabled={savingKb} />
                   </label>
                   <div className="actions-row">
-                    <button className="button" type="submit" disabled={savingKb}>{savingKb ? "Saving..." : "Save base"}</button>
-                    <ConfirmButton message={`Archive ${selectedKb.name}?`} disabled={selectedArchived} onConfirm={() => archiveKnowledgeBase(selectedKb)}>Archive</ConfirmButton>
-                    <ConfirmButton className="button button--danger" message={`Delete ${selectedKb.name} and its documents?`} confirmLabel="Delete" onConfirm={() => deleteKnowledgeBase(selectedKb)}>Delete</ConfirmButton>
+                    <button className="button" type="submit" disabled={savingKb || !editDraft.name.trim()}>{savingKb ? "Saving..." : "Save base"}</button>
+                    <ConfirmButton message={`Archive ${selectedKb.name}?`} disabled={selectedArchived || savingKb} onConfirm={() => archiveKnowledgeBase(selectedKb)}>Archive</ConfirmButton>
+                    <ConfirmButton className="button button--danger" message={`Delete ${selectedKb.name} and its documents?`} confirmLabel="Delete" disabled={savingKb} onConfirm={() => deleteKnowledgeBase(selectedKb)}>Delete</ConfirmButton>
                   </div>
                 </form>
               </section>
@@ -375,10 +488,47 @@ export function KnowledgeManager() {
                   <p className="muted">Supports text, markdown, JSON, CSV, embedded-text PDFs, images via English OCR, and modern Office files. Scanned PDFs are not OCR'd directly.</p>
                 </div>
                 <form className="knowledge-upload-form" onSubmit={(event) => void uploadFile(event)}>
-                  <label>
-                    File
-                    <input className="input" aria-label="File to upload" type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} disabled={selectedArchived} required />
-                  </label>
+                  <div
+                    style={dropZoneStyle}
+                    onDragEnter={handleDragEnter}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    aria-label="Drop a file to upload"
+                  >
+                    <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <span>{dragActive ? "Release to attach file" : "File (drag & drop or browse)"}</span>
+                      <input
+                        ref={fileInputRef}
+                        className="input"
+                        aria-label="File to upload"
+                        type="file"
+                        accept={ACCEPTED_FILE_TYPES}
+                        onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+                        disabled={selectedArchived || uploading}
+                      />
+                    </label>
+                    {file ? (
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontSize: 13 }}>
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.name}>
+                          <strong>{file.name}</strong> <span className="muted">({formatSize(file.size)})</span>
+                        </span>
+                        <button
+                          type="button"
+                          className="button button--ghost"
+                          onClick={() => {
+                            setFile(null);
+                            if (fileInputRef.current) fileInputRef.current.value = "";
+                          }}
+                          disabled={uploading}
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="muted" style={{ fontSize: 12 }}>No file selected.</span>
+                    )}
+                  </div>
                   <button className="button" type="submit" disabled={selectedArchived || !file || uploading}>{uploading ? "Uploading..." : "Upload and queue"}</button>
                 </form>
                 {selectedArchived ? <p className="warning" role="status">Archived knowledge bases cannot receive uploads or searches.</p> : null}
@@ -390,29 +540,42 @@ export function KnowledgeManager() {
                     <div className="eyebrow">Documents</div>
                     <h2>Ingestion status</h2>
                   </div>
-                  <button className="button button--ghost" type="button" disabled={!selectedId} onClick={() => void loadDocuments(selectedId)}>Refresh documents</button>
+                  <button className="button button--ghost" type="button" disabled={!selectedId || loadingDocuments} onClick={() => void loadDocuments(selectedId)}>{loadingDocuments ? "Refreshing..." : "Refresh documents"}</button>
                 </div>
                 {loadingDocuments ? <LoadingBlock title="Loading documents" /> : null}
                 {!loadingDocuments && documents.length === 0 ? <EmptyState title="No documents" description="Upload a file to queue extraction, chunking, and embeddings." /> : null}
                 <div className="knowledge-document-list">
-                  {documents.map((document) => (
-                    <article className="knowledge-document-card" key={document.id}>
-                      <div>
-                        <input className="input" value={documentTitles[document.id] ?? document.title} onChange={(event) => setDocumentTitles((current) => ({ ...current, [document.id]: event.target.value }))} aria-label={`Title for ${document.title}`} />
-                        <div className="knowledge-document-meta">
-                          <StatusBadge>{document.ingest_status}</StatusBadge>
-                          <span>{document.mime_type ?? metadataValue(document, "detectedType") ?? "unknown type"}</span>
-                          <span>{formatSize(document.size_bytes)}</span>
-                          {metadataValue(document, "chunkCount") ? <span>{metadataValue(document, "chunkCount")} chunks</span> : null}
+                  {documents.map((document) => {
+                    const currentTitle = documentTitles[document.id] ?? document.title;
+                    const isRenaming = renamingDocId === document.id;
+                    const isDirty = currentTitle.trim() !== document.title && currentTitle.trim().length > 0;
+                    return (
+                      <article className="knowledge-document-card" key={document.id}>
+                        <div>
+                          <input
+                            className="input"
+                            value={currentTitle}
+                            onChange={(event) => setDocumentTitles((current) => ({ ...current, [document.id]: event.target.value }))}
+                            aria-label={`Title for ${document.title}`}
+                            disabled={isRenaming}
+                          />
+                          <div className="knowledge-document-meta">
+                            <StatusBadge>{document.ingest_status}</StatusBadge>
+                            <span>{document.mime_type ?? metadataValue(document, "detectedType") ?? "unknown type"}</span>
+                            <span>{formatSize(document.size_bytes)}</span>
+                            {metadataValue(document, "chunkCount") ? <span>{metadataValue(document, "chunkCount")} chunks</span> : null}
+                          </div>
+                          {metadataValue(document, "error") ? <p className="error-state" role="alert">{metadataValue(document, "error")}</p> : null}
                         </div>
-                        {metadataValue(document, "error") ? <p className="error-state" role="alert">{metadataValue(document, "error")}</p> : null}
-                      </div>
-                      <div className="actions-row knowledge-document-actions">
-                        <button className="button button--ghost" type="button" onClick={() => void renameDocument(document)}>Rename</button>
-                        <ConfirmButton className="button button--danger" message={`Delete ${document.title}?`} confirmLabel="Delete" onConfirm={() => deleteDocument(document)}>Delete</ConfirmButton>
-                      </div>
-                    </article>
-                  ))}
+                        <div className="actions-row knowledge-document-actions">
+                          <button className="button button--ghost" type="button" onClick={() => void renameDocument(document)} disabled={isRenaming || !isDirty}>
+                            {isRenaming ? "Renaming..." : "Rename"}
+                          </button>
+                          <ConfirmButton className="button button--danger" message={`Delete ${document.title}?`} confirmLabel="Delete" disabled={isRenaming} onConfirm={() => deleteDocument(document)}>Delete</ConfirmButton>
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
               </section>
 
@@ -427,16 +590,30 @@ export function KnowledgeManager() {
                 <form className="knowledge-search-form" onSubmit={(event) => void searchKnowledge(event)}>
                   <label>
                     Query
-                    <input className="input" aria-label="Search query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search ready documents" required />
+                    <input
+                      className="input"
+                      aria-label="Search query"
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
+                      onKeyDown={handleQueryKeyDown}
+                      placeholder="Search ready documents (Enter to submit)"
+                      required
+                      disabled={searching}
+                    />
                   </label>
                   <label>
                     Results
-                    <input className="input" type="number" min={1} max={50} value={limit} onChange={(event) => setLimit(Number(event.target.value))} />
+                    <input className="input" type="number" min={1} max={50} value={limit} onChange={(event) => setLimit(Number(event.target.value))} disabled={searching} />
                   </label>
-                  <button className="button" type="submit" disabled={selectedArchived || !query.trim()}>Search knowledge</button>
+                  <button className="button" type="submit" disabled={selectedArchived || !query.trim() || searching}>{searching ? "Searching..." : "Search knowledge"}</button>
                 </form>
                 {embeddingNotice ? <p className="warning" role="status">{embeddingNotice}</p> : null}
-                {!query && searchResults.length === 0 ? <EmptyState title="No search yet" description="Search results will appear here after documents finish ingestion." /> : null}
+                {searched && !searching ? (
+                  <p className="muted" role="status" style={{ fontSize: 13 }}>
+                    {searchResults.length} result{searchResults.length === 1 ? "" : "s"}{query.trim() ? ` for "${query.trim()}"` : ""}.
+                  </p>
+                ) : null}
+                {!searched && searchResults.length === 0 ? <EmptyState title="No search yet" description="Search results will appear here after documents finish ingestion." /> : null}
                 <div className="knowledge-search-results">
                   {searchResults.map((result) => (
                     <article key={result.chunkId} className="knowledge-search-result">

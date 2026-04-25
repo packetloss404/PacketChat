@@ -1,11 +1,15 @@
 "use client";
 
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { ProviderId } from "@packetchat/contracts";
 import { getAccessToken } from "../../lib/auth-client";
 import { apiClient, type Conversation, type ConversationMessage, type ProviderAccount, type ProviderModelBinding } from "../../lib/api-client";
 import { Icon } from "../../components/icons";
+import { useToast } from "../../components/ui";
+
+const APP_VERSION = "v0.8.2-rc1";
+const BOOKMARKS_KEY = "packetchat.chat.bookmarks";
 
 type ChatMessage = {
   id: string;
@@ -21,6 +25,26 @@ type StreamEvent =
   | { type: "message_end"; finishReason: string }
   | { type: "error"; error: { message?: string; code?: string } };
 
+type SpeechRecognitionLike = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onend: (() => void) | null;
+  onerror: ((event: { error?: string }) => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
+
+declare global {
+  interface Window {
+    SpeechRecognition?: SpeechRecognitionCtor;
+    webkitSpeechRecognition?: SpeechRecognitionCtor;
+  }
+}
+
 function token() {
   return getAccessToken() ?? "";
 }
@@ -30,16 +54,6 @@ function normalizedMessages(messages: ChatMessage[]) {
     role: message.role,
     content: [{ type: "text", text: message.content }]
   }));
-}
-
-function textFromConversationMessage(message: ConversationMessage) {
-  if (typeof message.text === "string") return message.text;
-  if (typeof message.content === "string") return message.content;
-  return "";
-}
-
-function isChatRole(role: string): role is ChatMessage["role"] {
-  return role === "user" || role === "assistant";
 }
 
 function isErrorStatus(status: string) {
@@ -63,7 +77,39 @@ function renderBody(body: string) {
   });
 }
 
+function formatTimestamp(iso?: string) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+function loadBookmarkSet(): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = window.localStorage.getItem(BOOKMARKS_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return new Set(parsed.filter((item): item is string => typeof item === "string"));
+    return new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function persistBookmarkSet(set: Set<string>) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(Array.from(set)));
+  } catch {
+    // ignore quota/serialization errors
+  }
+}
+
 export default function ChatPage() {
+  const toast = useToast();
   const [accounts, setAccounts] = useState<ProviderAccount[]>([]);
   const [modelBindings, setModelBindings] = useState<ProviderModelBinding[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -78,8 +124,18 @@ export default function ChatPage() {
   const [status, setStatus] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [displayName, setDisplayName] = useState("there");
+  const [attachmentName, setAttachmentName] = useState<string | null>(null);
+  const [bookmarks, setBookmarks] = useState<Set<string>>(() => new Set());
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingDraft, setEditingDraft] = useState("");
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [hour, setHour] = useState<number | null>(null);
+
   const abortRef = useRef<AbortController | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
 
   const selectedAccount = useMemo(() => accounts.find((account) => account.id === accountId), [accountId, accounts]);
   const selectedModelBindings = useMemo(
@@ -99,6 +155,15 @@ export default function ChatPage() {
     const payload = await apiClient.conversations.list();
     setConversations(payload.conversations ?? []);
   }
+
+  useEffect(() => {
+    setHour(new Date().getHours());
+    setBookmarks(loadBookmarkSet());
+    if (typeof window !== "undefined") {
+      const Ctor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+      setSpeechSupported(typeof Ctor === "function");
+    }
+  }, []);
 
   useEffect(() => {
     const accessToken = token();
@@ -163,6 +228,16 @@ export default function ChatPage() {
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [messages.length, isStreaming]);
+
+  useEffect(() => {
+    return () => {
+      try {
+        recognitionRef.current?.stop();
+      } catch {
+        // ignore
+      }
+    };
+  }, []);
 
   function updateAssistantMessage(id: string, updater: (content: string) => string) {
     setMessages((current) => current.map((message) => (message.id === id ? { ...message, content: updater(message.content) } : message)));
@@ -293,6 +368,114 @@ export default function ChatPage() {
     }
   }
 
+  function handleAttachClick() {
+    fileInputRef.current?.click();
+  }
+
+  function handleAttachChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setAttachmentName(file.name);
+    toast({ message: "File attachments are coming soon", variant: "info" });
+    event.target.value = "";
+  }
+
+  function clearAttachment() {
+    setAttachmentName(null);
+  }
+
+  function toggleListening() {
+    if (!speechSupported) return;
+    if (isListening) {
+      try {
+        recognitionRef.current?.stop();
+      } catch {
+        // ignore
+      }
+      return;
+    }
+    if (typeof window === "undefined") return;
+    const Ctor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+    if (!Ctor) return;
+    const recognition = new Ctor();
+    recognition.lang = typeof navigator !== "undefined" ? navigator.language || "en-US" : "en-US";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.onresult = (event) => {
+      let transcript = "";
+      for (let i = 0; i < event.results.length; i += 1) {
+        const result = event.results[i];
+        if (result && result[0]) {
+          transcript += result[0].transcript;
+        }
+      }
+      const trimmed = transcript.trim();
+      if (trimmed) {
+        setInput((current) => (current ? `${current.replace(/\s+$/, "")} ${trimmed}` : trimmed));
+      }
+    };
+    recognition.onerror = (event) => {
+      toast({ message: `Voice input error: ${event.error ?? "unknown"}`, variant: "error" });
+    };
+    recognition.onend = () => {
+      setIsListening(false);
+      recognitionRef.current = null;
+    };
+    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+      setIsListening(true);
+    } catch (error) {
+      setIsListening(false);
+      recognitionRef.current = null;
+      toast({ message: error instanceof Error ? error.message : "Could not start voice input", variant: "error" });
+    }
+  }
+
+  const handleCopy = useCallback(async (content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      toast({ message: "Copied to clipboard", variant: "success" });
+    } catch {
+      toast({ message: "Could not copy to clipboard", variant: "error" });
+    }
+  }, [toast]);
+
+  const handleStartEdit = useCallback((message: ChatMessage) => {
+    setEditingId(message.id);
+    setEditingDraft(message.content);
+  }, []);
+
+  const handleCancelEdit = useCallback(() => {
+    setEditingId(null);
+    setEditingDraft("");
+  }, []);
+
+  const handleSaveEdit = useCallback(() => {
+    if (!editingId) return;
+    const next = editingDraft;
+    setMessages((current) => current.map((message) => (message.id === editingId ? { ...message, content: next } : message)));
+    setEditingId(null);
+    setEditingDraft("");
+    toast({ message: "Message updated locally", variant: "info" });
+  }, [editingDraft, editingId, toast]);
+
+  const handleToggleBookmark = useCallback((id: string) => {
+    setBookmarks((current) => {
+      const next = new Set(current);
+      let added = false;
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+        added = true;
+      }
+      persistBookmarkSet(next);
+      toast({ message: added ? "Bookmarked" : "Bookmark removed", variant: "info" });
+      return next;
+    });
+  }, [toast]);
+
   const composerNode = (
     <form className={`composer ${hasMessages ? "composer--float" : ""}`} onSubmit={sendMessage}>
       <textarea
@@ -304,8 +487,16 @@ export default function ChatPage() {
         onKeyDown={onTextareaKey}
         disabled={isStreaming}
       />
+      <input
+        ref={fileInputRef}
+        type="file"
+        style={{ display: "none" }}
+        onChange={handleAttachChange}
+        aria-hidden="true"
+        tabIndex={-1}
+      />
       <div className="composer__row">
-        <button className="ib" type="button" title="Attach" aria-label="Attach" disabled={isStreaming}>
+        <button className="ib" type="button" title="Attach" aria-label="Attach" onClick={handleAttachClick} disabled={isStreaming}>
           <Icon.attach />
         </button>
         <button
@@ -321,10 +512,21 @@ export default function ChatPage() {
         <div className="spacer" />
         {isStreaming ? (
           <button className="ib" type="button" title="Stop" aria-label="Stop" onClick={stopStreaming}>
-            <Icon.dots />
+            <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
+              <line x1="6" y1="6" x2="18" y2="18" />
+              <line x1="18" y1="6" x2="6" y2="18" />
+            </svg>
           </button>
         ) : (
-          <button className="ib" type="button" title="Voice input" aria-label="Voice input" disabled>
+          <button
+            className="ib"
+            type="button"
+            title={speechSupported ? (isListening ? "Stop voice input" : "Voice input") : "Voice input requires a browser with Speech Recognition API"}
+            aria-label="Voice input"
+            aria-pressed={isListening}
+            onClick={toggleListening}
+            disabled={!speechSupported || isStreaming}
+          >
             <Icon.mic />
           </button>
         )}
@@ -332,6 +534,46 @@ export default function ChatPage() {
           <Icon.up />
         </button>
       </div>
+      {attachmentName ? (
+        <div className="composer__attachment" role="status">
+          <Icon.attach />
+          <span className="composer__attachment-name">{attachmentName}</span>
+          <button type="button" className="composer__attachment-remove" onClick={clearAttachment} aria-label="Remove attached file">
+            Remove
+          </button>
+        </div>
+      ) : null}
+      <style jsx>{`
+        .composer__attachment {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-top: 8px;
+          padding: 6px 10px;
+          font-size: 12px;
+          color: var(--muted, #888);
+          background: rgba(127, 127, 127, 0.08);
+          border-radius: 8px;
+        }
+        .composer__attachment-name {
+          flex: 1;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .composer__attachment-remove {
+          background: transparent;
+          border: none;
+          color: inherit;
+          cursor: pointer;
+          font-size: 12px;
+          padding: 2px 6px;
+          border-radius: 6px;
+        }
+        .composer__attachment-remove:hover {
+          background: rgba(127, 127, 127, 0.15);
+        }
+      `}</style>
     </form>
   );
 
@@ -402,19 +644,18 @@ export default function ChatPage() {
   ) : null;
 
   if (!hasMessages) {
-    const hour = new Date().getHours();
     return (
       <>
         <div className="stage">
           <div className="greet">
             <span className="logo" aria-hidden="true" />
-            Good {greeting(hour)}, {displayName}
+            {hour === null ? `Hello, ${displayName}` : `Good ${greeting(hour)}, ${displayName}`}
           </div>
           {composerNode}
           {settingsNode}
         </div>
         <div className="footer">
-          <Link href="/">PacketChat v0.8.2-rc1</Link> · self-hosted · all traffic stays on your box
+          <Link href="/">PacketChat {APP_VERSION}</Link> · self-hosted · all traffic stays on your box
         </div>
       </>
     );
@@ -426,7 +667,20 @@ export default function ChatPage() {
         <div className="doc__wrap">
           {settingsNode}
           {messages.map((message) => (
-            <Turn key={message.id} message={message} isStreaming={isStreaming} />
+            <Turn
+              key={message.id}
+              message={message}
+              isStreaming={isStreaming}
+              isBookmarked={bookmarks.has(message.id)}
+              isEditing={editingId === message.id}
+              editingDraft={editingDraft}
+              onEditingDraftChange={setEditingDraft}
+              onCopy={handleCopy}
+              onStartEdit={handleStartEdit}
+              onCancelEdit={handleCancelEdit}
+              onSaveEdit={handleSaveEdit}
+              onToggleBookmark={handleToggleBookmark}
+            />
           ))}
           {status && !isStreaming ? (
             <p className={isErrorStatus(status) ? "error-state chat-status" : "notice chat-status"} role={isErrorStatus(status) ? "alert" : "status"}>
@@ -440,34 +694,110 @@ export default function ChatPage() {
   );
 }
 
-function Turn({ message, isStreaming }: { message: ChatMessage; isStreaming: boolean }) {
+type TurnProps = {
+  message: ChatMessage;
+  isStreaming: boolean;
+  isBookmarked: boolean;
+  isEditing: boolean;
+  editingDraft: string;
+  onEditingDraftChange: (value: string) => void;
+  onCopy: (content: string) => void;
+  onStartEdit: (message: ChatMessage) => void;
+  onCancelEdit: () => void;
+  onSaveEdit: () => void;
+  onToggleBookmark: (id: string) => void;
+};
+
+function Turn({
+  message,
+  isStreaming,
+  isBookmarked,
+  isEditing,
+  editingDraft,
+  onEditingDraftChange,
+  onCopy,
+  onStartEdit,
+  onCancelEdit,
+  onSaveEdit,
+  onToggleBookmark
+}: TurnProps) {
   const isUser = message.role === "user";
   const placeholder = isStreaming && !isUser && !message.content ? "…" : "";
-  const timestamp = message.createdAt
-    ? new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(message.createdAt))
-    : "—";
+  const timestamp = formatTimestamp(message.createdAt);
+  const showTools = !isUser && !!message.content && !isStreaming;
+
   return (
     <article className="turn">
       <div className="turn__head">
         <div className={`av ${isUser ? "u" : "a"}`} aria-hidden="true">{isUser ? "OA" : ""}</div>
         <b>{isUser ? "You" : "Claude"}</b>
-        <span>·</span>
-        <span>{timestamp}</span>
+        {timestamp ? (
+          <>
+            <span>·</span>
+            <span suppressHydrationWarning>{timestamp}</span>
+          </>
+        ) : null}
       </div>
-      <div className="turn__body">{renderBody(message.content || placeholder)}</div>
-      {!isUser && message.content ? (
+      {isEditing ? (
+        <div className="turn__body">
+          <textarea
+            className="turn__edit"
+            value={editingDraft}
+            onChange={(event) => onEditingDraftChange(event.target.value)}
+            rows={Math.min(12, Math.max(3, editingDraft.split("\n").length))}
+            aria-label="Edit message"
+          />
+          <div className="turn__edit-actions">
+            <button type="button" className="ib" onClick={onSaveEdit} aria-label="Save edit">Save</button>
+            <button type="button" className="ib" onClick={onCancelEdit} aria-label="Cancel edit">Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <div className="turn__body">{renderBody(message.content || placeholder)}</div>
+      )}
+      {showTools && !isEditing ? (
         <div className="turn__tools">
-          <button className="ib" type="button" title="Copy" aria-label="Copy">
+          <button className="ib" type="button" title="Copy" aria-label="Copy" onClick={() => onCopy(message.content)}>
             <Icon.copy />
           </button>
-          <button className="ib" type="button" title="Edit" aria-label="Edit">
+          <button className="ib" type="button" title="Edit" aria-label="Edit" onClick={() => onStartEdit(message)}>
             <Icon.edit />
           </button>
-          <button className="ib" type="button" title="Bookmark" aria-label="Bookmark">
-            <Icon.bookmark />
+          <button
+            className="ib"
+            type="button"
+            title={isBookmarked ? "Remove bookmark" : "Bookmark"}
+            aria-label={isBookmarked ? "Remove bookmark" : "Bookmark"}
+            aria-pressed={isBookmarked}
+            onClick={() => onToggleBookmark(message.id)}
+          >
+            {isBookmarked ? (
+              <svg width={16} height={16} viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+              </svg>
+            ) : (
+              <Icon.bookmark />
+            )}
           </button>
         </div>
       ) : null}
+      <style jsx>{`
+        .turn__edit {
+          width: 100%;
+          font: inherit;
+          color: inherit;
+          background: rgba(127, 127, 127, 0.08);
+          border: 1px solid rgba(127, 127, 127, 0.25);
+          border-radius: 8px;
+          padding: 10px 12px;
+          resize: vertical;
+        }
+        .turn__edit-actions {
+          display: flex;
+          gap: 8px;
+          margin-top: 8px;
+        }
+      `}</style>
     </article>
   );
 }

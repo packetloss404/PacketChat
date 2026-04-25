@@ -1,11 +1,9 @@
-import { ProvidersManager } from "../../components/providers/providers-manager";
+import { ModelsClient } from "./models-client";
 
 export default function ProvidersPage() {
   return (
     <div className="sheet">
-      <div className="sheet__inner">
-        <ProvidersManager />
-      </div>
+      <ModelsClient />
     </div>
   );
 }
