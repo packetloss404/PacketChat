@@ -1,15 +1,18 @@
 # PacketChat
 
-PacketChat is a self-hosted, multi-user AI workspace for a small private instance. V1 targets local JWT auth, admin-managed provider keys, optional per-user BYOK, private user-owned chats/projects/prompts/knowledge/agents, and a Docker Compose deployment.
+PacketChat is a self-hosted, multi-user AI workspace for a small private instance. V1 targets local JWT auth, admin-managed provider keys, optional per-user BYOK, private user-owned chats / projects / prompts / knowledge / agents, and a Docker Compose deployment.
+
+The frontend is a v3 LibreChat-style shell — three columns (left rail, main, collapsible right rail), monochrome dark theme with a light-mode toggle, route-aware header pill, and an account popover.
 
 ## Current Scope
 
 - Single deployment, no workspaces or teams in V1.
 - Local users with admin-created accounts, invite links, and admin-triggered reset links.
-- Break-glass admin path for emergency access.
-- Admin-managed global provider accounts plus optional per-user BYOK toggled per user.
-- Provider adapters planned for OpenAI-compatible, Azure OpenAI, Anthropic, Perplexity, and Minimax.
-- Postgres, Redis, and MinIO as durable/runtime dependencies.
+- Self-service password change for the signed-in user (POST `/api/auth/change-password`), accessible from the account popover.
+- Break-glass admin path for emergency access, gated by an audit-acknowledgement checkbox on the login form.
+- Admin-managed global provider accounts plus optional per-user BYOK, surfaced through the Models panel + Settings → API Keys.
+- Provider adapters for OpenAI-compatible, Azure OpenAI, Anthropic, Perplexity, MiniMax, and Google.
+- Postgres, Redis, and MinIO as durable / runtime dependencies.
 
 ## Quick Start
 
@@ -22,38 +25,98 @@ PacketChat is a self-hosted, multi-user AI workspace for a small private instanc
 
 See `docs/local-run.md` for local operator commands, API examples, health checks, BYOK toggles, migrations, and stack shutdown.
 
-## Initial Baseline / Git Workflow
+## Git Workflow
 
-This repository is initialized on branch `main` with origin `git@github.com:packetloss404/PacketChat.git`.
+This repository is on branch `main` with origin `git@github.com:packetloss404/PacketChat.git`.
 
 - Keep `.env`, `.env.*`, `secrets/`, local data directories, backups, build outputs, logs, `node_modules/`, and `*.tsbuildinfo` out of git.
 - Keep `.env.example` tracked as the non-secret configuration template.
-- Before a first baseline commit, run `npm install` if dependencies are not installed, then run `npm run verify`.
-- If the local Compose stack is running, also run `npm run smoke` before committing.
-- Create the first commit manually with `git add .`, `git status --short`, and `git commit -m "chore: establish initial PacketChat baseline"`.
+- Before committing, run `npm run verify` (typecheck + lint). If the Compose stack is running, also run `npm run smoke`.
 
-See `docs/git-workflow.md` for the checkpoint checklist and command sequence.
+See `docs/git-workflow.md` for the checkpoint checklist.
 
-## Current UI Routes
+## UI Routes
 
-- `/`: bootstrap/landing entry point.
-- `/login`: local password login.
-- `/chat`: authenticated chat test surface for configured provider accounts.
-- `/providers`: provider account management.
-- `/projects`: private project management.
-- `/prompts`: private prompt management.
-- `/knowledge`: knowledge base and document management.
-- `/agents`: agent builder for creating agents, editing drafts, and publishing immutable versions.
-- `/admin/users`: admin-only user management, password reset links, and BYOK toggles.
+| Route | What it does | Wired? |
+| --- | --- | --- |
+| `/` | Welcome dashboard with quick actions, system status (`/api/healthz`), Resume-last-chat | ✅ |
+| `/login` | Local password login, invite acceptance, password-reset completion, break-glass with audit ack | ✅ |
+| `/chat` | Empty-state greet + pill composer; transcript with turn copy / inline edit / bookmark; SSE streaming; per-message timestamps; speech-recognition mic when supported | ✅ |
+| `/agents` | Library grid with deterministic avatars + Create / Browse / Search / Sort / Pin; Create modal (scratch or template); editor modal with provider/model/temperature/tools/knowledge bindings; test-run with polling | ✅ |
+| `/providers` | Models panel — left rail by provider (`All / per-provider / Others / Custom`), middle list with search + per-account toggle (real `providers.updateAccount` flip), right detail with Overview + Parameters tabs, ⋯ menu Reset / Export, Add custom model dialog (localStorage) | ✅ |
+| `/projects` | Private project management | ✅ |
+| `/prompts` | Prompt Library — Add prompt modal, Browse-templates modal that creates real prompts, search + tag filter + Title / Recently-updated sort, list/grid views, star favorites (localStorage), Use now hands the body to chat via sessionStorage | ✅ |
+| `/knowledge` | Knowledge bases — create, edit, archive, delete; drag-drop file upload with type-filtered accept; documents list with rename / delete; reembed with detailed counts; Enter-to-search retrieval | ✅ |
+| `/plugins` | Pending integrations — `Perplexity Search`, `Deep Research`, `GPT Image Editor`, `PDF Summarizer`, `Voice Mode` — each with a Join-waitlist email modal (prefilled from `/api/auth/me`), plus a Request-a-plugin form. All persisted to localStorage. | ✅ (UX) |
+| `/plugins/marketplace` | Coming-soon splash with orbital SVG art and three teaser agent cards (`Notify when live`) | ✅ (UX) |
+| `/admin/users` | Admin-only user management, invite links, password reset links, BYOK toggles | ✅ |
+| `/admin/usage` | MTD spend, tokens, and run counts | ✅ |
+| `/settings` | Account & Data (App Data / Cloud Sync / API Keys / License Key), Preferences (General / Appearance / Keyboard Shortcuts / Text-to-speech / Voice Input), Advanced (MCP / Internal prompts / Extensions / Proxy & Org ID) | ✅ (UX, persisted) |
+| `/not-found`, `/global-error` | Themed error surfaces | ✅ |
 
-Agent execution remains post-agent-builder work: published versions exist, but run execution, evaluation, and scheduling are not implemented yet.
+## Account popover
+
+Click the avatar / display name in the left-rail footer to open the account drop-up:
+
+- **Manage sync status** — placeholder, marked coming-soon.
+- **Change password** — opens a modal that calls `POST /api/auth/change-password`, verifies the current password, applies the policy, and revokes all other sessions while keeping the current one alive.
+- **API Keys** — link to `/settings` → API Keys.
+- **Help & Information** — placeholder toast.
+- **packetloss404 GitHub** — opens `https://github.com/packetloss404`.
+- Footer: Fifty Eleven LLC ©, Contact / Privacy / Terms / FAQs / Docs (placeholder anchors), region chip, light/dark theme toggle that flips a `.light` class on `<html>`.
+
+The settings gear (next to the popover trigger) routes to `/settings`.
+
+## Right-rail drawers
+
+The 48-px right rail expands a 320-px panel when an icon is selected. Each drawer reads/writes localStorage so values survive reloads:
+
+- **Prompts** — link to `/prompts`.
+- **Memories** — listing + add-memory textarea (`packetchat.memories`).
+- **Parameters** — temperature, top-p, max output tokens, system prompt + Reset (`packetchat.parameters`).
+- **Attach Files** — drop zone + file list with sizes; uploads not yet sent through the chat API.
+- **Bookmarks** — reads `packetchat.chat.bookmarks` written by the chat-turn bookmark button.
+- **MCP Settings** — connect/disconnect toggles per MCP server (`packetchat.mcp.connections`).
+
+`Esc` closes the drawer.
+
+## Wiring status — what's stubbed vs wired
+
+**Wired:**
+
+- All auth endpoints: login, refresh, logout, invite accept, password reset complete, change password, /me.
+- All conversation, project, prompt, knowledge base, agent, agent draft, agent publish, agent run, admin user, and admin usage CRUD endpoints.
+- SSE streaming chat at `POST /api/chat`.
+- Models toggle persists via the existing `providers.updateAccount` (account-level granularity — the backend has no per-binding toggle yet).
+- Speech Synthesis voice picker enumerates real `window.speechSynthesis` voices.
+- Theme toggle, font-size slider, and most preferences in `/settings` write through to `localStorage` under `packetchat.settings.<section>.<key>`.
+
+**Stubbed (UI-complete, backend pending):**
+
+- Cloud sync — local-backup export works; cloud connect is gated to a future Fifty Eleven LLC account flow.
+- License Key activation — accepts input but the validation service isn't connected.
+- Plugin install / waitlist — emails persist locally only; no notification backend.
+- Marketplace install — UI only.
+- File attachments in chat — picked file shows but isn't uploaded.
+- Custom models — saved to localStorage; there is no backend endpoint for registering them.
+- Per-binding model toggle — not exposed by the backend; account-level toggle is what fires.
+- Agent share — copies a link; there is no published-agent share endpoint yet.
 
 ## Deployment Notes
 
 - Only the `web` service should be exposed to your reverse proxy.
 - Postgres, Redis, and MinIO stay private on the Compose network.
-- Use immutable image tags for pilot/prod.
+- Use immutable image tags for pilot / prod.
 - Run a restore drill before calling a deployment production-ready.
 - Use `npm run backup`, `npm run backup:postgres`, or `npm run backup:minio` for local Compose backup artifacts before upgrades.
 
 See `docs/deployment.md`, `docs/local-run.md`, `docs/smoke-test.md`, and `docs/runbooks/backup-restore.md`.
+
+## Front-end conventions
+
+- Dark monochrome tokens in `apps/web/src/app/globals.css` (`--bg`, `--ink`, `--line`, etc.) plus a `.light` override.
+- Canonical breakpoints at **720**, **960**, and **1200 px**. Below 720 the rails collapse and a mobile topbar overlays the left rail.
+- Focus-visible outlines, `prefers-reduced-motion` honoured, `forced-colors` fallbacks for Windows High Contrast, themed `<dialog>` backdrops.
+- Page shells are wrapped in `.sheet > .sheet__inner` for consistent padding + scroll behaviour.
+- Icons are inline SVGs in `apps/web/src/components/icons.tsx`.
+- Pages persist user-scoped UI state under `packetchat.*` localStorage keys.
