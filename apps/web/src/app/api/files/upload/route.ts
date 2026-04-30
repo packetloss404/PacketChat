@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { authenticateRequest } from "@packetchat/auth";
 import { getConfig } from "@packetchat/config";
 import { getSql } from "@packetchat/db";
@@ -41,8 +41,9 @@ export async function POST(request: Request) {
   const fileName = safeFileName(file.name);
   const objectKey = `${user.id}/${randomUUID()}-${fileName}`;
   const bytes = Buffer.from(await file.arrayBuffer());
+  const s3 = getS3Client();
 
-  await getS3Client().send(new PutObjectCommand({
+  await s3.send(new PutObjectCommand({
     Bucket: config.S3_BUCKET_UPLOADS,
     Key: objectKey,
     Body: bytes,
@@ -53,45 +54,85 @@ export async function POST(request: Request) {
     }
   }));
 
-  const rows = await sql.begin(async (tx) => {
-    const attachments = await tx<{ id: string }[]>`
-      insert into attachments (owner_user_id, bucket, object_key, file_name, mime_type, size_bytes, status, metadata)
-      values (
-        ${user.id},
-        ${config.S3_BUCKET_UPLOADS},
-        ${objectKey},
-        ${file.name || fileName},
-        ${file.type || null},
-        ${file.size},
-        'uploaded',
-        ${JSON.stringify({ purpose: "knowledge_upload", knowledgeBaseId })}::jsonb
-      )
-      returning id
-    `;
+  let rows: { attachmentId: string; documentId: string };
+  try {
+    rows = await sql.begin(async (tx) => {
+      const attachments = await tx<{ id: string }[]>`
+        insert into attachments (owner_user_id, bucket, object_key, file_name, mime_type, size_bytes, status, metadata)
+        values (
+          ${user.id},
+          ${config.S3_BUCKET_UPLOADS},
+          ${objectKey},
+          ${file.name || fileName},
+          ${file.type || null},
+          ${file.size},
+          'uploaded',
+          ${JSON.stringify({ purpose: "knowledge_upload", knowledgeBaseId })}::jsonb
+        )
+        returning id
+      `;
 
-    const documents = await tx<{ id: string }[]>`
-      insert into knowledge_documents (knowledge_base_id, owner_user_id, attachment_id, title, mime_type, ingest_status, source_metadata)
-      values (
-        ${knowledgeBaseId},
-        ${user.id},
-        ${attachments[0]!.id},
-        ${file.name || fileName},
-        ${file.type || null},
-        'queued',
-        ${JSON.stringify({ bucket: config.S3_BUCKET_UPLOADS, objectKey })}::jsonb
-      )
-      returning id
-    `;
+      const documents = await tx<{ id: string }[]>`
+        insert into knowledge_documents (knowledge_base_id, owner_user_id, attachment_id, title, mime_type, ingest_status, source_metadata)
+        values (
+          ${knowledgeBaseId},
+          ${user.id},
+          ${attachments[0]!.id},
+          ${file.name || fileName},
+          ${file.type || null},
+          'queued',
+          ${JSON.stringify({ bucket: config.S3_BUCKET_UPLOADS, objectKey })}::jsonb
+        )
+        returning id
+      `;
 
-    return { attachmentId: attachments[0]!.id, documentId: documents[0]!.id };
-  });
+      return { attachmentId: attachments[0]!.id, documentId: documents[0]!.id };
+    });
+  } catch (error) {
+    await s3.send(new DeleteObjectCommand({
+      Bucket: config.S3_BUCKET_UPLOADS,
+      Key: objectKey
+    })).catch(() => undefined);
 
-  await enqueueFileIngestionJob({
-    documentId: rows.documentId,
-    knowledgeBaseId,
-    ownerUserId: user.id,
-    attachmentId: rows.attachmentId
-  });
+    return jsonError("File upload could not be recorded", 500, {
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  try {
+    await enqueueFileIngestionJob({
+      documentId: rows.documentId,
+      knowledgeBaseId,
+      ownerUserId: user.id,
+      attachmentId: rows.attachmentId
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await sql.begin(async (tx) => {
+      await tx`
+        update knowledge_documents
+        set ingest_status = 'failed',
+            source_metadata = source_metadata || ${JSON.stringify({ error: message, failedAt: "enqueue" })}::jsonb,
+            updated_at = now()
+        where id = ${rows.documentId}
+          and owner_user_id = ${user.id}
+      `;
+      await tx`
+        update attachments
+        set status = 'failed',
+            metadata = metadata || ${JSON.stringify({ error: message, failedAt: "enqueue" })}::jsonb
+        where id = ${rows.attachmentId}
+          and owner_user_id = ${user.id}
+      `;
+    });
+
+    await s3.send(new DeleteObjectCommand({
+      Bucket: config.S3_BUCKET_UPLOADS,
+      Key: objectKey
+    })).catch(() => undefined);
+
+    return jsonError("File upload could not be queued for ingestion", 503, { documentId: rows.documentId });
+  }
 
   return jsonOk(rows);
 }

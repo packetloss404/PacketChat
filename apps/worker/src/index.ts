@@ -140,6 +140,7 @@ async function ingestFile(jobData: FileIngestionJob) {
     const message = error instanceof Error ? error.message : String(error);
     await markIngestionFailed(jobData, message);
     logger.warn("File ingestion failed", { documentId: jobData.documentId, error: message });
+    throw error;
   }
 }
 

@@ -22,20 +22,20 @@ export async function POST(request: Request, context: RouteContext) {
   const changeSummary = typeof body?.changeSummary === "string" && body.changeSummary.trim().length > 0 ? body.changeSummary.trim() : null;
 
   const sql = getSql();
-  const draftRows = await sql<{ draft_id: string; spec: Record<string, unknown> }[]>`
-    select d.id as draft_id, d.spec
-    from agents a
-    join agent_drafts d on d.id = a.current_draft_id
-    where a.id = ${agentId} and a.owner_user_id = ${user.id}
-    limit 1
-  `;
-  if (draftRows.length === 0) return jsonError("Agent draft not found", 404);
+  const version = await sql.begin(async (tx) => {
+    const draftRows = await tx<{ draft_id: string; spec: Record<string, unknown> }[]>`
+      select d.id as draft_id, d.spec
+      from agents a
+      join agent_drafts d on d.id = a.current_draft_id
+      where a.id = ${agentId} and a.owner_user_id = ${user.id}
+      for update of a
+    `;
+    if (draftRows.length === 0) return null;
 
-  const spec = draftRows[0]!.spec;
-  const manifest = { spec };
-  const contentHash = createHash("sha256").update(stableJson(manifest)).digest("hex");
+    const spec = draftRows[0]!.spec;
+    const manifest = { spec };
+    const contentHash = createHash("sha256").update(stableJson(manifest)).digest("hex");
 
-  const rows = await sql.begin(async (tx) => {
     const versionRows = await tx<{ next_version: number }[]>`
       select coalesce(max(version_number), 0) + 1 as next_version
       from agent_versions
@@ -57,8 +57,9 @@ export async function POST(request: Request, context: RouteContext) {
       set published_version_id = ${versions[0]!.id}, status = 'active', updated_at = now()
       where id = ${agentId} and owner_user_id = ${user.id}
     `;
-    return versions;
+    return versions[0]!;
   });
+  if (!version) return jsonError("Agent draft not found", 404);
 
-  return jsonOk({ version: rows[0] }, { status: 201 });
+  return jsonOk({ version }, { status: 201 });
 }

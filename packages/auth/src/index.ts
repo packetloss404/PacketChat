@@ -23,6 +23,20 @@ export type AuthenticatedUser = {
   sessionId: string;
 };
 
+export class AuthError extends Error {
+  constructor(
+    message: string,
+    public readonly status: 401 | 403
+  ) {
+    super(message);
+    this.name = "AuthError";
+  }
+}
+
+export function isAuthError(error: unknown): error is AuthError {
+  return error instanceof AuthError;
+}
+
 type UserRow = {
   id: string;
   email: string;
@@ -115,7 +129,9 @@ export async function authenticateRequest(headers: Headers): Promise<Authenticat
   const token = bearerTokenFromHeaders(headers);
   if (!token) return null;
 
-  const verified = await verifyAccessToken(token);
+  const verified = await verifyAccessToken(token).catch(() => null);
+  if (!verified) return null;
+
   const sql = getSql();
   const config = getConfig();
   const rows = await sql<AuthenticatedUser[]>`
@@ -145,7 +161,8 @@ export async function authenticateRequest(headers: Headers): Promise<Authenticat
 
 export async function requireAdmin(headers: Headers): Promise<AuthenticatedUser> {
   const user = await authenticateRequest(headers);
-  if (!user || user.role !== "admin") throw new Error("Admin authorization required");
+  if (!user) throw new AuthError("Authentication required", 401);
+  if (user.role !== "admin") throw new AuthError("Admin authorization required", 403);
   return user;
 }
 
@@ -253,16 +270,18 @@ export async function rotateRefreshToken(refreshToken: string) {
   const sql = getSql();
   const tokenHash = hashOpaqueToken(refreshToken);
   const config = getConfig();
-  const rows = await sql<{
-    id: string;
-    session_id: string;
-    family_id: string;
-    user_id: string;
-    role: "admin" | "user";
-    auth_method: "local" | "break_glass";
-    used_at: Date | null;
-    revoked_at: Date | null;
-  }[]>`
+
+  const rotation = await sql.begin(async (tx) => {
+    const rows = await tx<{
+      id: string;
+      session_id: string;
+      family_id: string;
+      user_id: string;
+      role: "admin" | "user";
+      auth_method: "local" | "break_glass";
+      used_at: Date | null;
+      revoked_at: Date | null;
+    }[]>`
     select rt.id, rt.session_id, rt.family_id, s.user_id, u.role, s.auth_method, rt.used_at, rt.revoked_at
     from refresh_tokens rt
     join sessions s on s.id = rt.session_id
@@ -274,39 +293,47 @@ export async function rotateRefreshToken(refreshToken: string) {
       and s.last_seen_at > now() - (${config.SESSION_IDLE_TIMEOUT_SECONDS} || ' seconds')::interval
       and u.status = 'active'
     limit 1
+    for update of rt
   `;
 
-  const existing = rows[0];
-  if (!existing || existing.revoked_at) return null;
+    const existing = rows[0];
+    if (!existing) return { kind: "none" as const };
 
-  if (existing.used_at) {
-    await sql`update refresh_tokens set reuse_detected_at = now(), revoked_at = now() where family_id = ${existing.family_id}`;
-    await sql`update sessions set revoked_at = now(), revoked_reason = 'refresh token reuse' where id = ${existing.session_id}`;
-    await recordAuditEvent({ actorUserId: existing.user_id, action: "auth.refresh.reused", outcome: "failure", targetType: "session", targetId: existing.session_id });
-    return null;
-  }
+    if (existing.used_at) {
+      await tx`update refresh_tokens set reuse_detected_at = now(), revoked_at = now() where family_id = ${existing.family_id}`;
+      await tx`update sessions set revoked_at = now(), revoked_reason = 'refresh token reuse' where id = ${existing.session_id}`;
+      return { kind: "reused" as const, existing };
+    }
 
-  const newRefreshToken = createOpaqueToken(48);
-  const newHash = hashOpaqueToken(newRefreshToken);
-  const ttl = existing.auth_method === "break_glass" ? 8 * 60 * 60 : config.REFRESH_TOKEN_TTL_SECONDS;
+    if (existing.revoked_at) return { kind: "none" as const };
 
-  await sql.begin(async (tx) => {
+    const newRefreshToken = createOpaqueToken(48);
+    const newHash = hashOpaqueToken(newRefreshToken);
+    const ttl = existing.auth_method === "break_glass" ? 8 * 60 * 60 : config.REFRESH_TOKEN_TTL_SECONDS;
     await tx`update refresh_tokens set used_at = now(), revoked_at = now() where id = ${existing.id}`;
     await tx`
       insert into refresh_tokens (session_id, family_id, token_hash, parent_token_id, expires_at)
       values (${existing.session_id}, ${existing.family_id}, ${newHash}, ${existing.id}, now() + (${ttl} || ' seconds')::interval)
     `;
     await tx`update sessions set last_seen_at = now() where id = ${existing.session_id}`;
+    return { kind: "rotated" as const, existing, refreshToken: newRefreshToken, ttl };
   });
+
+  if (rotation.kind === "none") return null;
+
+  if (rotation.kind === "reused") {
+    await recordAuditEvent({ actorUserId: rotation.existing.user_id, action: "auth.refresh.reused", outcome: "failure", targetType: "session", targetId: rotation.existing.session_id });
+    return null;
+  }
 
   const accessToken = await signAccessToken({
-    userId: existing.user_id,
-    sessionId: existing.session_id,
-    role: existing.role,
-    authMethod: existing.auth_method
+    userId: rotation.existing.user_id,
+    sessionId: rotation.existing.session_id,
+    role: rotation.existing.role,
+    authMethod: rotation.existing.auth_method
   });
 
-  return { accessToken, refreshToken: newRefreshToken, refreshTokenMaxAge: ttl };
+  return { accessToken, refreshToken: rotation.refreshToken, refreshTokenMaxAge: rotation.ttl };
 }
 
 export async function revokeSession(sessionId: string): Promise<void> {

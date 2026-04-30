@@ -196,6 +196,17 @@ export type AgentRunStep = {
   output: Record<string, unknown>;
 };
 
+export type AgentRunRequest = ({
+  input: string;
+  inputText?: string;
+} | {
+  inputText: string;
+  input?: string;
+}) & {
+  conversationId?: string;
+  stream?: boolean;
+};
+
 export type AdminUser = {
   id: string;
   email: string;
@@ -350,8 +361,8 @@ export const apiClient = {
       apiFetch<{ draft: AgentDraft }>(`/api/agents/${encodePath(agentId)}/draft`, jsonInit("PATCH", body)),
     publish: (agentId: string, body: { changeSummary?: string } = {}) =>
       apiFetch<{ version: { id: string; version_number: number } }>(`/api/agents/${encodePath(agentId)}/publish`, jsonInit("POST", body)),
-    run: (agentId: string, body: { input: string; conversationId?: string; stream?: boolean }) =>
-      apiFetch<Record<string, unknown>>(`/api/agents/${encodePath(agentId)}/runs`, jsonInit("POST", body)),
+    run: (agentId: string, body: AgentRunRequest) =>
+      apiFetch<Record<string, unknown>>(`/api/agents/${encodePath(agentId)}/runs`, jsonInit("POST", { ...body, inputText: body.inputText ?? body.input })),
     runDetails: (agentId: string, runId: string, init?: RequestInit) =>
       apiFetch<{ run: Record<string, unknown>; events: AgentRunEvent[]; steps: AgentRunStep[] }>(`/api/agents/${encodePath(agentId)}/runs/${encodePath(runId)}`, init)
   },

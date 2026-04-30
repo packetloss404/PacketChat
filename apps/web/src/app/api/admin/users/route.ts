@@ -1,10 +1,13 @@
-import { createOpaqueToken, hashOpaqueToken, hashPassword, requireAdmin, sendAuthEmail } from "@packetchat/auth";
+import { createOpaqueToken, hashOpaqueToken, hashPassword, sendAuthEmail } from "@packetchat/auth";
 import { getConfig } from "@packetchat/config";
 import { getSql, recordAuditEvent } from "@packetchat/db";
+import { requireAdminOrJson } from "../../../../lib/admin-auth";
 import { jsonError, jsonOk } from "../../../../lib/http";
 
 export async function GET(request: Request) {
-  await requireAdmin(request.headers);
+  const admin = await requireAdminOrJson(request.headers);
+  if (admin instanceof Response) return admin;
+
   const sql = getSql();
   const users = await sql`
     select id, email, display_name, role, status, byok_enabled, is_break_glass, created_at, last_login_at
@@ -15,7 +18,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const admin = await requireAdmin(request.headers);
+  const admin = await requireAdminOrJson(request.headers);
+  if (admin instanceof Response) return admin;
+
   const body = await request.json().catch(() => null);
   if (!body?.email) return jsonError("Email is required", 400);
 

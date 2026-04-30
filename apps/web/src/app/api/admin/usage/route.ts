@@ -1,9 +1,11 @@
-import { requireAdmin } from "@packetchat/auth";
 import { getSql } from "@packetchat/db";
+import { requireAdminOrJson } from "../../../../lib/admin-auth";
 import { jsonOk } from "../../../../lib/http";
 
 export async function GET(request: Request) {
-  await requireAdmin(request.headers);
+  const admin = await requireAdminOrJson(request.headers);
+  if (admin instanceof Response) return admin;
+
   const sql = getSql();
 
   const summary = await sql`

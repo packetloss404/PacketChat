@@ -71,6 +71,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ kno
     where kd.knowledge_base_id = ${knowledgeBaseId}
       and kd.owner_user_id = ${user.id}
       and kd.ingest_status = 'ready'
+      and exists (
+        select 1
+        from unnest(${terms}::text[]) as search_terms(term)
+        where lower(kc.content) like '%' || search_terms.term || '%'
+           or lower(kd.title) like '%' || search_terms.term || '%'
+      )
     order by kd.created_at desc, kc.chunk_index asc
     limit ${candidateLimit}
   `;

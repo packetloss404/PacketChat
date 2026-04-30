@@ -396,8 +396,8 @@ export async function POST(request: Request, context: RouteContext) {
 
   const { agentId } = await context.params;
   const body = await request.json().catch(() => null);
-  const inputText = textOrNull(body?.inputText);
-  if (!inputText) return jsonError("inputText is required", 400);
+  const inputText = textOrNull(body?.inputText) ?? textOrNull(body?.input);
+  if (!inputText) return jsonError("inputText or input is required", 400);
 
   const sql = getSql();
   const versionRows = await sql<{ agent_id: string; version_id: string; spec: AgentSpec; manifest: Record<string, unknown> }[]>`

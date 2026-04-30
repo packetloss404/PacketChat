@@ -1,10 +1,13 @@
-import { createOpaqueToken, hashOpaqueToken, requireAdmin, sendAuthEmail } from "@packetchat/auth";
+import { createOpaqueToken, hashOpaqueToken, sendAuthEmail } from "@packetchat/auth";
 import { getConfig } from "@packetchat/config";
 import { getSql, recordAuditEvent } from "@packetchat/db";
+import { requireAdminOrJson } from "../../../../../../lib/admin-auth";
 import { jsonError, jsonOk } from "../../../../../../lib/http";
 
 export async function POST(request: Request, context: { params: Promise<{ userId: string }> }) {
-  const admin = await requireAdmin(request.headers);
+  const admin = await requireAdminOrJson(request.headers);
+  if (admin instanceof Response) return admin;
+
   const { userId } = await context.params;
   const config = getConfig();
   const token = createOpaqueToken(32);

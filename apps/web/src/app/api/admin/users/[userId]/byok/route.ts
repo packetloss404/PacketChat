@@ -1,9 +1,11 @@
-import { requireAdmin } from "@packetchat/auth";
 import { getSql, recordAuditEvent } from "@packetchat/db";
+import { requireAdminOrJson } from "../../../../../../lib/admin-auth";
 import { jsonError, jsonOk } from "../../../../../../lib/http";
 
 export async function PATCH(request: Request, context: { params: Promise<{ userId: string }> }) {
-  const admin = await requireAdmin(request.headers);
+  const admin = await requireAdminOrJson(request.headers);
+  if (admin instanceof Response) return admin;
+
   const { userId } = await context.params;
   const body = await request.json().catch(() => null);
   if (typeof body?.byokEnabled !== "boolean") return jsonError("byokEnabled boolean is required", 400);
