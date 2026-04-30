@@ -20,6 +20,23 @@ npm run smoke
 
 - Without credentials, the script verifies `GET /api/healthz`, `GET /api/readyz`, and anonymous `401` responses for protected API routes.
 - To include login and authenticated no-provider-key integration checks, set `PACKETCHAT_SMOKE_EMAIL` and `PACKETCHAT_SMOKE_PASSWORD` before running `npm run smoke`.
+
+PowerShell:
+
+```powershell
+$env:PACKETCHAT_SMOKE_EMAIL = "admin@example.com"
+$env:PACKETCHAT_SMOKE_PASSWORD = "replace-with-admin-password"
+npm run smoke
+```
+
+POSIX shells:
+
+```shell
+PACKETCHAT_SMOKE_EMAIL=admin@example.com PACKETCHAT_SMOKE_PASSWORD=replace-with-admin-password npm run smoke
+```
+
+For non-local targets, also set `PACKETCHAT_BASE_URL` to the deployment URL. The smoke script does not read `.env` by itself; the variables must be present in the environment of the `npm run smoke` process.
+
 - `GET /api/healthz` returns `200` and `{"ok":true}`.
 - `GET /api/readyz` returns `200` with `database`, `redis`, and `objectStorage` set to `ok`.
 - `web` logs do not show repeated startup, auth, database, Redis, or object storage errors.

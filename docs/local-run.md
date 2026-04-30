@@ -209,6 +209,16 @@ npm run smoke
 
 Include a login check when credentials exist:
 
+PowerShell:
+
+```powershell
+$env:PACKETCHAT_SMOKE_EMAIL = "admin@example.com"
+$env:PACKETCHAT_SMOKE_PASSWORD = "replace-with-admin-password"
+npm run smoke
+```
+
+POSIX shells:
+
 ```shell
 PACKETCHAT_SMOKE_EMAIL=admin@example.com PACKETCHAT_SMOKE_PASSWORD=replace-with-admin-password npm run smoke
 ```

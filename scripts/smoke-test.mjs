@@ -242,8 +242,10 @@ await verifyProtectedRoutesRejectAnonymous();
 
 if (email || password) {
   if (!email || !password) {
-    throw new Error("Set both PACKETCHAT_SMOKE_EMAIL and PACKETCHAT_SMOKE_PASSWORD, or neither to skip login.");
+    throw new Error("Set both PACKETCHAT_SMOKE_EMAIL and PACKETCHAT_SMOKE_PASSWORD, or neither to skip login. Legacy SMOKE_EMAIL and SMOKE_PASSWORD are also accepted.");
   }
+
+  console.log(`authenticated flows enabled for ${email}`);
 
   const login = await getJson("/api/auth/login", {
     method: "POST",

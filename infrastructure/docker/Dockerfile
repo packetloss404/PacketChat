@@ -16,42 +16,48 @@ COPY packages/observability/package.json packages/observability/package.json
 COPY packages/providers/package.json packages/providers/package.json
 RUN npm install
 
-FROM deps AS builder
+FROM deps AS js-builder
 COPY . .
-RUN npm run build
+RUN npm run build -w @packetchat/worker
 RUN for name in auth config contracts db files jobs observability providers; do mkdir -p packages/$name/dist && cp -r apps/worker/dist/packages/$name/src/. packages/$name/dist/; done \
   && mkdir -p packages/db/dist/migrations \
   && cp packages/db/src/migrations/*.sql packages/db/dist/migrations/ \
   && sed -i 's/from "\.\/index"/from "\.\/index.js"/' packages/db/dist/migrate.js \
   && sed -i 's/from "\.\/provider-http"/from "\.\/provider-http.js"/' packages/providers/dist/index.js
 RUN node -e "const fs=require('fs'); const names=['auth','config','contracts','db','files','jobs','observability','providers']; for (const name of names) { const path='packages/'+name+'/package.json'; const pkg=JSON.parse(fs.readFileSync(path,'utf8')); pkg.exports={'.':'./dist/index.js'}; fs.writeFileSync(path, JSON.stringify(pkg, null, 2)+'\n'); }"
+
+FROM js-builder AS web-builder
+RUN npm run build -w @packetchat/web
+RUN npm prune --omit=dev
+
+FROM js-builder AS runtime-builder
 RUN npm prune --omit=dev
 
 FROM base AS web
 ENV NODE_ENV=production
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/apps ./apps
-COPY --from=builder /app/packages ./packages
-COPY --from=builder /app/scripts ./scripts
+COPY --from=web-builder /app/package.json ./package.json
+COPY --from=web-builder /app/node_modules ./node_modules
+COPY --from=web-builder /app/apps ./apps
+COPY --from=web-builder /app/packages ./packages
+COPY --from=web-builder /app/scripts ./scripts
 WORKDIR /app/apps/web
 EXPOSE 3000
 CMD ["npm", "run", "start"]
 
 FROM base AS worker
 ENV NODE_ENV=production
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/apps/worker/package.json ./apps/worker/package.json
-COPY --from=builder /app/apps/worker/dist ./apps/worker/dist
-COPY --from=builder /app/packages ./packages
+COPY --from=runtime-builder /app/package.json ./package.json
+COPY --from=runtime-builder /app/node_modules ./node_modules
+COPY --from=runtime-builder /app/apps/worker/package.json ./apps/worker/package.json
+COPY --from=runtime-builder /app/apps/worker/dist ./apps/worker/dist
+COPY --from=runtime-builder /app/packages ./packages
 WORKDIR /app/apps/worker
 CMD ["node", "dist/index.js"]
 
 FROM base AS migrator
 ENV NODE_ENV=production
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/packages ./packages
+COPY --from=runtime-builder /app/package.json ./package.json
+COPY --from=runtime-builder /app/node_modules ./node_modules
+COPY --from=runtime-builder /app/packages ./packages
 WORKDIR /app
 CMD ["node", "packages/db/dist/migrate.js"]
