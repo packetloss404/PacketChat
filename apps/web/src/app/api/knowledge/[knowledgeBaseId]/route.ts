@@ -1,5 +1,6 @@
 import { authenticateRequest } from "@packetchat/auth";
 import { getSql } from "@packetchat/db";
+import { deleteObject } from "@packetchat/files";
 import { jsonError, jsonOk } from "../../../../lib/http";
 
 type RouteContext = { params: Promise<{ knowledgeBaseId: string }> };
@@ -51,12 +52,50 @@ export async function DELETE(request: Request, context: RouteContext) {
 
   const { knowledgeBaseId } = await context.params;
   const sql = getSql();
-  const rows = await sql`
-    delete from knowledge_bases
+  const rows = await sql<{ id: string }[]>`
+    select id
+    from knowledge_bases
     where id = ${knowledgeBaseId} and owner_user_id = ${user.id}
-    returning id
+    limit 1
   `;
   if (!rows[0]) return jsonError("Knowledge base not found", 404);
+
+  const attachments = await sql<{ id: string; bucket: string; object_key: string }[]>`
+    select distinct a.id, a.bucket, a.object_key
+    from knowledge_documents kd
+    join attachments a on a.id = kd.attachment_id and a.owner_user_id = kd.owner_user_id
+    where kd.knowledge_base_id = ${knowledgeBaseId}
+      and kd.owner_user_id = ${user.id}
+      and not exists (
+        select 1
+        from knowledge_documents other_kd
+        where other_kd.attachment_id = kd.attachment_id
+          and other_kd.knowledge_base_id <> ${knowledgeBaseId}
+      )
+  `;
+
+  try {
+    await Promise.all(attachments.map((attachment) => deleteObject(attachment.bucket, attachment.object_key)));
+  } catch (error) {
+    return jsonError("Object storage delete failed", 502, {
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  await sql.begin(async (tx) => {
+    await tx`
+      delete from knowledge_bases
+      where id = ${knowledgeBaseId} and owner_user_id = ${user.id}
+    `;
+
+    if (attachments.length > 0) {
+      await tx`
+        delete from attachments
+        where owner_user_id = ${user.id}
+          and id in ${tx(attachments.map((attachment) => attachment.id))}
+      `;
+    }
+  });
 
   return jsonOk({ deleted: true });
 }

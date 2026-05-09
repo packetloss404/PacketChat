@@ -71,6 +71,7 @@ The authenticated smoke path creates timestamped test records and deletes them b
 - With BYOK enabled, a regular user can add a `scope: "user"` provider account.
 - With BYOK disabled, the same user receives `403` when adding a `scope: "user"` provider account.
 - To test live provider keys without storing credentials, run `node scripts/provider-health.mjs`. See `docs/provider-testing.md` for all five provider environment variables.
+- V1 provider IDs are `openai-compatible`, `azure-openai`, `anthropic`, `perplexity`, and `minimax`; `google` is not accepted by the backend provider APIs.
 
 ## Credential-Only Tests
 
@@ -82,7 +83,7 @@ These checks still require external credentials, provider configuration, or emai
 - `POST /api/providers/{providerId}/models` when the provider requires live credentials.
 - `POST /api/chat` success path with provider-generated output.
 - Large file upload and long-running knowledge ingestion beyond the lightweight text upload covered by authenticated smoke.
-- Agent run/publish flows that depend on model/provider availability.
+- Manual agent runs that depend on model/provider availability.
 
 ## Chat Path
 

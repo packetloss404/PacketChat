@@ -58,6 +58,18 @@ export async function POST(request: Request) {
 
   const sql = getSql();
   const accountRows = await sql.begin(async (tx) => {
+    if (Boolean(body.isDefault)) {
+      await tx`
+        update provider_accounts
+        set is_default = false, updated_at = now()
+        where scope = ${scope}
+          and (
+            (${scope === "global"} and owner_user_id is null)
+            or (${scope === "user"} and owner_user_id = ${user.id})
+          )
+      `;
+    }
+
     const accounts = await tx<{ id: string }[]>`
       insert into provider_accounts (
         provider,

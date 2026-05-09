@@ -3,9 +3,14 @@ import { checkDatabase, getSql } from "@packetchat/db";
 import { checkObjectStorage, createLocalEmbedding, downloadObject, extractSupportedText, LOCAL_EMBEDDING_VERSION } from "@packetchat/files";
 import { checkRedis } from "@packetchat/jobs";
 import { logger } from "@packetchat/observability";
+import { writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Worker } from "bullmq";
 
 const CHUNK_WORDS = 350;
 const CHUNK_OVERLAP_WORDS = 50;
+const WORKER_HEALTH_PATH = process.env.WORKER_HEALTH_PATH ?? join(tmpdir(), "packetchat-worker-health.json");
 
 function chunkText(text: string) {
   const normalized = text.replace(/\r\n/g, "\n").replace(/[ \t]+/g, " ").trim();
@@ -46,6 +51,82 @@ async function markIngestionFailed(input: FileIngestionJob, errorMessage: string
         and owner_user_id = ${input.ownerUserId}
     `;
   });
+}
+
+async function recordJobFailure(input: {
+  queueName: string;
+  jobName: string;
+  jobId?: string;
+  errorMessage: string;
+  payload: unknown;
+}) {
+  try {
+    const sql = getSql();
+    await sql`
+      insert into job_failures (queue_name, job_name, job_id, error_message, payload)
+      values (
+        ${input.queueName},
+        ${input.jobName},
+        ${input.jobId ?? null},
+        ${input.errorMessage},
+        ${JSON.stringify(input.payload ?? {})}::jsonb
+      )
+    `;
+  } catch (error) {
+    logger.error("Failed to record job failure", {
+      queueName: input.queueName,
+      jobId: input.jobId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
+function startHealthHeartbeat() {
+  const write = async () => {
+    await writeFile(
+      WORKER_HEALTH_PATH,
+      JSON.stringify({
+        ok: true,
+        service: "packetchat-worker",
+        pid: process.pid,
+        ts: new Date().toISOString()
+      })
+    );
+  };
+
+  void write().catch((error) => {
+    logger.warn("Worker health heartbeat failed", { error: error instanceof Error ? error.message : String(error) });
+  });
+
+  const interval = setInterval(() => {
+    void write().catch((error) => {
+      logger.warn("Worker health heartbeat failed", { error: error instanceof Error ? error.message : String(error) });
+    });
+  }, 10_000);
+  interval.unref();
+}
+
+function attachFailureRecorder<DataType, ResultType, NameType extends string>(
+  queueName: string,
+  worker: Worker<DataType, ResultType, NameType>
+) {
+  worker.on("failed", (job, error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    void recordJobFailure({
+      queueName,
+      jobName: job?.name ?? "unknown",
+      jobId: job?.id,
+      errorMessage: message,
+      payload: {
+        data: job?.data ?? null,
+        attemptsMade: job?.attemptsMade ?? null,
+        failedReason: job?.failedReason ?? null,
+        stacktrace: job?.stacktrace ?? []
+      }
+    });
+  });
+
+  return worker;
 }
 
 async function ingestFile(jobData: FileIngestionJob) {
@@ -148,23 +229,24 @@ async function main() {
   await checkDatabase();
   await checkRedis();
   await checkObjectStorage();
+  startHealthHeartbeat();
 
-  createWorker(queueNames.providerSync, async (job) => {
+  attachFailureRecorder(queueNames.providerSync, createWorker(queueNames.providerSync, async (job) => {
     logger.info("Provider sync job received", { jobId: job.id, name: job.name });
-  });
+  }));
 
-  createWorker<FileIngestionJob>(queueNames.fileIngestion, async (job) => {
+  attachFailureRecorder(queueNames.fileIngestion, createWorker<FileIngestionJob>(queueNames.fileIngestion, async (job) => {
     logger.info("File ingestion job received", { jobId: job.id, name: job.name });
     await ingestFile(job.data);
-  });
+  }));
 
-  createWorker(queueNames.agentRun, async (job) => {
+  attachFailureRecorder(queueNames.agentRun, createWorker(queueNames.agentRun, async (job) => {
     logger.info("Agent run job received", { jobId: job.id, name: job.name });
-  });
+  }));
 
-  createWorker(queueNames.cleanup, async (job) => {
+  attachFailureRecorder(queueNames.cleanup, createWorker(queueNames.cleanup, async (job) => {
     logger.info("Cleanup job received", { jobId: job.id, name: job.name });
-  });
+  }));
 
   logger.info("PacketChat worker started", { queues: Object.values(queueNames) });
 }

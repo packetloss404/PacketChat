@@ -11,7 +11,7 @@ The frontend is a v3 LibreChat-style shell — three columns (left rail, main, c
 - Self-service password change for the signed-in user (POST `/api/auth/change-password`), accessible from the account popover.
 - Break-glass admin path for emergency access, gated by an audit-acknowledgement checkbox on the login form.
 - Admin-managed global provider accounts plus optional per-user BYOK, surfaced through the Models panel + Settings → API Keys.
-- Provider adapters for OpenAI-compatible, Azure OpenAI, Anthropic, Perplexity, MiniMax, and Google.
+- Runtime provider adapters for OpenAI-compatible, Azure OpenAI, Anthropic, Perplexity, and MiniMax. Google is not a V1 runtime provider yet; any Google labels in the Models UI are forward-looking/custom-model metadata only.
 - Postgres, Redis, and MinIO as durable / runtime dependencies.
 
 ## Quick Start
@@ -31,7 +31,7 @@ This repository is on branch `main` with origin `git@github.com:packetloss404/Pa
 
 - Keep `.env`, `.env.*`, `secrets/`, local data directories, backups, build outputs, logs, `node_modules/`, and `*.tsbuildinfo` out of git.
 - Keep `.env.example` tracked as the non-secret configuration template.
-- Before committing, run `npm run verify` (typecheck + lint). If the Compose stack is running, also run `npm run smoke`.
+- Before committing, run `npm run verify` (typecheck, JS syntax/workspace lint, and tests). If the Compose stack is running, also run `npm run smoke`.
 
 See `docs/git-workflow.md` for the checkpoint checklist.
 
@@ -42,8 +42,8 @@ See `docs/git-workflow.md` for the checkpoint checklist.
 | `/` | Welcome dashboard with quick actions, system status (`/api/healthz`), Resume-last-chat | ✅ |
 | `/login` | Local password login, invite acceptance, password-reset completion, break-glass with audit ack | ✅ |
 | `/chat` | Empty-state greet + pill composer; transcript with turn copy / inline edit / bookmark; SSE streaming; per-message timestamps; speech-recognition mic when supported | ✅ |
-| `/agents` | Library grid with deterministic avatars + Create / Browse / Search / Sort / Pin; Create modal (scratch or template); editor modal with provider/model/temperature/tools/knowledge bindings; test-run with polling | ✅ |
-| `/providers` | Models panel — left rail by provider (`All / per-provider / Others / Custom`), middle list with search + per-account toggle (real `providers.updateAccount` flip), right detail with Overview + Parameters tabs, ⋯ menu Reset / Export, Add custom model dialog (localStorage) | ✅ |
+| `/agents` | Library grid with deterministic avatars + Create / Browse / Search / Sort / Pin; Create modal (scratch or template); editor modal with provider/model/temperature/tools/knowledge bindings; manual runs for published agents when a valid provider account/model is configured | ✅ |
+| `/providers` | Models panel — left rail by provider (`All / per-provider / Others / Custom`), middle list with search + per-account toggle (real `providers.updateAccount` flip), right detail with Overview + Parameters tabs, ⋯ menu Reset / Export, Add custom model dialog (localStorage). Runtime provider IDs are limited to OpenAI-compatible, Azure OpenAI, Anthropic, Perplexity, and MiniMax. | ✅ |
 | `/projects` | Private project management | ✅ |
 | `/prompts` | Prompt Library — Add prompt modal, Browse-templates modal that creates real prompts, search + tag filter + Title / Recently-updated sort, list/grid views, star favorites (localStorage), Use now hands the body to chat via sessionStorage | ✅ |
 | `/knowledge` | Knowledge bases — create, edit, archive, delete; drag-drop file upload with type-filtered accept; documents list with rename / delete; reembed with detailed counts; Enter-to-search retrieval | ✅ |
@@ -87,6 +87,7 @@ The 48-px right rail expands a 320-px panel when an icon is selected. Each drawe
 - All auth endpoints: login, refresh, logout, invite accept, password reset complete, change password, /me.
 - All conversation, project, prompt, knowledge base, agent, agent draft, agent publish, agent run, admin user, and admin usage CRUD endpoints.
 - SSE streaming chat at `POST /api/chat`.
+- Agent publish and manual agent runs, including simple knowledge lookup, calculator, URL fetch, provider streaming, and run event persistence. Scheduled runs, evaluations, approvals, and production-grade run observability are outside V1.
 - Models toggle persists via the existing `providers.updateAccount` (account-level granularity — the backend has no per-binding toggle yet).
 - Speech Synthesis voice picker enumerates real `window.speechSynthesis` voices.
 - Theme toggle, font-size slider, and most preferences in `/settings` write through to `localStorage` under `packetchat.settings.<section>.<key>`.
@@ -107,6 +108,7 @@ The 48-px right rail expands a 320-px panel when an icon is selected. Each drawe
 - Only the `web` service should be exposed to your reverse proxy.
 - Postgres, Redis, and MinIO stay private on the Compose network.
 - Use immutable image tags for pilot / prod.
+- Treat Compose as the supported V1 deployment shape. Kubernetes, multi-region HA, external managed databases, SSO, email-delivered invites/password resets, and Google provider runtime support are not included in the V1 promise.
 - Run a restore drill before calling a deployment production-ready.
 - Use `npm run backup`, `npm run backup:postgres`, or `npm run backup:minio` for local Compose backup artifacts before upgrades.
 

@@ -52,6 +52,10 @@ export type AuditAction =
   | "user.updated"
   | "user.byok.updated"
   | "provider.created"
+  | "provider.updated"
+  | "provider.deleted"
+  | "provider.key.rotated"
+  | "provider.models.synced"
   | "provider.tested"
   | "chat.created"
   | "agent.published";

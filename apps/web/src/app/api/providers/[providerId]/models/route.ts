@@ -1,12 +1,18 @@
 import { authenticateRequest } from "@packetchat/auth";
 import { getSql, recordAuditEvent } from "@packetchat/db";
-import { getProviderAdapter } from "@packetchat/providers";
+import { getProviderAdapter, isUnsupportedModelDiscovery, normalizeFetchError, type ProviderModelSnapshot } from "@packetchat/providers";
 import { jsonError, jsonOk } from "../../../../../lib/http";
 import { getProviderAccountForRuntime } from "../../../../../lib/providers";
 import { providerRateLimit } from "../../../../../lib/rate-limit";
 
 function toJsonValue(value: unknown) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function providerListStatus(code: string) {
+  if (code === "provider_request_timeout") return 504;
+  if (code === "provider_network_error") return 503;
+  return 502;
 }
 
 export async function POST(request: Request, context: { params: Promise<{ providerId: string }> }) {
@@ -38,7 +44,42 @@ export async function POST(request: Request, context: { params: Promise<{ provid
   if (!runtimeAccount) return jsonError("Provider account not found", 404);
 
   const adapter = getProviderAdapter(runtimeAccount.provider);
-  const models = await adapter.listModels(runtimeAccount);
+  let models: ProviderModelSnapshot[];
+  try {
+    models = await adapter.listModels(runtimeAccount);
+  } catch (error) {
+    const normalized = normalizeFetchError(error, runtimeAccount.provider);
+    await recordAuditEvent({
+      actorUserId: user.id,
+      action: "provider.models.synced",
+      outcome: "failure",
+      targetType: "provider_account",
+      targetId: String(body.providerAccountId),
+      metadata: {
+        provider: runtimeAccount.provider,
+        code: normalized.code,
+        providerStatus: normalized.status,
+        retryable: normalized.retryable
+      }
+    });
+
+    if (isUnsupportedModelDiscovery(error)) {
+      return jsonError("Provider model discovery is not supported for this account", 501, {
+        code: "provider_model_discovery_unsupported",
+        provider: runtimeAccount.provider,
+        providerStatus: normalized.status,
+        retryable: false
+      });
+    }
+
+    return jsonError("Provider model listing failed", providerListStatus(normalized.code), {
+      code: normalized.code,
+      provider: runtimeAccount.provider,
+      providerStatus: normalized.status,
+      retryable: normalized.retryable,
+      message: normalized.message
+    });
+  }
 
   await sql.begin(async (tx) => {
     for (const model of models) {

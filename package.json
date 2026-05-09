@@ -18,6 +18,7 @@
     "lint:js": "node scripts/lint-js-syntax.mjs",
     "lint:workspaces": "npm run lint --workspaces --if-present",
     "verify": "npm run lint && npm run test",
+    "prod:check": "npm run verify && npm run build",
     "db:migrate": "npm run migrate -w @packetchat/db",
     "compose:up": "docker compose --env-file .env -f infrastructure/compose/docker-compose.yml up -d --build",
     "compose:migrate": "docker compose --env-file .env -f infrastructure/compose/docker-compose.yml --profile tools run --build --rm migrate",
@@ -46,6 +47,9 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^3.24.3"
+  },
+  "overrides": {
+    "fast-xml-builder": "^1.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.1",

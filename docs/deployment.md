@@ -28,15 +28,19 @@ Required proxy behavior:
 1. Copy `.env.example` to `.env`.
 2. Replace `BOOTSTRAP_TOKEN`, `JWT_SECRET`, and `ENCRYPTION_KEY_BASE64`.
 3. Set `APP_BASE_URL` to the public HTTPS URL served by your proxy.
-4. Start dependencies and app: `npm run compose:up`.
-5. Run migrations: `npm run compose:migrate`.
-6. Visit `/` and bootstrap the first admin account.
+4. Set `COOKIE_SECURE=true` for HTTPS deployments.
+5. Leave `APP_TRUSTED_PROXY=true` only when the reverse proxy supplies trustworthy forwarded headers.
+6. Start dependencies and app: `npm run compose:up`.
+7. Run migrations: `npm run compose:migrate`.
+8. Visit `/` and bootstrap the first admin account.
 
 For local operator commands and API examples, see `docs/local-run.md`.
 
 ## Provider Keys
 
 Provider accounts can be configured globally by the admin. Per-user BYOK is gated by `users.byok_enabled`, controlled from the admin users screen or `PATCH /api/admin/users/{userId}/byok`.
+
+The V1 runtime provider contract accepts `openai-compatible`, `azure-openai`, `anthropic`, `perplexity`, and `minimax`. Google/Gemini is not wired as a runtime provider in V1; do not document or configure `google` as a provider account type.
 
 Provider key and BYOK API examples are in `docs/local-run.md`.
 
@@ -65,10 +69,20 @@ Run `npm run smoke` and the checklist in `docs/smoke-test.md` after first deploy
 
 Before upgrades and restore drills, run `npm run backup` for the Compose stack or use the documented `pg_dump` and MinIO tar commands in `docs/runbooks/backup-restore.md`.
 
-## Production Notes
+## V1 Production Readiness
+
+Compose is the supported V1 deployment shape. Treat a deployment as pilot/prod-ready only after the deployment-specific checklist is complete:
 
 - Do not use `latest` image tags for pilot/prod.
+- Set non-default `BOOTSTRAP_TOKEN`, `JWT_SECRET`, and `ENCRYPTION_KEY_BASE64`.
+- Serve through HTTPS with `COOKIE_SECURE=true`.
 - Do not publish Postgres, Redis, or MinIO ports.
+- Keep `.env` and backup artifacts out of source control.
+- Verify provider keys with `POST /api/providers/{providerId}/test` or `scripts/provider-health.mjs` before relying on chat/agent runs.
 - Back up Postgres and MinIO before upgrades.
+- Run a restore drill before calling the deployment production-ready.
 - Run the migration job exactly once per release before app rollout.
+- Run `npm run smoke` after first deploy, upgrades, and restore drills. Include `PACKETCHAT_SMOKE_EMAIL` / `PACKETCHAT_SMOKE_PASSWORD` for authenticated coverage.
 - Stop the Compose stack with `npm run compose:down`; do not remove volumes unless intentionally wiping local data.
+
+Outside the V1 promise: multi-tenant workspaces/teams, SSO, high availability orchestration, external managed-service recipes, Kubernetes manifests, email-delivered invite/reset flows, scheduled agent runs, evaluations, and Google/Gemini runtime provider support.

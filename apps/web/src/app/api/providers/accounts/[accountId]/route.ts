@@ -34,21 +34,39 @@ export async function PATCH(request: Request, context: { params: Promise<{ accou
 
   const body = await request.json().catch(() => null);
   if (!body || typeof body !== "object") return jsonError("Invalid request body", 400);
+  const nextStatus = body.status === "disabled" ? "disabled" : body.status === "enabled" ? "enabled" : null;
+  const nextIsDefault = body.isDefault !== undefined ? Boolean(body.isDefault) : null;
+  if (nextStatus === "disabled" && nextIsDefault === true) return jsonError("Disabled provider account cannot be default", 400);
 
   const sql = getSql();
-  const rows = await sql`
-    update provider_accounts
-    set
-      display_name = ${body.displayName !== undefined ? String(body.displayName) : sql`display_name`},
-      base_url = ${body.baseUrl !== undefined ? (body.baseUrl ? String(body.baseUrl) : null) : sql`base_url`},
-      api_version = ${body.apiVersion !== undefined ? (body.apiVersion ? String(body.apiVersion) : null) : sql`api_version`},
-      region = ${body.region !== undefined ? (body.region ? String(body.region) : null) : sql`region`},
-      status = ${body.status === "disabled" ? "disabled" : body.status === "enabled" ? "enabled" : sql`status`},
-      is_default = ${body.isDefault !== undefined ? Boolean(body.isDefault) : sql`is_default`},
-      updated_at = now()
-    where id = ${accountId}
-    returning id
-  `;
+  const rows = await sql.begin(async (tx) => {
+    if (nextIsDefault === true) {
+      await tx`
+        update provider_accounts
+        set is_default = false, updated_at = now()
+        where id <> ${accountId}
+          and scope = ${account.scope}
+          and (
+            (${account.scope === "global"} and owner_user_id is null)
+            or (${account.scope === "user"} and owner_user_id = ${account.owner_user_id})
+          )
+      `;
+    }
+
+    return tx`
+      update provider_accounts
+      set
+        display_name = ${body.displayName !== undefined ? String(body.displayName) : tx`display_name`},
+        base_url = ${body.baseUrl !== undefined ? (body.baseUrl ? String(body.baseUrl) : null) : tx`base_url`},
+        api_version = ${body.apiVersion !== undefined ? (body.apiVersion ? String(body.apiVersion) : null) : tx`api_version`},
+        region = ${body.region !== undefined ? (body.region ? String(body.region) : null) : tx`region`},
+        status = ${nextStatus ?? tx`status`},
+        is_default = ${nextStatus === "disabled" ? false : nextIsDefault ?? tx`is_default`},
+        updated_at = now()
+      where id = ${accountId}
+      returning id
+    `;
+  });
 
   if (!rows[0]) return jsonError("Provider account not found", 404);
   await recordAuditEvent({ actorUserId: user.id, action: "provider.updated", targetType: "provider_account", targetId: accountId, metadata: { provider: account.provider, scope: account.scope } });

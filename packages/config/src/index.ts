@@ -49,19 +49,66 @@ export type PacketChatConfig = z.infer<typeof configSchema>;
 
 let cachedConfig: PacketChatConfig | undefined;
 
-export function getConfig(env: NodeJS.ProcessEnv = process.env): PacketChatConfig {
-  if (cachedConfig) return cachedConfig;
-
+export function parseConfig(env: NodeJS.ProcessEnv = process.env): PacketChatConfig {
   const parsed = configSchema.safeParse(env);
   if (!parsed.success) {
     const details = parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
     throw new Error(`Invalid PacketChat configuration: ${details}`);
   }
 
-  cachedConfig = parsed.data;
+  const productionIssues = validateProductionConfig(parsed.data);
+  if (productionIssues.length > 0) {
+    throw new Error(`Invalid PacketChat production configuration: ${productionIssues.join("; ")}`);
+  }
+
+  return parsed.data;
+}
+
+export function getConfig(env: NodeJS.ProcessEnv = process.env): PacketChatConfig {
+  if (cachedConfig) return cachedConfig;
+
+  cachedConfig = parseConfig(env);
   return cachedConfig;
 }
 
 export function isProduction(config = getConfig()): boolean {
   return config.APP_ENV === "production";
+}
+
+export function validateProductionConfig(config: PacketChatConfig): string[] {
+  if (config.APP_ENV !== "production") return [];
+
+  const issues: string[] = [];
+  const baseUrl = new URL(config.APP_BASE_URL);
+  if (baseUrl.protocol !== "https:") issues.push("APP_BASE_URL must use https in production");
+  if (!config.COOKIE_SECURE) issues.push("COOKIE_SECURE must be true in production");
+
+  for (const [key, value] of Object.entries({
+    BOOTSTRAP_TOKEN: config.BOOTSTRAP_TOKEN,
+    ENCRYPTION_KEY_BASE64: config.ENCRYPTION_KEY_BASE64,
+    JWT_SECRET: config.JWT_SECRET,
+    S3_ACCESS_KEY: config.S3_ACCESS_KEY,
+    S3_SECRET_KEY: config.S3_SECRET_KEY
+  })) {
+    if (isPlaceholderSecret(value)) issues.push(`${key} must not use a placeholder or development value in production`);
+  }
+
+  return issues;
+}
+
+function isPlaceholderSecret(value: string): boolean {
+  const normalized = value.toLowerCase();
+  return [
+    "change-me",
+    "replace-with",
+    "placeholder",
+    "example",
+    "packetchat_dev",
+    "dev_secret",
+    "dev_password",
+    "test-secret",
+    "test-",
+    "mdeymzq1njc4owfiy2rlzjaxmjm0nty3odlhymnkzwy=",
+    "0123456789abcdef0123456789abcdef"
+  ].some((marker) => normalized.includes(marker));
 }

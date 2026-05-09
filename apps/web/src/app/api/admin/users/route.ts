@@ -1,4 +1,4 @@
-import { createOpaqueToken, hashOpaqueToken, hashPassword, sendAuthEmail } from "@packetchat/auth";
+import { createOpaqueToken, hashOpaqueToken, hashPassword, sendAuthEmail, validatePasswordPolicy } from "@packetchat/auth";
 import { getConfig } from "@packetchat/config";
 import { getSql, recordAuditEvent } from "@packetchat/db";
 import { requireAdminOrJson } from "../../../../lib/admin-auth";
@@ -31,6 +31,9 @@ export async function POST(request: Request) {
   const byokEnabled = Boolean(body.byokEnabled);
 
   if (body.password) {
+    const passwordFailures = validatePasswordPolicy(String(body.password));
+    if (passwordFailures.length > 0) return jsonError("Password does not meet policy", 400, passwordFailures);
+
     const passwordHash = await hashPassword(String(body.password));
     const rows = await sql.begin(async (tx) => {
       const created = await tx<{ id: string }[]>`

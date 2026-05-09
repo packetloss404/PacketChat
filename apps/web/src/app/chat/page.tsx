@@ -480,7 +480,7 @@ export default function ChatPage() {
     <form className={`composer ${hasMessages ? "composer--float" : ""}`} onSubmit={sendMessage}>
       <textarea
         rows={1}
-        placeholder={`Message Claude · ${model || "select a model"}`}
+        placeholder={`Message assistant · ${model || "select a model"}`}
         aria-label="Message"
         value={input}
         onChange={(event) => setInput(event.target.value)}
@@ -496,8 +496,9 @@ export default function ChatPage() {
         tabIndex={-1}
       />
       <div className="composer__row">
-        <button className="ib" type="button" title="Attach" aria-label="Attach" onClick={handleAttachClick} disabled={isStreaming}>
+        <button className="ib ib--preview" type="button" title="Attach files (preview)" aria-label="Attach files (preview)" onClick={handleAttachClick} disabled={isStreaming}>
           <Icon.attach />
+          <span className="preview-dot" aria-hidden="true">Preview</span>
         </button>
         <button
           className="ib"
@@ -624,7 +625,7 @@ export default function ChatPage() {
               aria-label="Model or Azure deployment name"
               value={model}
               onChange={(event) => setModel(event.target.value)}
-              placeholder="gpt-4o-mini, claude-3-5-sonnet-latest, deployment-name"
+              placeholder="model-name or deployment-name"
               disabled={isStreaming}
             />
           )}
@@ -729,8 +730,8 @@ function Turn({
   return (
     <article className="turn">
       <div className="turn__head">
-        <div className={`av ${isUser ? "u" : "a"}`} aria-hidden="true">{isUser ? "OA" : ""}</div>
-        <b>{isUser ? "You" : "Claude"}</b>
+        <div className={`av ${isUser ? "u" : "a"}`} aria-hidden="true">{isUser ? "You" : "AI"}</div>
+        <b>{isUser ? "You" : "Assistant"}</b>
         {timestamp ? (
           <>
             <span>·</span>

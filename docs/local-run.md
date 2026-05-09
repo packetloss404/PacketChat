@@ -129,13 +129,15 @@ Supported provider IDs are:
 - `perplexity`
 - `minimax`
 
+Google/Gemini is not accepted by the V1 backend provider contract. If Google appears in the Models UI, treat it as custom-model/forward-looking metadata, not as a runtime provider account type.
+
 Add a global OpenAI-compatible provider key:
 
 ```shell
 curl -i -X POST http://localhost:3000/api/providers \
   -H "Authorization: Bearer ACCESS_TOKEN_HERE" \
   -H "Content-Type: application/json" \
-  -d '{"provider":"openai-compatible","scope":"global","displayName":"OpenAI Compatible","apiKey":"PROVIDER_API_KEY_HERE","baseUrl":"https://api.openai.com/v1","isDefault":true}'
+  -d '{"provider":"openai-compatible","scope":"global","displayName":"OpenAI Compatible","apiKey":"PROVIDER_API_KEY_HERE","baseUrl":"https://api.openai.com","isDefault":true}'
 ```
 
 Add an Azure OpenAI provider key:
@@ -226,12 +228,11 @@ PACKETCHAT_SMOKE_EMAIL=admin@example.com PACKETCHAT_SMOKE_PASSWORD=replace-with-
 Run local code verification before opening a pull request:
 
 ```shell
-npm run typecheck
+npm run verify
 npm run build
-npm run smoke
 ```
 
-When credentials are available, prefer the authenticated smoke command above because it exercises no-key CRUD, archive/delete, and knowledge text upload/search paths without requiring provider API keys or Resend.
+When credentials are available and the Compose stack is running, also run the authenticated smoke command above because it exercises no-key CRUD, archive/delete, and knowledge text upload/search paths without requiring provider API keys or Resend.
 
 ## Mobile Use
 
@@ -265,9 +266,11 @@ npm run backup
 
 Use `npm run backup:postgres` or `npm run backup:minio` to back up one store. See `docs/runbooks/backup-restore.md` for manual commands and restore-drill guidance.
 
-## Post-Agent-Builder Work
+## Agent Run Scope
 
-The `/agents` page supports creating agents, editing drafts, and publishing immutable versions. Agent run execution, evaluations, schedules, and production run observability are still future work and should be validated separately when implemented.
+The `/agents` page supports creating agents, editing drafts, publishing immutable versions, and starting manual runs for published agents when the agent spec has a valid provider account and model. Manual runs can use simple knowledge lookup, calculator, URL fetch, provider streaming, and persisted run events.
+
+Scheduled runs, evaluations, human approval workflows, and production-grade run observability are outside the V1 scope and should not be promised as wired behavior.
 
 ## Stop The Stack
 

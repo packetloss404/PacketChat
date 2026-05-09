@@ -1,6 +1,6 @@
 import { getConfig } from "@packetchat/config";
 import { getSql, recordAuditEvent } from "@packetchat/db";
-import { hashPassword } from "@packetchat/auth";
+import { hashPassword, validatePasswordPolicy } from "@packetchat/auth";
 import { jsonError, jsonOk } from "../../../../lib/http";
 
 export async function POST(request: Request) {
@@ -8,6 +8,15 @@ export async function POST(request: Request) {
   const config = getConfig();
   if (!body || body.bootstrapToken !== config.BOOTSTRAP_TOKEN) return jsonError("Invalid bootstrap token", 403);
   if (!body.email || !body.password) return jsonError("Email and password are required", 400);
+
+  const passwordFailures = validatePasswordPolicy(String(body.password));
+  if (passwordFailures.length > 0) return jsonError("Password does not meet policy", 400, passwordFailures);
+
+  if (body.breakGlassEmail || body.breakGlassPassword) {
+    if (!body.breakGlassEmail || !body.breakGlassPassword) return jsonError("Break-glass email and password are both required", 400);
+    const breakGlassPasswordFailures = validatePasswordPolicy(String(body.breakGlassPassword));
+    if (breakGlassPasswordFailures.length > 0) return jsonError("Break-glass password does not meet policy", 400, breakGlassPasswordFailures);
+  }
 
   const sql = getSql();
   const existing = await sql<{ count: string }[]>`select count(*)::text as count from users`;

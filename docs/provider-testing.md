@@ -2,6 +2,8 @@
 
 Use `scripts/provider-health.mjs` to test live provider connectivity without storing credentials in the repository. The script skips any provider whose required environment variables are absent.
 
+V1 runtime provider testing covers the five provider IDs accepted by the backend contract: `openai-compatible`, `azure-openai`, `anthropic`, `perplexity`, and `minimax`. Google/Gemini is not wired as a V1 runtime provider; UI labels for Google are custom-model/forward-looking metadata and are not accepted by provider account APIs.
+
 ```shell
 node scripts/provider-health.mjs
 ```
@@ -16,7 +18,7 @@ Set only the providers you want to test.
 | Azure OpenAI | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_BASE_URL`, `AZURE_OPENAI_DEPLOYMENT` | `AZURE_OPENAI_API_VERSION` |
 | Anthropic | `ANTHROPIC_API_KEY` | `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` |
 | Perplexity | `PERPLEXITY_API_KEY` | `PERPLEXITY_BASE_URL`, `PERPLEXITY_MODEL` |
-| Minimax | `MINIMAX_API_KEY` | `MINIMAX_BASE_URL`, `MINIMAX_MODEL` |
+| MiniMax | `MINIMAX_API_KEY` | `MINIMAX_BASE_URL`, `MINIMAX_MODEL` |
 
 ## What It Checks
 
@@ -24,6 +26,8 @@ Set only the providers you want to test.
 - A tiny streamed chat request with `max_tokens: 8`.
 - Whether provider-reported stream usage was received.
 - Graceful skip behavior when keys are not set.
+
+This script is credential-only coverage. It does not create PacketChat provider accounts, write credentials to the database, or prove that a deployment's admin/BYOK policy is configured correctly. Use `docs/smoke-test.md` for the app-level provider checklist.
 
 ## Cost And Usage Notes
 

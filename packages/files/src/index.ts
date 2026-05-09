@@ -1,4 +1,4 @@
-import { GetObjectCommand, HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
 import { getConfig } from "@packetchat/config";
 import { createRequire } from "node:module";
 import JSZip from "jszip";
@@ -39,6 +39,10 @@ export async function downloadObject(bucket: string, key: string): Promise<Buffe
 
   const bytes = await body.transformToByteArray();
   return Buffer.from(bytes);
+}
+
+export async function deleteObject(bucket: string, key: string): Promise<void> {
+  await getS3Client().send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 }
 
 export const LOCAL_EMBEDDING_MODEL = "packetchat-local-hash";

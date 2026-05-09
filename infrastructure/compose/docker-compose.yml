@@ -57,7 +57,13 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "process.exit(0)"]
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const fs=require('node:fs');const path=process.env.WORKER_HEALTH_PATH||'/tmp/packetchat-worker-health.json';try{const stat=fs.statSync(path);if(Date.now()-stat.mtimeMs>30000)throw new Error('stale heartbeat');const health=JSON.parse(fs.readFileSync(path,'utf8'));if(!health.ok)throw new Error('unhealthy heartbeat');process.exit(0)}catch{process.exit(1)}"
+        ]
       interval: 30s
       timeout: 5s
       retries: 5

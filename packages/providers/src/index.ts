@@ -281,6 +281,8 @@ export const adapters: Record<ProviderId, ProviderAdapter> = {
   minimax: minimaxAdapter
 };
 
+export { isUnsupportedModelDiscovery, normalizeFetchError } from "./provider-http";
+
 export function getProviderAdapter(provider: ProviderId): ProviderAdapter {
   return adapters[provider];
 }

@@ -45,7 +45,7 @@ const routeTitles: Array<{ match: (p: string) => boolean; title: string }> = [
   { match: (p) => p.startsWith("/admin/usage"), title: "Usage" },
   { match: (p) => p.startsWith("/login"), title: "Sign in" },
   { match: (p) => p.startsWith("/settings"), title: "Settings" },
-  { match: (p) => p.startsWith("/chat"), title: "claude-sonnet-4-5" }
+  { match: (p) => p.startsWith("/chat"), title: "Chat" }
 ];
 
 const threadGroups: Array<{ label: string; items: Array<{ id: string; title: string; tint: string }> }> = [
@@ -91,6 +91,7 @@ function LeftRail() {
   const displayName = user?.displayName || user?.email?.split("@")[0] || "Guest";
   const initials = useMemo(() => userInitials(displayName), [displayName]);
   const [counts, setCounts] = useState<Record<string, string>>({});
+  const toast = useToast();
 
   useEffect(() => {
     if (!user) return;
@@ -151,23 +152,42 @@ function LeftRail() {
   return (
     <aside className="lr" aria-label="Primary navigation">
       <div className="lr__top">
-        <button className="ib" type="button" title="Collapse sidebar" aria-label="Collapse sidebar">
+        <button
+          className="ib ib--preview"
+          type="button"
+          title="Collapse sidebar (preview)"
+          aria-label="Collapse sidebar (preview)"
+          onClick={() => toast({ message: "Sidebar collapse is coming soon.", variant: "info" })}
+        >
           <Icon.sidebar />
+          <span className="preview-dot" aria-hidden="true">Preview</span>
         </button>
         <div className="brand">
           packet<span>chat</span>
         </div>
-        <button className="ib" type="button" title="Bookmarks" aria-label="Bookmarks">
+        <button
+          className="ib ib--preview"
+          type="button"
+          title="Bookmarks panel (preview)"
+          aria-label="Bookmarks panel (preview)"
+          onClick={() => toast({ message: "Use the right Bookmarks panel for saved assistant messages. Full shortcut is coming soon.", variant: "info" })}
+        >
           <Icon.bookmark />
+          <span className="preview-dot" aria-hidden="true">Preview</span>
         </button>
         <Link className="ib" href="/chat" title="New chat" aria-label="New chat">
           <Icon.edit />
         </Link>
       </div>
 
-      <label className="lr__search" aria-label="Search messages">
+      <label className="lr__search lr__search--preview" aria-label="Search messages (preview)">
         <Icon.search />
-        <input placeholder="Search messages" />
+        <input
+          placeholder="Search messages"
+          aria-label="Search messages (preview)"
+          onFocus={() => toast({ message: "Message search is coming soon.", variant: "info" })}
+        />
+        <span className="inline-preview" aria-hidden="true">Preview</span>
       </label>
 
       <nav className="lr__nav" aria-label="Primary sections">
@@ -346,7 +366,7 @@ function UserFooter({ displayName, initials }: { displayName: string; initials: 
                 onClick={() => setMenuOpen(false)}
               >
                 <span className="user-pop__icon user-pop__icon--key"><Icon.key /></span>
-                API Keys
+                API Keys <span className="inline-preview">Preview</span>
               </Link>
             </div>
 
@@ -375,9 +395,9 @@ function UserFooter({ displayName, initials }: { displayName: string; initials: 
 
           <footer className="user-pop__foot">
             <div className="user-pop__links">
-              Fifty Eleven LLC © 2026 | <a href="#">Contact</a>
+              Fifty Eleven LLC © 2026 | <span>Contact <span className="inline-preview">Soon</span></span>
               <br />
-              <a href="#">Privacy</a> | <a href="#">Terms</a> | <a href="#">FAQs</a> | <a href="#">Docs</a>
+              <span>Privacy <span className="inline-preview">Soon</span></span> | <span>Terms <span className="inline-preview">Soon</span></span> | <span>FAQs <span className="inline-preview">Soon</span></span> | <span>Docs <span className="inline-preview">Soon</span></span>
             </div>
             <div className="user-pop__toggles">
               <button className="user-pop__chip" type="button" aria-label="Region">US</button>
@@ -484,6 +504,7 @@ function HeaderBar() {
   const pathname = usePathname() ?? "/";
   const title = resolveTitle(pathname);
   const { user, logout } = useAuth();
+  const toast = useToast();
   const [busy, setBusy] = useState(false);
 
   async function handleLogout() {
@@ -498,13 +519,26 @@ function HeaderBar() {
 
   return (
     <header className="hdr" aria-label="Workspace header">
-      <button className="hdr__model" type="button" title="Model / workspace switcher">
+      <button
+        className="hdr__model hdr__model--preview"
+        type="button"
+        title="Workspace switcher (preview)"
+        onClick={() => toast({ message: "Workspace switching is coming soon.", variant: "info" })}
+      >
         <span className="dot" aria-hidden="true" />
         {title}
+        <span className="inline-preview">Preview</span>
         <span style={{ color: "var(--ink-3)" }}><Icon.chev /></span>
       </button>
-      <button className="ib" type="button" title="Copy link" aria-label="Copy link">
+      <button
+        className="ib ib--preview"
+        type="button"
+        title="Copy link (preview)"
+        aria-label="Copy link (preview)"
+        onClick={() => toast({ message: "Shareable chat links are coming soon.", variant: "info" })}
+      >
         <Icon.copy />
+        <span className="preview-dot" aria-hidden="true">Preview</span>
       </button>
       <Link className="ib" href="/chat" title="New chat" aria-label="New chat">
         <Icon.plus />
@@ -526,8 +560,15 @@ function HeaderBar() {
           <Icon.logout />
         </Link>
       )}
-      <button className="ib" type="button" title="More" aria-label="More">
+      <button
+        className="ib ib--preview"
+        type="button"
+        title="More actions (preview)"
+        aria-label="More actions (preview)"
+        onClick={() => toast({ message: "More chat actions are coming soon.", variant: "info" })}
+      >
         <Icon.dots />
+        <span className="preview-dot" aria-hidden="true">Preview</span>
       </button>
     </header>
   );

@@ -14,7 +14,7 @@ COPY packages/files/package.json packages/files/package.json
 COPY packages/jobs/package.json packages/jobs/package.json
 COPY packages/observability/package.json packages/observability/package.json
 COPY packages/providers/package.json packages/providers/package.json
-RUN npm install
+RUN npm ci
 
 FROM deps AS js-builder
 COPY . .
@@ -42,6 +42,7 @@ COPY --from=web-builder /app/packages ./packages
 COPY --from=web-builder /app/scripts ./scripts
 WORKDIR /app/apps/web
 EXPOSE 3000
+USER node
 CMD ["npm", "run", "start"]
 
 FROM base AS worker
@@ -52,6 +53,7 @@ COPY --from=runtime-builder /app/apps/worker/package.json ./apps/worker/package.
 COPY --from=runtime-builder /app/apps/worker/dist ./apps/worker/dist
 COPY --from=runtime-builder /app/packages ./packages
 WORKDIR /app/apps/worker
+USER node
 CMD ["node", "dist/index.js"]
 
 FROM base AS migrator
@@ -60,4 +62,5 @@ COPY --from=runtime-builder /app/package.json ./package.json
 COPY --from=runtime-builder /app/node_modules ./node_modules
 COPY --from=runtime-builder /app/packages ./packages
 WORKDIR /app
+USER node
 CMD ["node", "packages/db/dist/migrate.js"]
