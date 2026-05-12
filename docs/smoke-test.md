@@ -19,7 +19,7 @@ npm run smoke
 ```
 
 - Without credentials, the script verifies `GET /api/healthz`, `GET /api/readyz`, and anonymous `401` responses for protected API routes.
-- To include login and authenticated no-provider-key integration checks, set `PACKETCHAT_SMOKE_EMAIL` and `PACKETCHAT_SMOKE_PASSWORD` before running `npm run smoke`.
+- To include login and authenticated no-provider-key integration checks, set `PACKETCHAT_SMOKE_EMAIL` and `PACKETCHAT_SMOKE_PASSWORD` before running `npm run smoke`. For release gates, also set `PACKETCHAT_SMOKE_REQUIRE_AUTH=1` so missing credentials or unfinished ingestion fail the run.
 
 PowerShell:
 
@@ -32,7 +32,7 @@ npm run smoke
 POSIX shells:
 
 ```shell
-PACKETCHAT_SMOKE_EMAIL=admin@example.com PACKETCHAT_SMOKE_PASSWORD=replace-with-admin-password npm run smoke
+PACKETCHAT_SMOKE_EMAIL=admin@example.com PACKETCHAT_SMOKE_PASSWORD=replace-with-admin-password PACKETCHAT_SMOKE_REQUIRE_AUTH=1 npm run smoke
 ```
 
 For non-local targets, also set `PACKETCHAT_BASE_URL` to the deployment URL. The smoke script does not read `.env` by itself; the variables must be present in the environment of the `npm run smoke` process.
@@ -50,7 +50,7 @@ For non-local targets, also set `PACKETCHAT_BASE_URL` to the deployment URL. The
 - Anonymous protection checks: `GET /api/auth/me`, `GET /api/projects`, `POST /api/projects`, `GET /api/prompts`, `POST /api/prompts`, `GET /api/conversations`, `POST /api/conversations`, `GET /api/knowledge`, `POST /api/knowledge`, `POST /api/knowledge/{knowledgeBaseId}/search`, `GET /api/providers`, `POST /api/chat`.
 - With `PACKETCHAT_SMOKE_EMAIL` and `PACKETCHAT_SMOKE_PASSWORD`: `POST /api/auth/login`, `GET /api/auth/me`, project create/update/delete, prompt create/update/delete, conversation create/list/message list/rename/archive/delete, agent create/list/update/archive/delete, knowledge base create/list/update/archive/delete, text document upload/rename/delete, and knowledge search.
 
-The authenticated smoke path creates timestamped test records and deletes them before exit. Knowledge text upload waits briefly for worker ingestion; if the document is still queued, the script reports that search validation was skipped and continues to verify document cleanup.
+The authenticated smoke path creates timestamped test records and deletes them before exit. Knowledge text upload waits briefly for worker ingestion; if the document is still queued, the script reports that search validation was skipped for local non-strict runs. With `PACKETCHAT_SMOKE_REQUIRE_AUTH=1`, unfinished ingestion fails the smoke run.
 
 ## Auth And Admin
 
@@ -67,10 +67,10 @@ The authenticated smoke path creates timestamped test records and deletes them b
 - Add at least one global provider account as admin.
 - `GET /api/providers` lists the new provider account.
 - `GET /api/providers` includes `usagePricing` on model bindings so operators can see whether local cost estimates are matched, fallback, or unknown.
-- `POST /api/providers/{providerId}/test` succeeds or returns a provider-specific failure that matches the supplied test key and endpoint.
+- `POST /api/providers/{providerId}/test` succeeds or returns a sanitized provider failure. The server decides whether the account requires admin access based on account scope.
 - With BYOK enabled, a regular user can add a `scope: "user"` provider account.
 - With BYOK disabled, the same user receives `403` when adding a `scope: "user"` provider account.
-- To test live provider keys without storing credentials, run `node scripts/provider-health.mjs`. See `docs/provider-testing.md` for all five provider environment variables.
+- To test live provider keys without storing credentials, run `node scripts/provider-health.mjs`. See `docs/provider-testing.md` for all five provider environment variables. The script fails if every provider is skipped unless you pass `--allow-empty`.
 - V1 provider IDs are `openai-compatible`, `azure-openai`, `anthropic`, `perplexity`, and `minimax`; `google` is not accepted by the backend provider APIs.
 
 ## Credential-Only Tests

@@ -7,7 +7,7 @@ import { getSql, recordAuditEvent } from "@packetchat/db";
 export const refreshCookieName = "packetchat_refresh";
 
 export type AuthEmailDelivery = {
-  provider: "manual" | "resend" | "smtp";
+  provider: "manual" | "resend";
   status: "manual" | "sent" | "failed";
   id?: string;
   message?: string;

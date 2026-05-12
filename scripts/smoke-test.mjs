@@ -3,6 +3,7 @@
 const baseUrl = (process.env.PACKETCHAT_BASE_URL || process.env.APP_BASE_URL || "http://localhost:3000").replace(/\/$/, "");
 const email = process.env.PACKETCHAT_SMOKE_EMAIL || process.env.SMOKE_EMAIL || "";
 const password = process.env.PACKETCHAT_SMOKE_PASSWORD || process.env.SMOKE_PASSWORD || "";
+const requireAuth = ["1", "true", "yes"].includes(String(process.env.PACKETCHAT_SMOKE_REQUIRE_AUTH || process.env.PACKETCHAT_SMOKE_STRICT || "").toLowerCase());
 
 async function requestJson(path, init) {
   const url = `${baseUrl}${path}`;
@@ -212,7 +213,9 @@ async function verifyAuthenticatedFlows(accessToken) {
     const uploadedSearch = await createJson(`/api/knowledge/${knowledgeBaseId}/search`, accessToken, { query: "PacketChat smoke upload", limit: 3 });
     expect(uploadedSearch?.results?.some((result) => result.documentId === documentId), "knowledge search did not find uploaded text document");
   } else {
-    console.warn(`knowledge text upload queued but not ready within timeout; status=${readyDocument?.ingest_status ?? "missing"}`);
+    const status = readyDocument?.ingest_status ?? "missing";
+    if (requireAuth) throw new Error(`knowledge text upload was not ready within timeout; status=${status}`);
+    console.warn(`knowledge text upload queued but not ready within timeout; status=${status}`);
   }
   const renamedDocument = await patchJson(`/api/knowledge/${knowledgeBaseId}/documents/${documentId}`, accessToken, { title: `Smoke text updated ${stamp}.txt` });
   expect(renamedDocument?.document?.title?.includes("updated"), "knowledge document rename did not return updated title");
@@ -259,5 +262,6 @@ if (email || password) {
   await verifyAuthenticatedFlows(accessToken);
   console.log("login ok");
 } else {
+  if (requireAuth) throw new Error("Authenticated smoke flows are required. Set PACKETCHAT_SMOKE_EMAIL and PACKETCHAT_SMOKE_PASSWORD.");
   console.log("authenticated flows skipped; set PACKETCHAT_SMOKE_EMAIL and PACKETCHAT_SMOKE_PASSWORD to enable them");
 }

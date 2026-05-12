@@ -1,6 +1,7 @@
 import { authenticateRequest } from "@packetchat/auth";
 import { normalizedChatRequestSchema, type NormalizedMessage, type NormalizedUsage, type StreamEvent } from "@packetchat/contracts";
 import { getSql } from "@packetchat/db";
+import { logger } from "@packetchat/observability";
 import { getProviderAdapter } from "@packetchat/providers";
 import { jsonError } from "../../../lib/http";
 import { getProviderAccountForRuntime } from "../../../lib/providers";
@@ -9,7 +10,7 @@ import { recordUsage } from "../../../lib/usage";
 
 function messageText(message: NormalizedMessage) {
   return message.content
-    .map((part) => (part.type === "text" ? part.text : `[${part.type}]`))
+    .map((part) => part.text)
     .join("\n")
     .trim();
 }
@@ -21,6 +22,23 @@ function titleFromMessage(message: NormalizedMessage) {
 
 function toJsonValue(value: unknown) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function publicChatError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/provider account not found|provider mismatch|conversation not found/i.test(message)) return message;
+  return "Chat failed. Check the selected model/provider settings and try again.";
+}
+
+function sanitizeStreamEvent(event: StreamEvent): StreamEvent {
+  if (event.type !== "error") return event;
+  return {
+    ...event,
+    error: {
+      ...event.error,
+      message: publicChatError(event.error.message)
+    }
+  };
 }
 
 export async function POST(request: Request) {
@@ -112,11 +130,13 @@ export async function POST(request: Request) {
             finishReason = event.finishReason;
             providerUsage = event.usage ?? null;
           }
-          if (event.type === "error") failedError = event.error.message;
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+          const outboundEvent = sanitizeStreamEvent(event);
+          if (outboundEvent.type === "error") failedError = outboundEvent.error.message;
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(outboundEvent)}\n\n`));
         }
       } catch (error) {
-        failedError = error instanceof Error ? error.message : String(error);
+        logger.warn("Chat stream failed", { runId: setup.runId, error: error instanceof Error ? error.message : String(error) });
+        failedError = publicChatError(error);
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "error", error: { code: "chat_failed", message: failedError, retryable: false } } satisfies StreamEvent)}\n\n`));
       } finally {
         await sql.begin(async (tx) => {
@@ -150,7 +170,9 @@ export async function POST(request: Request) {
             request: parsed.data,
             outputText: assistantText,
             providerUsage
-          }).catch(() => undefined);
+          }).catch((error) => {
+            logger.warn("Failed to record chat usage", { runId: setup.runId, error: error instanceof Error ? error.message : String(error) });
+          });
         }
         controller.close();
       }

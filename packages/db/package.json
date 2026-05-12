@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@packetchat/config": "file:../config",
-    "@packetchat/observability": "file:../observability"
+    "@packetchat/observability": "file:../observability",
+    "postgres": "^3.4.5"
   }
 }

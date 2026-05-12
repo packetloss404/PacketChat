@@ -78,24 +78,12 @@ async function openAiStyleModelList(account: ProviderAccountRuntime, path = "/v1
   if (!response.ok) {
     throw new ProviderFetchError({
       code: "provider_request_failed",
-      message: `${providerName} returned ${response.status}: ${JSON.stringify(raw)}`,
+      message: publicProviderError(providerName, response.status),
       retryable: response.status >= 500 || response.status === 429,
       status: response.status
     });
   }
   return modelSnapshotsFromOpenAIList(raw);
-}
-
-async function* notImplementedStream(provider: ProviderId): AsyncIterable<StreamEvent> {
-  yield { type: "message_start", responseId: randomUUID() };
-  yield {
-    type: "error",
-    error: {
-      code: "provider_stream_not_implemented",
-      message: `${provider} streaming is scaffolded but not implemented yet`,
-      retryable: false
-    }
-  };
 }
 
 function numberFromUnknown(value: unknown) {
@@ -140,6 +128,21 @@ function mergeUsage(current: NormalizedUsage | undefined, next: NormalizedUsage 
   };
 }
 
+function streamIncompleteEvent(providerName: string): StreamEvent {
+  return {
+    type: "error",
+    error: {
+      code: "provider_stream_incomplete",
+      message: `${providerName} stream ended before a completion event.`,
+      retryable: true
+    }
+  };
+}
+
+function publicProviderError(providerName: string, status: number): string {
+  return `${providerName} returned ${status}. Check the provider dashboard or server logs for details.`;
+}
+
 const openAiCompatibleAdapter: ProviderAdapter = {
   id: "openai-compatible",
   defaultBaseUrl: "https://api.openai.com",
@@ -180,7 +183,7 @@ const azureOpenAiAdapter: ProviderAdapter = {
     if (!response.ok) {
       throw new ProviderFetchError({
         code: "provider_request_failed",
-        message: `Azure OpenAI returned ${response.status}: ${JSON.stringify(raw)}`,
+        message: publicProviderError("Azure OpenAI", response.status),
         retryable: response.status >= 500 || response.status === 429,
         status: response.status
       });
@@ -216,7 +219,7 @@ const anthropicAdapter: ProviderAdapter = {
     if (!response.ok) {
       throw new ProviderFetchError({
         code: "provider_request_failed",
-        message: `Anthropic returned ${response.status}: ${JSON.stringify(raw)}`,
+        message: publicProviderError("Anthropic", response.status),
         retryable: response.status >= 500 || response.status === 429,
         status: response.status
       });
@@ -306,7 +309,7 @@ async function* streamOpenAiCompatible(
     model: options.azure ? undefined : request.model,
     messages: request.messages.map((message) => ({
       role: message.role === "developer" ? "system" : message.role,
-      content: message.content.map((part) => (part.type === "text" ? part.text : `[${part.type}]`)).join("\n")
+      content: message.content.map((part) => part.text).join("\n")
     })),
     temperature: request.temperature,
     max_tokens: request.maxOutputTokens,
@@ -327,12 +330,12 @@ async function* streamOpenAiCompatible(
   }
 
   if (!response.ok || !response.body) {
-    const raw = await safeJson(response);
+    await safeJson(response);
     yield {
       type: "error",
       error: {
         code: "provider_request_failed",
-        message: `Provider returned ${response.status}: ${JSON.stringify(raw)}`,
+        message: publicProviderError(providerDisplayName(account.provider), response.status),
         retryable: response.status >= 500 || response.status === 429,
         status: response.status
       }
@@ -372,6 +375,7 @@ async function* streamOpenAiCompatible(
         }
       }
     }
+    yield streamIncompleteEvent(providerDisplayName(account.provider));
   } catch (error) {
     await reader.cancel().catch(() => undefined);
     yield streamErrorEvent(error, account.provider);
@@ -388,7 +392,6 @@ async function* streamAnthropic(account: ProviderAccountRuntime, request: Normal
   const system = request.messages
     .filter((message) => message.role === "system" || message.role === "developer")
     .flatMap((message) => message.content)
-    .filter((part) => part.type === "text")
     .map((part) => part.text)
     .join("\n\n");
 
@@ -396,7 +399,7 @@ async function* streamAnthropic(account: ProviderAccountRuntime, request: Normal
     .filter((message) => message.role === "user" || message.role === "assistant")
     .map((message) => ({
       role: message.role,
-      content: message.content.map((part) => (part.type === "text" ? part.text : `[${part.type}]`)).join("\n")
+      content: message.content.map((part) => part.text).join("\n")
     }));
 
   let response: Response;
@@ -428,7 +431,7 @@ async function* streamAnthropic(account: ProviderAccountRuntime, request: Normal
       type: "error",
       error: {
         code: "provider_request_failed",
-        message: `Anthropic returned ${response.status}: ${JSON.stringify(raw)}`,
+        message: publicProviderError("Anthropic", response.status),
         retryable: response.status >= 500 || response.status === 429,
         status: response.status
       }
@@ -481,7 +484,7 @@ async function* streamAnthropic(account: ProviderAccountRuntime, request: Normal
               type: "error",
               error: {
                 code: event.error?.type ?? "anthropic_error",
-                message: event.error?.message ?? "Anthropic stream error",
+                message: "Anthropic returned a stream error. Check server logs or provider dashboard for details.",
                 retryable: false
               }
             };
@@ -492,6 +495,7 @@ async function* streamAnthropic(account: ProviderAccountRuntime, request: Normal
         }
       }
     }
+    yield streamIncompleteEvent("Anthropic");
   } catch (error) {
     await reader.cancel().catch(() => undefined);
     yield streamErrorEvent(error, "Anthropic");

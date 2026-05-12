@@ -10,7 +10,7 @@ The frontend is a v3 LibreChat-style shell — three columns (left rail, main, c
 - Local users with admin-created accounts, invite links, and admin-triggered reset links.
 - Self-service password change for the signed-in user (POST `/api/auth/change-password`), accessible from the account popover.
 - Break-glass admin path for emergency access, gated by an audit-acknowledgement checkbox on the login form.
-- Admin-managed global provider accounts plus optional per-user BYOK, surfaced through the Models panel + Settings → API Keys.
+- Admin-managed global provider accounts plus optional per-user BYOK, surfaced through the Models page. Settings → API Keys links there instead of storing local provider keys.
 - Runtime provider adapters for OpenAI-compatible, Azure OpenAI, Anthropic, Perplexity, and MiniMax. Google is not a V1 runtime provider yet; any Google labels in the Models UI are forward-looking/custom-model metadata only.
 - Postgres, Redis, and MinIO as durable / runtime dependencies.
 
@@ -21,7 +21,7 @@ The frontend is a v3 LibreChat-style shell — three columns (left rail, main, c
 3. Run `npm run compose:up`.
 4. Run `npm run compose:migrate`.
 5. Open `http://localhost:3000` and complete bootstrap.
-6. Run `npm run smoke` to verify readiness; set `PACKETCHAT_SMOKE_EMAIL` and `PACKETCHAT_SMOKE_PASSWORD` to include a login check.
+6. Run `npm run smoke` to verify readiness; set `PACKETCHAT_SMOKE_EMAIL` and `PACKETCHAT_SMOKE_PASSWORD` to include authenticated checks. Set `PACKETCHAT_SMOKE_REQUIRE_AUTH=1` for release smoke runs.
 
 See `docs/local-run.md` for local operator commands, API examples, health checks, BYOK toggles, migrations, and stack shutdown.
 
@@ -48,10 +48,10 @@ See `docs/git-workflow.md` for the checkpoint checklist.
 | `/prompts` | Prompt Library — Add prompt modal, Browse-templates modal that creates real prompts, search + tag filter + Title / Recently-updated sort, list/grid views, star favorites (localStorage), Use now hands the body to chat via sessionStorage | ✅ |
 | `/knowledge` | Knowledge bases — create, edit, archive, delete; drag-drop file upload with type-filtered accept; documents list with rename / delete; reembed with detailed counts; Enter-to-search retrieval | ✅ |
 | `/plugins` | Pending integrations — `Perplexity Search`, `Deep Research`, `GPT Image Editor`, `PDF Summarizer`, `Voice Mode` — each with a Join-waitlist email modal (prefilled from `/api/auth/me`), plus a Request-a-plugin form. All persisted to localStorage. | ✅ (UX) |
-| `/plugins/marketplace` | Coming-soon splash with orbital SVG art and three teaser agent cards (`Notify when live`) | ✅ (UX) |
+| `/plugins/marketplace` | Coming-soon splash with orbital SVG art and three teaser agent cards (`Save interest`) | ✅ (UX, local only) |
 | `/admin/users` | Admin-only user management, invite links, password reset links, BYOK toggles | ✅ |
 | `/admin/usage` | MTD spend, tokens, and run counts | ✅ |
-| `/settings` | Account & Data (App Data / Cloud Sync / API Keys / License Key), Preferences (General / Appearance / Keyboard Shortcuts / Text-to-speech / Voice Input), Advanced (MCP / Internal prompts / Extensions / Proxy & Org ID) | ✅ (UX, persisted) |
+| `/settings` | Account & Data (server-backed storage status / local preference backup / provider-account link / License Key), Preferences (General / Appearance / Keyboard Shortcuts / Text-to-speech / Voice Input), Advanced (MCP drafts / local internal prompt draft / Extensions / Proxy & Org ID drafts) | ✅ (mixed wired + draft UI) |
 | `/not-found`, `/global-error` | Themed error surfaces | ✅ |
 
 ## Account popover
@@ -72,11 +72,11 @@ The settings gear (next to the popover trigger) routes to `/settings`.
 The 48-px right rail expands a 320-px panel when an icon is selected. Each drawer reads/writes localStorage so values survive reloads:
 
 - **Prompts** — link to `/prompts`.
-- **Memories** — listing + add-memory textarea (`packetchat.memories`).
+- **Memories** — local listing + add-memory textarea (`packetchat.memories`), empty by default.
 - **Parameters** — temperature, top-p, max output tokens, system prompt + Reset (`packetchat.parameters`).
 - **Attach Files** — drop zone + file list with sizes; uploads not yet sent through the chat API.
 - **Bookmarks** — reads `packetchat.chat.bookmarks` written by the chat-turn bookmark button.
-- **MCP Settings** — connect/disconnect toggles per MCP server (`packetchat.mcp.connections`).
+- **MCP Drafts** — local draft toggles per MCP server (`packetchat.mcp.connections`); runtime MCP is not wired.
 
 `Esc` closes the drawer.
 
@@ -87,16 +87,17 @@ The 48-px right rail expands a 320-px panel when an icon is selected. Each drawe
 - All auth endpoints: login, refresh, logout, invite accept, password reset complete, change password, /me.
 - All conversation, project, prompt, knowledge base, agent, agent draft, agent publish, agent run, admin user, and admin usage CRUD endpoints.
 - SSE streaming chat at `POST /api/chat`.
-- Agent publish and manual agent runs, including simple knowledge lookup, calculator, URL fetch, provider streaming, and run event persistence. Scheduled runs, evaluations, approvals, and production-grade run observability are outside V1.
+- Agent publish and manual synchronous agent runs, including simple pre-run knowledge lookup, calculator, hardened URL fetch, provider streaming, and run event persistence. Scheduled runs, evaluations, approvals, and production-grade run observability are outside V1.
 - Models toggle persists via the existing `providers.updateAccount` (account-level granularity — the backend has no per-binding toggle yet).
-- Speech Synthesis voice picker enumerates real `window.speechSynthesis` voices.
+- Speech Synthesis voice picker enumerates real `window.speechSynthesis` voices; chat reply playback is not wired yet.
 - Theme toggle, font-size slider, and most preferences in `/settings` write through to `localStorage` under `packetchat.settings.<section>.<key>`.
 
 **Stubbed (UI-complete, backend pending):**
 
 - Cloud sync — local-backup export works; cloud connect is gated to a future Fifty Eleven LLC account flow.
 - License Key activation — accepts input but the validation service isn't connected.
-- Plugin install / waitlist — emails persist locally only; no notification backend.
+- Plugin install / waitlist — interest and requests persist locally only; no notification backend.
+- Internal prompts, proxy values, and MCP server entries — stored as local drafts only; chat and agents do not consume them yet.
 - Marketplace install — UI only.
 - File attachments in chat — picked file shows but isn't uploaded.
 - Custom models — saved to localStorage; there is no backend endpoint for registering them.

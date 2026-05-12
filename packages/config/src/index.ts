@@ -40,7 +40,7 @@ const configSchema = z.object({
   RATE_LIMIT_AUTH_PER_MINUTE: z.coerce.number().int().positive().default(20),
   RATE_LIMIT_CHAT_PER_MINUTE: z.coerce.number().int().positive().default(60),
   RATE_LIMIT_FILE_UPLOAD_PER_MINUTE: z.coerce.number().int().positive().default(20),
-  EMAIL_PROVIDER: z.enum(["manual", "resend", "smtp"]).default("manual"),
+  EMAIL_PROVIDER: z.enum(["manual", "resend"]).default("manual"),
   RESEND_API_KEY: z.string().optional().default(""),
   EMAIL_FROM: z.string().optional().default("PacketChat <noreply@example.com>")
 });

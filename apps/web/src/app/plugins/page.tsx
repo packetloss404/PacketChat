@@ -299,7 +299,7 @@ export default function PluginsPage() {
     ];
     setWaitlist(next);
     writeWaitlist(next);
-    toast({ message: `Added to the ${plugin.name} waitlist`, variant: "success" });
+    toast({ message: `Saved local interest for ${plugin.name}`, variant: "success" });
     setOpenWaitlistFor(null);
   }
 
@@ -315,7 +315,7 @@ export default function PluginsPage() {
       { name: trimmedName, description: trimmedDesc, at: new Date().toISOString() }
     ];
     writeRequests(next);
-    toast({ message: `Request received: ${trimmedName}`, variant: "success" });
+    toast({ message: `Saved local request: ${trimmedName}`, variant: "success" });
     setOpenRequest(false);
   }
 
@@ -323,7 +323,7 @@ export default function PluginsPage() {
     <div className="sheet">
       <div className="sheet__inner">
         <h1>Plugins</h1>
-        <p className="sub">Extend chat and agents with optional capabilities. Each plugin is scoped per agent; nothing is enabled globally.</p>
+        <p className="sub">Preview optional capabilities for chat and agents. Interest and requests on this page are saved only in this browser.</p>
 
         <div className="plugin-grid">
           {catalog.map((plugin) => {
@@ -424,7 +424,7 @@ function WaitlistModal({
     <div style={overlayStyle} role="dialog" aria-modal="true" aria-label={`Join ${plugin.name} waitlist`} onClick={onCancel}>
       <form style={modalStyle} onClick={(e) => e.stopPropagation()} onSubmit={handleSubmit}>
         <h2 style={modalTitleStyle}>Join {plugin.name} waitlist</h2>
-        <p style={modalSubStyle}>We&apos;ll send a single note when {plugin.name} is ready to install. No marketing.</p>
+        <p style={modalSubStyle}>Save local interest for {plugin.name}. This does not notify PacketChat operators yet.</p>
         <label style={labelStyle} htmlFor="waitlist-email">Email</label>
         <input
           id="waitlist-email"
@@ -464,7 +464,7 @@ function RequestModal({
     <div style={overlayStyle} role="dialog" aria-modal="true" aria-label="Request a plugin" onClick={onCancel}>
       <form style={modalStyle} onClick={(e) => e.stopPropagation()} onSubmit={handleSubmit}>
         <h2 style={modalTitleStyle}>Request a plugin</h2>
-        <p style={modalSubStyle}>Tell us what you&apos;d like to plug into PacketChat. We review every request.</p>
+        <p style={modalSubStyle}>Save a local note about what you&apos;d like to plug into PacketChat.</p>
         <label style={labelStyle} htmlFor="request-name">Plugin name</label>
         <input
           id="request-name"

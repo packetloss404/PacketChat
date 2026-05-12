@@ -28,7 +28,7 @@ services:
           "CMD",
           "node",
           "-e",
-          "const net=require('node:net');const wait=(url)=>new Promise((res,rej)=>{const u=new URL(url);const s=net.connect(Number(u.port)||({postgres:5432,postgresql:5432,redis:6379}[u.protocol.slice(0,-1)]),u.hostname,()=>{s.end();res()});s.setTimeout(3000,()=>{s.destroy();rej(new Error('timeout '+url))});s.on('error',rej)});Promise.all([wait(process.env.DATABASE_URL),wait(process.env.REDIS_URL),fetch(process.env.S3_ENDPOINT+'/minio/health/ready').then(r=>{if(!r.ok)throw new Error('s3 not ready')}),fetch('http://127.0.0.1:3000/api/healthz').then(r=>{if(!r.ok)throw new Error('web not ready')})]).then(()=>process.exit(0),()=>process.exit(1))"
+          "const net=require('node:net');const wait=(url)=>new Promise((res,rej)=>{const u=new URL(url);const s=net.connect(Number(u.port)||({postgres:5432,postgresql:5432,redis:6379}[u.protocol.slice(0,-1)]),u.hostname,()=>{s.end();res()});s.setTimeout(3000,()=>{s.destroy();rej(new Error('timeout '+url))});s.on('error',rej)});Promise.all([wait(process.env.DATABASE_URL),wait(process.env.REDIS_URL),fetch(process.env.S3_ENDPOINT+'/minio/health/ready').then(r=>{if(!r.ok)throw new Error('s3 not ready')}),fetch('http://127.0.0.1:3000/api/readyz').then(async r=>{if(!r.ok)throw new Error('web not ready');const body=await r.json();if(!body.ok)throw new Error('web dependencies not ready')})]).then(()=>process.exit(0),()=>process.exit(1))"
         ]
       interval: 20s
       timeout: 5s
@@ -148,9 +148,9 @@ services:
       mc mb --ignore-existing local/$$S3_BUCKET_UPLOADS;
       mc mb --ignore-existing local/$$S3_BUCKET_EXPORTS;
       mc mb --ignore-existing local/$$S3_BUCKET_ARTIFACTS;
-      mc version enable local/$$S3_BUCKET_UPLOADS || true;
-      mc version enable local/$$S3_BUCKET_EXPORTS || true;
-      mc version enable local/$$S3_BUCKET_ARTIFACTS || true;
+      mc version enable local/$$S3_BUCKET_UPLOADS;
+      mc version enable local/$$S3_BUCKET_EXPORTS;
+      mc version enable local/$$S3_BUCKET_ARTIFACTS;
       "
     networks:
       - packetchat

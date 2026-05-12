@@ -1,7 +1,10 @@
 import { authenticateRequest } from "@packetchat/auth";
 import { getSql } from "@packetchat/db";
+import { logger } from "@packetchat/observability";
 import { getProviderAdapter } from "@packetchat/providers";
 import type { NormalizedChatRequest, NormalizedUsage, ProviderId } from "@packetchat/contracts";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { jsonError, jsonOk } from "../../../../../lib/http";
 import { getProviderAccountForRuntime } from "../../../../../lib/providers";
 import { agentRateLimit } from "../../../../../lib/rate-limit";
@@ -237,12 +240,30 @@ function parseCalculation(input: string) {
   }
 }
 
-function isBlockedHost(hostname: string) {
+function publicRunError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/provider account|agent provider|missing provider|missing model/i.test(message)) return message;
+  return "Agent run failed. Check server logs or provider account settings for details.";
+}
+
+function isBlockedAddress(address: string) {
+  if (address.startsWith("127.") || address.startsWith("0.") || address.startsWith("10.") || address.startsWith("169.254.") || address.startsWith("192.168.")) return true;
+  const ipv4Private = address.match(/^172\.(\d+)\./);
+  if (ipv4Private && Number(ipv4Private[1]) >= 16 && Number(ipv4Private[1]) <= 31) return true;
+  const normalized = address.toLowerCase();
+  return normalized === "::1" || normalized === "::" || normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd");
+}
+
+async function isBlockedHost(hostname: string) {
   const host = hostname.toLowerCase();
   if (host === "localhost" || host.endsWith(".localhost")) return true;
   if (/^(127\.|10\.|0\.|169\.254\.|192\.168\.)/.test(host)) return true;
   const match = host.match(/^172\.(\d+)\./);
-  return Boolean(match && Number(match[1]) >= 16 && Number(match[1]) <= 31);
+  if (match && Number(match[1]) >= 16 && Number(match[1]) <= 31) return true;
+  if (isIP(host)) return isBlockedAddress(host);
+  const records = await lookup(host, { all: true, verbatim: true }).catch(() => []);
+  if (records.length === 0) return true;
+  return records.some((record) => isBlockedAddress(record.address));
 }
 
 async function fetchUrlContext(inputText: string) {
@@ -251,14 +272,14 @@ async function fetchUrlContext(inputText: string) {
   const results = [];
   for (const raw of urls) {
     const url = new URL(raw);
-    if ((url.protocol !== "http:" && url.protocol !== "https:") || isBlockedHost(url.hostname)) continue;
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || await isBlockedHost(url.hostname)) continue;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
     try {
-      const response = await fetch(url, { signal: controller.signal, redirect: "follow" });
+      const response = await fetch(url, { signal: controller.signal, redirect: "manual" });
       const contentType = response.headers.get("content-type") ?? "";
       if (!response.ok || !/text|json|html|xml/i.test(contentType)) continue;
-      const text = (await response.text()).replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 3000);
+      const text = (await response.text()).slice(0, 64_000).replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 3000);
       results.push({ url: url.toString(), status: response.status, contentType, text });
     } catch {
       results.push({ url: url.toString(), error: "fetch_failed" });
@@ -368,11 +389,14 @@ async function executeRun(input: {
       request: chatRequest,
       outputText,
       providerUsage
-    }).catch(() => undefined);
+    }).catch((error) => {
+      logger.warn("Failed to record agent usage", { runId: input.runId, error: error instanceof Error ? error.message : String(error) });
+    });
     await addRunEvent(input.runId, "run.completed", { outputText });
     return outputText;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = publicRunError(error);
+    logger.warn("Agent run failed", { runId: input.runId, error: error instanceof Error ? error.message : String(error) });
     await sql`
       update agent_run_steps
       set status = 'failed', output = ${JSON.stringify({ error: message })}::jsonb, ended_at = now()
@@ -384,7 +408,7 @@ async function executeRun(input: {
       where id = ${input.runId}
     `;
     await addRunEvent(input.runId, "run.failed", { message });
-    throw error;
+    throw new Error(message);
   }
 }
 
@@ -417,16 +441,16 @@ export async function POST(request: Request, context: RouteContext) {
 
   const runRows = await sql<{ id: string }[]>`
     insert into agent_runs (owner_user_id, agent_id, agent_version_id, trigger_type, status, input, resolved_manifest)
-    values (${user.id}, ${version.agent_id}, ${version.version_id}, 'manual', 'queued', ${JSON.stringify({ text: inputText })}::jsonb, ${JSON.stringify(version.manifest)}::jsonb)
+    values (${user.id}, ${version.agent_id}, ${version.version_id}, 'manual', 'running', ${JSON.stringify({ text: inputText })}::jsonb, ${JSON.stringify(version.manifest)}::jsonb)
     returning id
   `;
   const runId = runRows[0]!.id;
-  await addRunEvent(runId, "run.queued", { inputText });
+  await addRunEvent(runId, "run.created", { inputText });
 
   try {
     const outputText = await executeRun({ runId, userId: user.id, spec: { ...version.spec, providerAccountId, model }, inputText });
     return jsonOk({ runId, status: "completed", outputText }, { status: 201 });
   } catch (error) {
-    return jsonOk({ runId, status: "failed", error: error instanceof Error ? error.message : String(error) }, { status: 201 });
+    return jsonOk({ runId, status: "failed", error: publicRunError(error) }, { status: 201 });
   }
 }

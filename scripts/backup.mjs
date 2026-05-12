@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createWriteStream, mkdirSync, readFileSync } from "node:fs";
+import { createWriteStream, mkdirSync, readFileSync, renameSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 
@@ -32,20 +32,44 @@ function readEnv(path) {
 
 function dockerCompose(args, outputPath) {
   mkdirSync(dirname(outputPath), { recursive: true });
+  const tempPath = `${outputPath}.tmp-${process.pid}`;
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      try {
+        unlinkSync(tempPath);
+      } catch {
+        /* temp file may not exist */
+      }
+      reject(error);
+    };
     const child = spawn("docker", ["compose", "--env-file", envFile, "-f", composeFile, ...args], {
       cwd: root,
       stdio: ["ignore", "pipe", "inherit"]
     });
-    const output = createWriteStream(outputPath, { flags: "wx" });
+    const output = createWriteStream(tempPath, { flags: "wx" });
 
     child.stdout.pipe(output);
-    child.on("error", reject);
-    output.on("error", reject);
+    child.on("error", fail);
+    output.on("error", fail);
     child.on("close", (code) => {
       output.end();
-      if (code === 0) resolve(outputPath);
-      else reject(new Error(`docker compose ${args.join(" ")} exited with ${code}`));
+      output.once("finish", () => {
+        if (settled) return;
+        if (code !== 0) {
+          fail(new Error(`docker compose ${args.join(" ")} exited with ${code}`));
+          return;
+        }
+        try {
+          renameSync(tempPath, outputPath);
+          settled = true;
+          resolve(outputPath);
+        } catch (error) {
+          fail(error);
+        }
+      });
     });
   });
 }

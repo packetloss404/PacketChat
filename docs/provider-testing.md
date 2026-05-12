@@ -1,11 +1,13 @@
 # Provider Testing
 
-Use `scripts/provider-health.mjs` to test live provider connectivity without storing credentials in the repository. The script skips any provider whose required environment variables are absent.
+Use `scripts/provider-health.mjs` to test live provider connectivity without storing credentials in the repository. The script skips providers whose required environment variables are absent, but fails if every provider is skipped. Pass `--allow-empty` only for a local dry run where checking no providers is intentional.
 
 V1 runtime provider testing covers the five provider IDs accepted by the backend contract: `openai-compatible`, `azure-openai`, `anthropic`, `perplexity`, and `minimax`. Google/Gemini is not wired as a V1 runtime provider; UI labels for Google are custom-model/forward-looking metadata and are not accepted by provider account APIs.
 
 ```shell
 node scripts/provider-health.mjs
+# local dry run with no credentials:
+node scripts/provider-health.mjs --allow-empty
 ```
 
 ## Environment Variables
@@ -25,7 +27,7 @@ Set only the providers you want to test.
 - Provider model/deployment listing where the provider exposes a compatible endpoint.
 - A tiny streamed chat request with `max_tokens: 8`.
 - Whether provider-reported stream usage was received.
-- Graceful skip behavior when keys are not set.
+- Graceful skip behavior when individual keys are not set, plus a non-zero exit when no provider was checked.
 
 This script is credential-only coverage. It does not create PacketChat provider accounts, write credentials to the database, or prove that a deployment's admin/BYOK policy is configured correctly. Use `docs/smoke-test.md` for the app-level provider checklist.
 

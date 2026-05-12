@@ -48,26 +48,6 @@ const routeTitles: Array<{ match: (p: string) => boolean; title: string }> = [
   { match: (p) => p.startsWith("/chat"), title: "Chat" }
 ];
 
-const threadGroups: Array<{ label: string; items: Array<{ id: string; title: string; tint: string }> }> = [
-  {
-    label: "Previous 30 days",
-    items: [{ id: "c1", title: "Rotate pilot DB secrets", tint: "#d97757" }]
-  },
-  {
-    label: "February",
-    items: [
-      { id: "c2", title: "Draft runbook: restore drill", tint: "#d97757" },
-      { id: "c3", title: "Compare sonar-large vs sonar-small", tint: "#1fb8cd" },
-      { id: "c4", title: "Azure deployment naming audit", tint: "#4b8ad6" },
-      { id: "c5", title: "Seed script idempotency", tint: "#10a37f" }
-    ]
-  },
-  {
-    label: "January",
-    items: [{ id: "c6", title: "Knowledge chunker review", tint: "#d97757" }]
-  }
-];
-
 function isActivePath(pathname: string, href: string) {
   if (href === "/") return pathname === "/";
   return pathname === href || pathname.startsWith(`${href}/`);
@@ -92,6 +72,7 @@ function LeftRail() {
   const initials = useMemo(() => userInitials(displayName), [displayName]);
   const [counts, setCounts] = useState<Record<string, string>>({});
   const toast = useToast();
+  const visiblePrimaryNav = useMemo(() => primaryNav.filter((item) => !item.href.startsWith("/admin") || user?.role === "admin"), [user?.role]);
 
   useEffect(() => {
     if (!user) return;
@@ -139,10 +120,12 @@ function LeftRail() {
       .then((res) => apply("knowledge", String(res.knowledgeBases.length)))
       .catch(() => undefined);
 
-    apiClient.admin.users
-      .list()
-      .then((res) => apply("users", String(res.users.length)))
-      .catch(() => undefined);
+    if (user.role === "admin") {
+      apiClient.admin.users
+        .list()
+        .then((res) => apply("users", String(res.users.length)))
+        .catch(() => undefined);
+    }
 
     return () => {
       cancelled = true;
@@ -191,7 +174,7 @@ function LeftRail() {
       </label>
 
       <nav className="lr__nav" aria-label="Primary sections">
-        {primaryNav.map((item) => {
+        {visiblePrimaryNav.map((item) => {
           const active = isActivePath(pathname, item.href);
           const badge = counts[item.id] ?? item.badge;
           const link = (
@@ -207,25 +190,13 @@ function LeftRail() {
           return (
             <div className="lr__nav-group" key={item.id}>
               {link}
-              <div className="lr__nav-children">
-                {threadGroups.map((group) => (
-                  <div className="lr__group" key={group.label}>
-                    <h4>{group.label}</h4>
-                    {group.items.map((thread) => (
-                      <Link
-                        key={thread.id}
-                        href="/chat"
-                        className="lr__thread"
-                        title={thread.title}
-                      >
-                        <span className="ico" aria-hidden="true">
-                          <span style={{ width: 12, height: 12, borderRadius: 3, background: thread.tint, display: "inline-block" }} />
-                        </span>
-                        <span className="t">{thread.title}</span>
-                      </Link>
-                    ))}
-                  </div>
-                ))}
+              <div className="lr__nav-children" aria-label="Recent chats">
+                <div className="lr__group">
+                  <h4>Recent chats</h4>
+                  <p className="muted" style={{ margin: "4px 12px 8px", fontSize: 12 }}>
+                    Chats appear here after you start them.
+                  </p>
+                </div>
               </div>
             </div>
           );
@@ -616,7 +587,7 @@ function RightRail({ expanded, onToggle, activePanel, onPanelChange }: RightRail
       {item("parameters", <Icon.params />, "Parameters")}
       {item("attach", <Icon.attach />, "Attach Files")}
       {item("bookmarks", <Icon.bookmark />, "Bookmarks")}
-      {item("mcp", <Icon.mcp />, "MCP Settings")}
+      {item("mcp", <Icon.mcp />, "MCP Drafts")}
       <div style={{ flex: 1 }} />
       <button
         className="ib"
@@ -638,7 +609,7 @@ const PANEL_TITLES: Record<string, string> = {
   parameters: "Parameters",
   attach: "Attach Files",
   bookmarks: "Bookmarks",
-  mcp: "MCP Settings"
+  mcp: "MCP Drafts"
 };
 
 const CloseGlyph = () => (
@@ -675,15 +646,8 @@ function writeJSON(key: string, value: unknown) {
   }
 }
 
-const DEFAULT_MEMORIES = [
-  "Prefers TypeScript strict mode and explicit return types.",
-  "Deploys PacketChat to Azure Container Apps.",
-  "Uses Postgres + pgvector for RAG retrieval.",
-  "Reviews PRs through the packetloss404 GitHub org."
-];
-
 function MemoriesPanel() {
-  const [items, setItems] = useState<string[]>(DEFAULT_MEMORIES);
+  const [items, setItems] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
   const toast = useToast();
 
@@ -966,8 +930,8 @@ function BookmarksPanel() {
 
 type McpServer = { id: string; name: string; description: string };
 const MCP_SERVERS: McpServer[] = [
-  { id: "postgres", name: "Postgres MCP", description: "Inspect schemas and run read-only queries." },
-  { id: "grafana", name: "Grafana MCP", description: "Query dashboards and incident alerts." }
+  { id: "postgres", name: "Postgres MCP", description: "Local draft only; runtime MCP connections are not wired yet." },
+  { id: "grafana", name: "Grafana MCP", description: "Local draft only; runtime MCP connections are not wired yet." }
 ];
 
 function McpPanel() {
@@ -1000,7 +964,7 @@ function McpPanel() {
                 type="button"
                 onClick={() => toggle(server.id)}
               >
-                {on ? "Disconnect" : "Connect"}
+                {on ? "Draft saved" : "Save draft"}
               </button>
             </li>
           );

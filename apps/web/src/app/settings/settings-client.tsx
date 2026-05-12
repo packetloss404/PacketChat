@@ -325,247 +325,49 @@ function AppDataSection() {
   return (
     <section className="settings__section">
       <h1>App Data &amp; Storage</h1>
-      <button type="button" className="settings__link">→ Click to calculate your data usage</button>
-
-      <div className="settings__button-row">
-        <button type="button" className="button button--primary">
-          <Icon.copy /> Export
-        </button>
-        <button type="button" className="button button--primary">
-          <Icon.copy /> Import
-        </button>
-        <button type="button" className="button button--danger-solid">
-          <Icon.trash /> Delete All Local Data
-        </button>
-      </div>
-      <div className="settings__button-row">
-        <button type="button" className="button button--primary">
-          <Icon.copy /> Import From OpenAI
-        </button>
-        <Link href="#" className="settings__link settings__link--inline">How to export data from OpenAI?</Link>
-      </div>
-
-      <h2>Archived Chats</h2>
-      <div className="settings__button-row">
-        <button type="button" className="button button--primary">
-          <Icon.database /> View Archived Chats
-        </button>
-      </div>
-
-      <h2>Storage Stats</h2>
       <p className="muted" style={{ margin: 0 }}>
-        All of your data is stored locally in your browser. Each browser has a different limit of how much data you can store. If you are running out of space, you can delete some of your old chats.
+        Chats, prompts, projects, provider accounts, knowledge metadata, and usage records live in the PacketChat server database. Uploaded files live in object storage. Browser storage is only used for UI preferences and local preview drafts.
       </p>
 
-      <div className="settings__stat">
-        <div className="settings__stat-title">
-          Metadata &amp; User Data: <Link href="#" className="settings__link settings__link--inline">(View Report)</Link>
-        </div>
-        <div className="settings__bar"><span style={{ width: "0.03%" }} /></div>
-        <div className="settings__stat-meta">
-          <span>Local Storage: <strong>0.00 MB (0.03%)</strong></span>
-          <span>Limit: <strong>5.00 MB</strong></span>
-        </div>
-      </div>
-
-      <div className="settings__stat">
-        <div className="settings__stat-title">Local Chat Data:</div>
-        <div className="settings__bar"><span style={{ width: "0.001%" }} /></div>
-        <div className="settings__stat-meta">
-          <span>IndexedDB: <strong>439.76 KB</strong></span>
-          <span>Limit: <strong>599.49 GB</strong></span>
-        </div>
-      </div>
-
-      <p className="settings__warning">
-        Please export and backup your chats regularly to avoid data lost! <Link href="#" className="settings__link settings__link--inline">Learn how to protect your data.</Link>
+      <h2>Backups</h2>
+      <p className="muted" style={{ margin: 0 }}>
+        Operators should use the backup and restore scripts documented in <code>docs/runbooks/backup-restore.md</code>. This page does not delete or export server data.
       </p>
 
-      <details className="settings__debug">
-        <summary>Debug pages</summary>
-        <ul>
-          <li><Link href="#" className="settings__link settings__link--inline">Service worker state</Link></li>
-          <li><Link href="#" className="settings__link settings__link--inline">Cache inspector</Link></li>
-          <li><Link href="#" className="settings__link settings__link--inline">Raw IndexedDB dump</Link></li>
-        </ul>
-      </details>
+      <div className="settings__button-row">
+        <Link href="/chat" className="button button--primary">
+          <Icon.chat /> Open chats
+        </Link>
+        <Link href="/knowledge" className="button button--primary">
+          <Icon.database /> Open knowledge
+        </Link>
+      </div>
     </section>
   );
 }
 
 // -----------------------------------------------------------------------------
-// API keys (existing)
+// API keys
 // -----------------------------------------------------------------------------
-
-type ProviderKeyConfig = {
-  id: string;
-  name: string;
-  tint: string;
-  glyph: string;
-  placeholder: string;
-  docsUrl: string;
-  optional: string[];
-};
-
-const providerKeys: ProviderKeyConfig[] = [
-  {
-    id: "openai-compatible",
-    name: "OpenAI",
-    tint: "#10a37f",
-    glyph: "O",
-    placeholder: "sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    docsUrl: "https://platform.openai.com/api-keys",
-    optional: ["Organization ID", "Project ID", "Base URL"]
-  },
-  {
-    id: "anthropic",
-    name: "Anthropic",
-    tint: "#d97757",
-    glyph: "A",
-    placeholder: "sk-ant-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    docsUrl: "https://console.anthropic.com/settings/keys",
-    optional: ["Base URL"]
-  },
-  {
-    id: "google",
-    name: "Google",
-    tint: "#4285f4",
-    glyph: "G",
-    placeholder: "AIzaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    docsUrl: "https://aistudio.google.com/app/apikey",
-    optional: ["Base URL"]
-  },
-  {
-    id: "azure-openai",
-    name: "Azure OpenAI",
-    tint: "#4b8ad6",
-    glyph: "Az",
-    placeholder: "your-azure-openai-key",
-    docsUrl: "https://portal.azure.com/#view/Microsoft_Azure_ProjectOxford/CognitiveServicesHub/~/OpenAI",
-    optional: ["Resource name", "Deployment", "API version"]
-  },
-  {
-    id: "perplexity",
-    name: "Perplexity",
-    tint: "#1fb8cd",
-    glyph: "P",
-    placeholder: "pplx-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    docsUrl: "https://www.perplexity.ai/settings/api",
-    optional: ["Base URL"]
-  },
-  {
-    id: "minimax",
-    name: "MiniMax",
-    tint: "#7c3aed",
-    glyph: "M",
-    placeholder: "your-minimax-key",
-    docsUrl: "https://www.minimax.io/platform/user-center/basic-information/interface-key",
-    optional: ["Group ID"]
-  }
-];
-
-function storageKey(providerId: string) {
-  return `packetchat.apiKey.${providerId}`;
-}
-
-function ProviderKeyRow({ config }: { config: ProviderKeyConfig }) {
-  const [value, setValue] = useState("");
-  const [hydrated, setHydrated] = useState(false);
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const stored = window.localStorage.getItem(storageKey(config.id));
-    if (stored) setValue(stored);
-    setHydrated(true);
-  }, [config.id]);
-
-  useEffect(() => {
-    if (!hydrated || typeof window === "undefined") return;
-    if (value) window.localStorage.setItem(storageKey(config.id), value);
-    else window.localStorage.removeItem(storageKey(config.id));
-  }, [value, hydrated, config.id]);
-
-  const optionalCount = config.optional.length;
-  const optionalLabel = optionalCount === 1 ? "Optional field (1)" : `Optional fields (${optionalCount})`;
-
-  return (
-    <div className="apikey-row">
-      <div className="apikey-row__head">
-        <span
-          className="apikey-row__badge"
-          style={{ background: config.tint }}
-          aria-hidden="true"
-        >
-          {config.glyph}
-        </span>
-        <span className="apikey-row__name">{config.name}:</span>
-        <a className="apikey-row__get" href={config.docsUrl} target="_blank" rel="noreferrer">(Get API key here)</a>
-      </div>
-
-      <label className="apikey-row__label">
-        API Key <span className="apikey-row__required" aria-hidden="true">*</span>
-      </label>
-      <input
-        type="password"
-        className="input apikey-row__input"
-        placeholder={config.placeholder}
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-        aria-label={`${config.name} API key`}
-        autoComplete="off"
-        spellCheck={false}
-      />
-
-      <button
-        type="button"
-        className="apikey-row__optional"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        {optionalLabel}
-        <span className={`apikey-row__chev ${open ? "open" : ""}`} aria-hidden="true">
-          <Icon.chev />
-        </span>
-      </button>
-
-      {open ? (
-        <div className="apikey-row__optional-body">
-          {config.optional.map((field) => (
-            <label key={field}>
-              {field}
-              <input
-                type="text"
-                className="input"
-                placeholder={field}
-                aria-label={`${config.name} ${field}`}
-              />
-            </label>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
 function ApiKeysSection() {
   return (
     <section className="settings__section apikeys">
       <h1>API Keys</h1>
       <p className="muted" style={{ margin: 0 }}>
-        By default, your API Key is stored locally on your browser and never sent anywhere else.
+        Provider credentials are encrypted server-side as provider accounts. Admins can create shared accounts, and BYOK-enabled users can create personal accounts.
       </p>
 
-      <div className="apikeys__list">
-        {providerKeys.map((config) => (
-          <ProviderKeyRow key={config.id} config={config} />
-        ))}
+      <div className="settings__button-row">
+        <Link href="/providers" className="button button--primary">
+          <Icon.key /> Manage model providers
+        </Link>
       </div>
 
       <details className="apikeys__troubleshoot">
         <summary>API Key not working? Click Here.</summary>
         <p className="muted" style={{ marginTop: 8 }}>
-          Double-check that you&rsquo;ve enabled the correct model family in your provider console, that your key has not been revoked, and that any billing/usage caps have headroom. For Azure and MiniMax you also need the deployment/group IDs set in Optional fields.
+          Use the Models page to test the account. Double-check that the key is enabled, the base URL is correct, billing has headroom, and the selected model or Azure deployment exists.
         </p>
       </details>
 
@@ -628,7 +430,7 @@ function CloudSyncSection({ onToast }: { onToast: (msg: string) => void }) {
     <section className="settings__section">
       <h1>Cloud Sync &amp; Backup</h1>
       <p className="muted" style={{ margin: 0 }}>
-        PacketChat keeps everything in your browser by default. Connect a cloud provider to encrypt and sync your chats, prompts, and preferences across devices, or download a one-off backup right now.
+        PacketChat stores application data on the configured server database and object storage. This local export only captures browser preferences and preview drafts.
       </p>
 
       <div className="settings__button-row">
@@ -648,7 +450,7 @@ function CloudSyncSection({ onToast }: { onToast: (msg: string) => void }) {
 
       <h2>Local backup</h2>
       <p className="muted" style={{ margin: 0 }}>
-        Export everything stored under <code>localStorage</code> as a single JSON file. Useful before clearing browser data or moving to a new machine.
+        Export everything stored under <code>localStorage</code> as a single JSON file. This does not include server-side chats, provider accounts, files, or knowledge data.
       </p>
       <div className="settings__button-row">
         <button type="button" className="button button--primary" onClick={handleExport}>
@@ -986,7 +788,7 @@ function TextToSpeechSection() {
 
       <Row
         title="Enable text-to-speech"
-        description="Adds a speak button next to assistant replies."
+        description="Saves a local voice preference. Chat reply playback is not wired into the composer yet."
         control={<Switch checked={enabled} onChange={setEnabled} ariaLabel="Enable text-to-speech" />}
       />
 
@@ -1049,12 +851,12 @@ function VoiceInputSection() {
     <section className="settings__section">
       <h1>Voice Input</h1>
       <p className="muted" style={{ margin: 0 }}>
-        Voice input relies on your browser&rsquo;s Speech Recognition API (<code>webkitSpeechRecognition</code> / <code>SpeechRecognition</code>). Quality and language support vary by browser; Chrome and Edge work best, Firefox is currently unsupported.
+        Voice input relies on your browser&rsquo;s Speech Recognition API. This preference is stored locally; the chat composer microphone is the current runtime control.
       </p>
 
       <Row
         title="Enable voice input"
-        description="Show a microphone button in the composer to dictate messages."
+        description="Save voice input preference for this browser."
         control={<Switch checked={enabled} onChange={setEnabled} ariaLabel="Enable voice input" />}
       />
     </section>
@@ -1067,11 +869,7 @@ function VoiceInputSection() {
 
 type McpServer = { id: string; name: string; url: string; status: "connected" | "idle" | "error" };
 
-const MCP_SEEDS: McpServer[] = [
-  { id: "fs-local", name: "Filesystem", url: "stdio://mcp-server-fs", status: "connected" },
-  { id: "github", name: "GitHub", url: "https://mcp.github.com", status: "idle" },
-  { id: "search-web", name: "Web Search", url: "https://mcp.search.example", status: "error" }
-];
+const MCP_SEEDS: McpServer[] = [];
 
 function McpSection() {
   const [servers, setServers] = useState<McpServer[]>(MCP_SEEDS);
@@ -1119,14 +917,13 @@ function McpSection() {
     setServers((prev) => prev.filter((s) => s.id !== id));
   };
 
-  const statusColor = (s: McpServer["status"]) =>
-    s === "connected" ? "#10a37f" : s === "error" ? "#d9534f" : "#9aa0a6";
+  const statusColor = () => "#9aa0a6";
 
   return (
     <section className="settings__section">
       <h1>Model Context Protocol</h1>
       <p className="muted" style={{ margin: 0 }}>
-        Connect MCP servers to give models access to local tools, files, or APIs. Servers are stored locally and dialed on demand.
+        Save local MCP connection drafts. Runtime MCP dialing is not connected to chat or agents in this release.
       </p>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
@@ -1148,7 +945,7 @@ function McpSection() {
                 width: 8,
                 height: 8,
                 borderRadius: "50%",
-                background: statusColor(s.status),
+                background: statusColor(),
                 flexShrink: 0
               }}
             />
@@ -1158,7 +955,7 @@ function McpSection() {
                 {s.url}
               </div>
             </div>
-            <span className="muted" style={{ fontSize: 12, textTransform: "capitalize" }}>{s.status}</span>
+            <span className="muted" style={{ fontSize: 12 }}>Draft</span>
             <button
               type="button"
               className="button button--ghost"
@@ -1234,7 +1031,7 @@ function InternalPromptsSection() {
     <section className="settings__section">
       <h1>Internal prompts</h1>
       <p className="muted" style={{ margin: 0 }}>
-        This text is appended to the system prompt of every chat. Use it to set tone, persona, or reminders that apply across conversations.
+        Save a local system-prompt draft. Chat requests do not append this text yet.
       </p>
 
       <label className="apikey-row__label" htmlFor="internal-system-prompt">Custom system prompt</label>
@@ -1301,7 +1098,7 @@ function ExtensionsSection() {
     <section className="settings__section">
       <h1>Extensions</h1>
       <p className="muted" style={{ margin: 0 }}>
-        Optional packages that add tools or rendering capabilities. The extension marketplace will go live alongside Cloud Sync.
+        Optional package ideas that may add tools or rendering capabilities later. The extension marketplace is not connected yet.
       </p>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
@@ -1364,7 +1161,7 @@ function ProxySection() {
     <section className="settings__section">
       <h1>Proxy &amp; Org ID</h1>
       <p className="muted" style={{ margin: 0 }}>
-        Route provider traffic through a corporate proxy and attach an OpenAI-style organization header. Both values are stored locally.
+        Store proxy and organization values locally for a future provider-routing pass. Runtime provider traffic is configured from provider accounts on the Models page.
       </p>
 
       <label className="apikey-row__label" htmlFor="proxy-url">HTTPS proxy URL</label>

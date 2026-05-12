@@ -190,7 +190,7 @@ export default function MarketplacePage() {
     const next: WaitlistEntry[] = [...waitlist, { agentId: teaser.id, at: new Date().toISOString() }];
     setWaitlist(next);
     writeMarketplaceWaitlist(next);
-    toast({ message: `We'll let you know when ${teaser.name} is live`, variant: "success" });
+    toast({ message: `Saved local interest for ${teaser.name}`, variant: "success" });
   }
 
   return (
@@ -281,17 +281,17 @@ export default function MarketplacePage() {
                     Install
                   </button>
                   {notified ? (
-                    <button type="button" disabled style={notifiedBtnStyle} aria-label={`You'll be notified about ${teaser.name}`}>
-                      Notifying
+                    <button type="button" disabled style={notifiedBtnStyle} aria-label={`Local interest saved for ${teaser.name}`}>
+                      Saved
                     </button>
                   ) : (
                     <button
                       type="button"
                       style={notifyBtnStyle}
                       onClick={() => handleNotify(teaser)}
-                      aria-label={`Notify me when ${teaser.name} is live`}
+                      aria-label={`Save local interest for ${teaser.name}`}
                     >
-                      Notify when live
+                      Save interest
                     </button>
                   )}
                 </div>

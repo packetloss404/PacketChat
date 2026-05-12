@@ -143,7 +143,7 @@ async function optionalList(options) {
     if (postgresEntries === 0) throw new Error("pg_restore --list returned no restore entries");
     console.log(`Postgres restore catalog ok: ${postgresEntries} entries`);
   } catch (error) {
-    console.warn(`Postgres catalog list skipped: ${error.message}`);
+    throw new Error(`Postgres catalog list failed. Install pg_restore or pass --skip-list for artifact-only checks. ${error.message}`);
   }
 
   try {
@@ -152,7 +152,7 @@ async function optionalList(options) {
     if (minioEntries === 0) throw new Error("tar -tf returned no entries");
     console.log(`MinIO tar catalog ok: ${minioEntries} entries`);
   } catch (error) {
-    console.warn(`MinIO catalog list skipped: ${error.message}`);
+    throw new Error(`MinIO tar catalog list failed. Install tar or pass --skip-list for artifact-only checks. ${error.message}`);
   }
 }
 

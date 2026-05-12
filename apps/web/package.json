@@ -17,6 +17,10 @@
     "@packetchat/files": "file:../../packages/files",
     "@packetchat/jobs": "file:../../packages/jobs",
     "@packetchat/observability": "file:../../packages/observability",
-    "@packetchat/providers": "file:../../packages/providers"
+    "@packetchat/providers": "file:../../packages/providers",
+    "@aws-sdk/client-s3": "^3.787.0",
+    "next": "^15.3.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   }
 }

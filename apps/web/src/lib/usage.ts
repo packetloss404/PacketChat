@@ -48,7 +48,7 @@ const prices: Array<{ provider: ProviderId | "any"; modelIncludes: string; price
 ];
 
 function textFromMessage(message: NormalizedMessage) {
-  return message.content.map((part) => (part.type === "text" ? part.text : `[${part.type}]`)).join("\n");
+  return message.content.map((part) => part.text).join("\n");
 }
 
 function estimateTokens(text: string) {

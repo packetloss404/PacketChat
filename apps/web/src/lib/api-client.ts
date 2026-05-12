@@ -302,8 +302,8 @@ export const apiClient = {
       apiFetch<{ providerAccountId: string }>(`/api/providers/accounts/${encodePath(accountId)}/key`, jsonInit("PATCH", { apiKey })),
     deleteAccount: (accountId: string) =>
       apiFetch<{ providerAccountId: string }>(`/api/providers/accounts/${encodePath(accountId)}`, { method: "DELETE" }),
-    test: (providerId: ProviderId | string, providerAccountId: string, adminOnly?: boolean) =>
-      apiFetch<{ ok: boolean; message?: string }>(`/api/providers/${encodePath(providerId)}/test`, jsonInit("POST", { providerAccountId, adminOnly }))
+    test: (providerId: ProviderId | string, providerAccountId: string) =>
+      apiFetch<{ ok: boolean; message?: string }>(`/api/providers/${encodePath(providerId)}/test`, jsonInit("POST", { providerAccountId }))
   },
   conversations: {
     list: (init?: RequestInit) => apiFetch<{ conversations: Conversation[] }>("/api/conversations", init),

@@ -209,3 +209,9 @@ for (const result of results) {
 }
 
 if (results.some((result) => result.status === "failed")) process.exitCode = 1;
+const checkedCount = results.filter((result) => result.status !== "skipped").length;
+const allowEmpty = process.argv.includes("--allow-empty") || process.env.PACKETCHAT_PROVIDER_HEALTH_ALLOW_EMPTY === "1";
+if (checkedCount === 0 && !allowEmpty) {
+  console.error("No providers were checked. Set provider credentials or pass --allow-empty for local dry runs.");
+  process.exitCode = 1;
+}

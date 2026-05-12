@@ -61,6 +61,12 @@ function isErrorStatus(status: string) {
   return value.includes("error") || value.includes("failed") || value.includes("required") || value.includes("not found") || value.includes("no access") || value.includes("unauthenticated");
 }
 
+function publicChatError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/provider account|provider mismatch|model.*required|unauthenticated|no access/i.test(message)) return message;
+  return "Chat failed. Check the selected model/provider settings and try again.";
+}
+
 function greeting(hour: number) {
   if (hour < 12) return "morning";
   if (hour < 18) return "afternoon";
@@ -347,7 +353,7 @@ export default function ChatPage() {
       if (abortController.signal.aborted) {
         setStatus("Response stopped.");
       } else {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = publicChatError(error);
         updateAssistantMessage(assistantMessage.id, (current) => current || `Error: ${message}`);
         setStatus(message);
       }
@@ -656,7 +662,7 @@ export default function ChatPage() {
           {settingsNode}
         </div>
         <div className="footer">
-          <Link href="/">PacketChat {APP_VERSION}</Link> · self-hosted · all traffic stays on your box
+          <Link href="/">PacketChat {APP_VERSION}</Link> · self-hosted storage · provider requests use the selected account
         </div>
       </>
     );
