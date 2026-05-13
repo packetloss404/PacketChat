@@ -9,9 +9,11 @@ The frontend is a v3 LibreChat-style shell — three columns (left rail, main, c
 - Single deployment, no workspaces or teams in V1.
 - Local users with admin-created accounts, invite links, and admin-triggered reset links.
 - Self-service password change for the signed-in user (POST `/api/auth/change-password`), accessible from the account popover.
+- Forced password-reset accounts cannot mint normal sessions until the password is changed.
 - Break-glass admin path for emergency access, gated by an audit-acknowledgement checkbox on the login form.
 - Admin-managed global provider accounts plus optional per-user BYOK, surfaced through the Models page. Settings → API Keys links there instead of storing local provider keys.
 - Runtime provider adapters for OpenAI-compatible, Azure OpenAI, Anthropic, Perplexity, and MiniMax. Google is not a V1 runtime provider yet; any Google labels in the Models UI are forward-looking/custom-model metadata only.
+- Custom provider base URLs are validated before save and again before runtime use. Local OpenAI-compatible endpoints are allowed for tools such as Ollama / LM Studio / vLLM; hosted providers must not target loopback, private, link-local, or reserved network addresses.
 - Postgres, Redis, and MinIO as durable / runtime dependencies.
 
 ## Quick Start
@@ -87,7 +89,8 @@ The 48-px right rail expands a 320-px panel when an icon is selected. Each drawe
 - All auth endpoints: login, refresh, logout, invite accept, password reset complete, change password, /me.
 - All conversation, project, prompt, knowledge base, agent, agent draft, agent publish, agent run, admin user, and admin usage CRUD endpoints.
 - SSE streaming chat at `POST /api/chat`.
-- Agent publish, ACL sharing, and synchronous single-pass augmented agent runs, including file search, file context injection, artifact-format instructions, calculator, hardened URL fetch, HTTPS OpenAPI actions, bounded same-owner pre-run agent context, provider streaming, run event persistence, and chat-launched run transcript persistence. Scheduled runs, evaluations, approvals, true multi-step tool loops, and production-grade run observability are outside V1.
+- Agent publish, ACL sharing, and synchronous single-pass augmented agent runs, including file search, file context injection, artifact-format instructions, calculator, hardened URL fetch, HTTPS OpenAPI actions, bounded same-owner pre-run agent context, provider streaming, run event persistence, and chat-launched run transcript persistence. Viewers can inspect shared agents, while runners/editors/owners can run them. Scheduled runs, evaluations, approvals, true multi-step tool loops, and production-grade run observability are outside V1.
+- Runtime model use is checked against enabled model bindings for chat and agent runs.
 - Models toggle persists via the existing `providers.updateAccount` (account-level granularity — the backend has no per-binding toggle yet).
 - Speech Synthesis voice picker enumerates real `window.speechSynthesis` voices; chat reply playback is not wired yet.
 - Theme toggle, font-size slider, and most preferences in `/settings` write through to `localStorage` under `packetchat.settings.<section>.<key>`.

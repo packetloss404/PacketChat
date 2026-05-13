@@ -1,5 +1,40 @@
 # Backlog
 
+## Multi-Step Agent Runtime
+
+PacketChat currently supports synchronous single-pass augmented agent runs. True multi-step tool loops remain out of V1 until planning, execution, approval, and observability contracts are explicit.
+
+Acceptance notes:
+
+- Built-in tools and future external tools execute as explicit tool-call / tool-result steps, not only pre-run context.
+- Runs enforce step, token, timeout, and payload budgets across the full loop.
+- Mutating or external actions support approval gates before execution.
+- Run detail views show ordered planning, tool calls, tool results, model responses, failures, and skipped steps.
+- Tests cover loop limits, tool failure recovery, approval-required paths, and transcript persistence.
+
+## Artifacts and Chat Files
+
+Artifact instructions and chat file pickers exist, but rendered artifacts and chat-attached file runtime context are not complete runtime features.
+
+Acceptance notes:
+
+- Parse artifact blocks from chat / agent output and persist artifact metadata.
+- Render safe Mermaid / HTML / SVG previews with clear sandboxing rules.
+- Persist generated artifacts and associate them with the originating conversation or agent run.
+- Upload chat files into a server-backed attachment flow and make selected files available as bounded context.
+- Tests cover artifact parsing, unsafe output handling, attachment ownership, and context clipping.
+
+## Worker Queues and Runtime Jobs
+
+The worker process is real for ingestion, but provider sync / agent run / cleanup queue behavior should either be fully implemented or made visibly unsupported.
+
+Acceptance notes:
+
+- Provider sync jobs execute real model discovery or are removed from operator-facing docs.
+- Agent run jobs either execute asynchronously with persisted status or remain synchronous-only with no dead queue path.
+- Cleanup jobs have concrete retention targets and observable outcomes.
+- Unsupported job names fail loudly instead of logging success-like no-ops.
+
 ## Production Dependency Audit
 
 `npm run audit:prod` currently gates high-severity production dependency advisories and still reports a moderate Next.js/PostCSS install-graph advisory. Keep the audit script local and visible, but do not wire stricter moderate-level audit enforcement into `prod:check` or GitHub CI until the dependency upgrade is verified against the App Router, middleware, auth cookie, SSE chat, and agent-run flows.
