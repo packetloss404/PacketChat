@@ -1,10 +1,11 @@
 import { authenticateRequest } from "@packetchat/auth";
 import { getSql, recordAuditEvent } from "@packetchat/db";
+import { validateProviderBaseUrl } from "@packetchat/providers";
 import { jsonError, jsonOk } from "../../../../../lib/http";
 
 type AccountRow = {
   id: string;
-  provider: string;
+  provider: "openai-compatible" | "azure-openai" | "anthropic" | "perplexity" | "minimax";
   scope: "global" | "user";
   owner_user_id: string | null;
 };
@@ -37,6 +38,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ accou
   const nextStatus = body.status === "disabled" ? "disabled" : body.status === "enabled" ? "enabled" : null;
   const nextIsDefault = body.isDefault !== undefined ? Boolean(body.isDefault) : null;
   if (nextStatus === "disabled" && nextIsDefault === true) return jsonError("Disabled provider account cannot be default", 400);
+  const baseUrlValidation = body.baseUrl !== undefined
+    ? validateProviderBaseUrl(account.provider, body.baseUrl ? String(body.baseUrl) : null)
+    : null;
+  if (baseUrlValidation && !baseUrlValidation.ok) return jsonError(baseUrlValidation.message, 400, { code: baseUrlValidation.code });
 
   const sql = getSql();
   const rows = await sql.begin(async (tx) => {
@@ -57,7 +62,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ accou
       update provider_accounts
       set
         display_name = ${body.displayName !== undefined ? String(body.displayName) : tx`display_name`},
-        base_url = ${body.baseUrl !== undefined ? (body.baseUrl ? String(body.baseUrl) : null) : tx`base_url`},
+        base_url = ${baseUrlValidation ? baseUrlValidation.value : tx`base_url`},
         api_version = ${body.apiVersion !== undefined ? (body.apiVersion ? String(body.apiVersion) : null) : tx`api_version`},
         region = ${body.region !== undefined ? (body.region ? String(body.region) : null) : tx`region`},
         status = ${nextStatus ?? tx`status`},

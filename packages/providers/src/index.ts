@@ -4,6 +4,7 @@ import {
   fetchWithTimeout,
   isUnsupportedModelDiscovery,
   MODEL_LIST_TIMEOUT_MS,
+  providerBaseUrlForRequest,
   providerDisplayName,
   ProviderFetchError,
   readWithTimeout,
@@ -40,8 +41,12 @@ export interface ProviderAdapter {
   defaultBaseUrl: string;
   test(account: ProviderAccountRuntime): Promise<ProviderTestResult>;
   listModels(account: ProviderAccountRuntime): Promise<ProviderModelSnapshot[]>;
-  streamChat(account: ProviderAccountRuntime, request: NormalizedChatRequest): AsyncIterable<StreamEvent>;
+  streamChat(account: ProviderAccountRuntime, request: NormalizedChatRequest, options?: StreamChatOptions): AsyncIterable<StreamEvent>;
 }
+
+export type StreamChatOptions = {
+  signal?: AbortSignal;
+};
 
 function jsonHeaders(apiKey: string, extra: Record<string, string> = {}) {
   return {
@@ -69,9 +74,9 @@ function modelSnapshotsFromOpenAIList(raw: unknown): ProviderModelSnapshot[] {
 }
 
 async function openAiStyleModelList(account: ProviderAccountRuntime, path = "/v1/models", extraHeaders: Record<string, string> = {}) {
-  const baseUrl = (account.baseUrl || adapters[account.provider].defaultBaseUrl).replace(/\/$/, "");
+  const baseUrl = await providerBaseUrlForRequest(account.provider, adapters[account.provider].defaultBaseUrl, account.baseUrl);
   const providerName = providerDisplayName(account.provider);
-  const response = await fetchWithTimeout(`${baseUrl}${path}`, {
+  const response = await fetchWithTimeout(openAiStyleEndpoint(baseUrl, path), {
     headers: jsonHeaders(account.apiKey, extraHeaders)
   }, MODEL_LIST_TIMEOUT_MS, providerName);
   const raw = await safeJson(response);
@@ -84,6 +89,11 @@ async function openAiStyleModelList(account: ProviderAccountRuntime, path = "/v1
     });
   }
   return modelSnapshotsFromOpenAIList(raw);
+}
+
+function openAiStyleEndpoint(baseUrl: string, path: string) {
+  if (baseUrl.endsWith("/v1") && path.startsWith("/v1/")) return `${baseUrl}${path.slice(3)}`;
+  return `${baseUrl}${path}`;
 }
 
 function numberFromUnknown(value: unknown) {
@@ -139,6 +149,19 @@ function streamIncompleteEvent(providerName: string): StreamEvent {
   };
 }
 
+function providerStreamErrorEvent(providerName: string, rawError: unknown): StreamEvent {
+  const error = rawError && typeof rawError === "object" ? rawError as Record<string, unknown> : {};
+  return {
+    type: "error",
+    error: {
+      code: typeof error.code === "string" ? error.code : typeof error.type === "string" ? error.type : "provider_stream_error",
+      message: `${providerName} returned a stream error. Check the provider dashboard or server logs for details.`,
+      retryable: false,
+      status: numberFromUnknown(error.status)
+    }
+  };
+}
+
 function publicProviderError(providerName: string, status: number): string {
   return `${providerName} returned ${status}. Check the provider dashboard or server logs for details.`;
 }
@@ -157,8 +180,8 @@ const openAiCompatibleAdapter: ProviderAdapter = {
   async listModels(account) {
     return openAiStyleModelList(account);
   },
-  streamChat(account, request) {
-    return streamOpenAiCompatible(account, request);
+  streamChat(account, request, options) {
+    return streamOpenAiCompatible(account, request, {}, options);
   }
 };
 
@@ -174,7 +197,7 @@ const azureOpenAiAdapter: ProviderAdapter = {
     }
   },
   async listModels(account) {
-    const baseUrl = (account.baseUrl || this.defaultBaseUrl).replace(/\/$/, "");
+    const baseUrl = await providerBaseUrlForRequest(account.provider, this.defaultBaseUrl, account.baseUrl);
     const apiVersion = account.apiVersion || "2024-10-21";
     const response = await fetchWithTimeout(`${baseUrl}/openai/deployments?api-version=${apiVersion}`, {
       headers: { "api-key": account.apiKey }
@@ -191,8 +214,8 @@ const azureOpenAiAdapter: ProviderAdapter = {
     const data = raw && typeof raw === "object" && "data" in raw ? (raw as { data?: Array<{ id?: string; model?: string }> }).data : [];
     return (data ?? []).filter((deployment) => deployment.id).map((deployment) => ({ id: deployment.id!, displayName: deployment.model ?? deployment.id!, raw: deployment }));
   },
-  streamChat(account, request) {
-    return streamOpenAiCompatible(account, request, { azure: true });
+  streamChat(account, request, options) {
+    return streamOpenAiCompatible(account, request, { azure: true }, options);
   }
 };
 
@@ -227,8 +250,8 @@ const anthropicAdapter: ProviderAdapter = {
     const data = raw && typeof raw === "object" && "data" in raw ? (raw as { data?: Array<{ id?: string; display_name?: string }> }).data : [];
     return (data ?? []).filter((model) => model.id).map((model) => ({ id: model.id!, displayName: model.display_name ?? model.id!, raw: model }));
   },
-  streamChat(account, request) {
-    return streamAnthropic(account, request);
+  streamChat(account, request, options) {
+    return streamAnthropic(account, request, options);
   }
 };
 
@@ -249,8 +272,8 @@ const perplexityAdapter: ProviderAdapter = {
   async listModels(account) {
     return openAiStyleModelList(account);
   },
-  streamChat(account, request) {
-    return streamOpenAiCompatible(account, request);
+  streamChat(account, request, options) {
+    return streamOpenAiCompatible(account, request, {}, options);
   }
 };
 
@@ -271,8 +294,8 @@ const minimaxAdapter: ProviderAdapter = {
   async listModels(account) {
     return openAiStyleModelList(account);
   },
-  streamChat(account, request) {
-    return streamOpenAiCompatible(account, request);
+  streamChat(account, request, options) {
+    return streamOpenAiCompatible(account, request, {}, options);
   }
 };
 
@@ -284,7 +307,7 @@ export const adapters: Record<ProviderId, ProviderAdapter> = {
   minimax: minimaxAdapter
 };
 
-export { isUnsupportedModelDiscovery, normalizeFetchError } from "./provider-http";
+export { isUnsupportedModelDiscovery, normalizeFetchError, validateProviderBaseUrl } from "./provider-http";
 
 export function getProviderAdapter(provider: ProviderId): ProviderAdapter {
   return adapters[provider];
@@ -293,16 +316,23 @@ export function getProviderAdapter(provider: ProviderId): ProviderAdapter {
 async function* streamOpenAiCompatible(
   account: ProviderAccountRuntime,
   request: NormalizedChatRequest,
-  options: { azure?: boolean } = {}
+  options: { azure?: boolean } = {},
+  streamOptions: StreamChatOptions = {}
 ): AsyncIterable<StreamEvent> {
   const responseId = randomUUID();
   yield { type: "message_start", responseId };
 
-  const baseUrl = (account.baseUrl || adapters[account.provider].defaultBaseUrl).replace(/\/$/, "");
+  let baseUrl: string;
+  try {
+    baseUrl = await providerBaseUrlForRequest(account.provider, adapters[account.provider].defaultBaseUrl, account.baseUrl);
+  } catch (error) {
+    yield streamErrorEvent(error, account.provider);
+    return;
+  }
   const apiVersion = account.apiVersion || "2024-10-21";
   const endpoint = options.azure
     ? `${baseUrl}/openai/deployments/${encodeURIComponent(request.model)}/chat/completions?api-version=${apiVersion}`
-    : `${baseUrl}/v1/chat/completions`;
+    : openAiStyleEndpoint(baseUrl, "/v1/chat/completions");
 
   const headers = options.azure ? { "content-type": "application/json", "api-key": account.apiKey } : jsonHeaders(account.apiKey);
   const payload: Record<string, unknown> = {
@@ -322,7 +352,8 @@ async function* streamOpenAiCompatible(
     response = await fetchWithTimeout(endpoint, {
       method: "POST",
       headers,
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: streamOptions.signal
     }, STREAM_CONNECT_TIMEOUT_MS, account.provider);
   } catch (error) {
     yield streamErrorEvent(error, account.provider);
@@ -351,7 +382,7 @@ async function* streamOpenAiCompatible(
 
   try {
     while (true) {
-      const { done, value } = await readWithTimeout(reader, STREAM_READ_TIMEOUT_MS, account.provider);
+      const { done, value } = await readWithTimeout(reader, STREAM_READ_TIMEOUT_MS, account.provider, streamOptions.signal);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
@@ -365,7 +396,11 @@ async function* streamOpenAiCompatible(
           return;
         }
         try {
-          const chunk = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string }; finish_reason?: string }>; usage?: unknown };
+          const chunk = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string }; finish_reason?: string }>; usage?: unknown; error?: unknown };
+          if (chunk.error) {
+            yield providerStreamErrorEvent(providerDisplayName(account.provider), chunk.error);
+            return;
+          }
           usage = mergeUsage(usage, normalizeOpenAiUsage(chunk.usage));
           const content = chunk.choices?.[0]?.delta?.content;
           if (content) yield { type: "text_delta", text: content };
@@ -380,15 +415,22 @@ async function* streamOpenAiCompatible(
     await reader.cancel().catch(() => undefined);
     yield streamErrorEvent(error, account.provider);
   } finally {
+    await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 }
 
-async function* streamAnthropic(account: ProviderAccountRuntime, request: NormalizedChatRequest): AsyncIterable<StreamEvent> {
+async function* streamAnthropic(account: ProviderAccountRuntime, request: NormalizedChatRequest, streamOptions: StreamChatOptions = {}): AsyncIterable<StreamEvent> {
   const responseId = randomUUID();
   yield { type: "message_start", responseId };
 
-  const baseUrl = (account.baseUrl || adapters.anthropic.defaultBaseUrl).replace(/\/$/, "");
+  let baseUrl: string;
+  try {
+    baseUrl = await providerBaseUrlForRequest(account.provider, adapters.anthropic.defaultBaseUrl, account.baseUrl);
+  } catch (error) {
+    yield streamErrorEvent(error, "Anthropic");
+    return;
+  }
   const system = request.messages
     .filter((message) => message.role === "system" || message.role === "developer")
     .flatMap((message) => message.content)
@@ -418,7 +460,8 @@ async function* streamAnthropic(account: ProviderAccountRuntime, request: Normal
         system: system || undefined,
         messages,
         stream: true
-      })
+      }),
+      signal: streamOptions.signal
     }, STREAM_CONNECT_TIMEOUT_MS, "Anthropic");
   } catch (error) {
     yield streamErrorEvent(error, "Anthropic");
@@ -447,7 +490,7 @@ async function* streamAnthropic(account: ProviderAccountRuntime, request: Normal
 
   try {
     while (true) {
-      const { done, value } = await readWithTimeout(reader, STREAM_READ_TIMEOUT_MS, "Anthropic");
+      const { done, value } = await readWithTimeout(reader, STREAM_READ_TIMEOUT_MS, "Anthropic", streamOptions.signal);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
@@ -500,6 +543,7 @@ async function* streamAnthropic(account: ProviderAccountRuntime, request: Normal
     await reader.cancel().catch(() => undefined);
     yield streamErrorEvent(error, "Anthropic");
   } finally {
+    await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 }

@@ -7,7 +7,7 @@ import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { jsonError, jsonOk } from "../../../../../lib/http";
 import { getAgentAccess } from "../../../../../lib/agent-access";
-import { getProviderAccountForRuntime } from "../../../../../lib/providers";
+import { getEnabledModelBindingForRuntime, getProviderAccountForRuntime } from "../../../../../lib/providers";
 import { agentRateLimit } from "../../../../../lib/rate-limit";
 import { recordUsage } from "../../../../../lib/usage";
 
@@ -72,6 +72,15 @@ function textOrNull(value: unknown) {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function titleFromText(text: string) {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized ? normalized.slice(0, 80) : "New chat";
+}
+
+function textMessageContent(text: string) {
+  return [{ type: "text", text }];
 }
 
 async function addRunEvent(runId: string, eventType: string, payload: Record<string, unknown>) {
@@ -314,8 +323,29 @@ function parseCalculation(input: string) {
 
 function publicRunError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  if (/provider account|agent provider|missing provider|missing model/i.test(message)) return message;
+  if (/provider account|agent provider|missing provider|missing model|model is disabled|no longer available/i.test(message)) return message;
+  if (/cancelled|canceled|timed out|timeout/i.test(message)) return message;
   return "Agent run failed. Check server logs or provider account settings for details.";
+}
+
+function runFailureStatus(message: string): "failed" | "cancelled" | "timed_out" {
+  if (/cancelled|canceled|aborted/i.test(message)) return "cancelled";
+  if (/timed out|timeout/i.test(message)) return "timed_out";
+  return "failed";
+}
+
+function throwIfAborted(signal: AbortSignal | undefined) {
+  if (signal?.aborted) throw new Error("Agent run cancelled");
+}
+
+function timeoutSignal(timeoutMs: number, parent?: AbortSignal) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  if (typeof timeout === "object" && "unref" in timeout && typeof timeout.unref === "function") timeout.unref();
+  return {
+    signal: parent ? AbortSignal.any([parent, controller.signal]) : controller.signal,
+    clear: () => clearTimeout(timeout)
+  };
 }
 
 function isBlockedAddress(address: string) {
@@ -338,25 +368,26 @@ async function isBlockedHost(hostname: string) {
   return records.some((record) => isBlockedAddress(record.address));
 }
 
-async function fetchUrlContext(inputText: string) {
+async function fetchUrlContext(inputText: string, signal?: AbortSignal) {
   const matches = inputText.match(/https?:\/\/[^\s)\]}>,"']+/gi) ?? [];
   const urls = [...new Set(matches)].slice(0, 3);
   const results = [];
   for (const raw of urls) {
+    throwIfAborted(signal);
     const url = new URL(raw);
     if ((url.protocol !== "http:" && url.protocol !== "https:") || await isBlockedHost(url.hostname)) continue;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+    const timeout = timeoutSignal(5000, signal);
     try {
-      const response = await fetch(url, { signal: controller.signal, redirect: "manual" });
+      const response = await fetch(url, { signal: timeout.signal, redirect: "manual" });
       const contentType = response.headers.get("content-type") ?? "";
       if (!response.ok || !/text|json|html|xml/i.test(contentType)) continue;
       const text = (await response.text()).slice(0, 64_000).replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 3000);
       results.push({ url: url.toString(), status: response.status, contentType, text });
     } catch {
+      throwIfAborted(signal);
       results.push({ url: url.toString(), error: "fetch_failed" });
     } finally {
-      clearTimeout(timeout);
+      timeout.clear();
     }
   }
   return results;
@@ -367,9 +398,10 @@ function renderTemplate(template: string | undefined, values: Record<string, str
   return Object.entries(values).reduce((next, [key, value]) => next.replaceAll(`{{${key}}}`, value), template);
 }
 
-async function executeOpenApiActions(input: { inputText: string; actions: NonNullable<AgentSpec["openApiActions"]>; maxActions: number }) {
+async function executeOpenApiActions(input: { inputText: string; actions: NonNullable<AgentSpec["openApiActions"]>; maxActions: number; signal?: AbortSignal }) {
   const results = [];
   for (const action of input.actions.filter((item) => item.enabled !== false).slice(0, input.maxActions)) {
+    throwIfAborted(input.signal);
     const method = (action.method || "GET").toUpperCase();
     const rawUrl = action.url?.trim();
     if (!rawUrl || !["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) continue;
@@ -385,8 +417,7 @@ async function executeOpenApiActions(input: { inputText: string; actions: NonNul
       continue;
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    const timeout = timeoutSignal(8000, input.signal);
     try {
       const headers = { ...(action.headers ?? {}) };
       const bodyText = method === "GET" ? undefined : renderTemplate(action.bodyTemplate, { input: input.inputText });
@@ -396,7 +427,7 @@ async function executeOpenApiActions(input: { inputText: string; actions: NonNul
         headers,
         body: bodyText || undefined,
         redirect: "manual",
-        signal: controller.signal
+        signal: timeout.signal
       });
       const contentType = response.headers.get("content-type") ?? "";
       const text = (await response.text()).slice(0, 32_000);
@@ -409,15 +440,17 @@ async function executeOpenApiActions(input: { inputText: string; actions: NonNul
         body: /json|text|html|xml/i.test(contentType) ? text.slice(0, 6000) : `[${contentType || "binary"} response omitted]`
       });
     } catch {
+      throwIfAborted(input.signal);
       results.push({ name: action.name ?? action.id ?? url.toString(), method, url: url.toString(), error: "request_failed" });
     } finally {
-      clearTimeout(timeout);
+      timeout.clear();
     }
   }
   return results;
 }
 
-async function runChildAgent(input: { userId: string; resourceOwnerUserId: string; childAgentId: string; inputText: string }) {
+async function runChildAgent(input: { parentRunId: string; resourceOwnerUserId: string; childAgentId: string; inputText: string; signal?: AbortSignal }) {
+  throwIfAborted(input.signal);
   const sql = getSql();
   const rows = await sql<{ name: string; spec: AgentSpec }[]>`
     select a.name, v.spec
@@ -434,9 +467,18 @@ async function runChildAgent(input: { userId: string; resourceOwnerUserId: strin
   if (!providerAccountId || !model) return { agentId: input.childAgentId, name: child.name, error: "missing_provider_or_model" };
   const account = await getProviderAccountForRuntime(providerAccountId, input.resourceOwnerUserId);
   if (!account) return { agentId: input.childAgentId, name: child.name, error: "provider_account_unavailable" };
+  if (child.spec.provider && account.provider !== child.spec.provider) return { agentId: input.childAgentId, name: child.name, error: "provider_mismatch" };
+  const modelBinding = await getEnabledModelBindingForRuntime({
+    accountId: providerAccountId,
+    userId: input.resourceOwnerUserId,
+    provider: account.provider,
+    model
+  });
+  if (!modelBinding) return { agentId: input.childAgentId, name: child.name, error: "model_disabled_or_unavailable" };
 
   const adapter = getProviderAdapter(account.provider);
   let outputText = "";
+  let providerUsage: NormalizedUsage | null = null;
   const messages = [];
   const instructions = textOrNull(child.spec.instructions);
   if (instructions) messages.push({ role: "system" as const, content: [{ type: "text" as const, text: instructions }] });
@@ -449,10 +491,24 @@ async function runChildAgent(input: { userId: string; resourceOwnerUserId: strin
     temperature: typeof child.spec.temperature === "number" ? child.spec.temperature : undefined,
     maxOutputTokens: Math.min(Number(child.spec.maxOutputTokens) || 800, 4000)
   };
-  for await (const event of adapter.streamChat(account, chatRequest)) {
+  for await (const event of adapter.streamChat(account, chatRequest, { signal: input.signal })) {
     if (event.type === "text_delta") outputText += event.text;
+    if (event.type === "message_end") providerUsage = event.usage ?? null;
     if (event.type === "error") return { agentId: input.childAgentId, name: child.name, error: event.error.message };
   }
+  await recordUsage({
+    ownerUserId: input.resourceOwnerUserId,
+    providerAccountId,
+    agentRunId: input.parentRunId,
+    provider: account.provider,
+    model,
+    request: chatRequest,
+    outputText,
+    providerUsage,
+    metadata: { scope: "child_agent", childAgentId: input.childAgentId, childAgentName: child.name }
+  }).catch((error) => {
+    logger.warn("Failed to record child agent usage", { runId: input.parentRunId, childAgentId: input.childAgentId, error: error instanceof Error ? error.message : String(error) });
+  });
   return { agentId: input.childAgentId, name: child.name, outputText: outputText.slice(0, 6000) };
 }
 
@@ -462,6 +518,7 @@ async function executeRun(input: {
   resourceOwnerUserId: string;
   spec: AgentSpec;
   inputText: string;
+  signal?: AbortSignal;
 }) {
   const sql = getSql();
   await sql`
@@ -475,6 +532,7 @@ async function executeRun(input: {
   let stepId: string | null = null;
 
   try {
+    throwIfAborted(input.signal);
     const contextBlocks: string[] = [];
     const maxAgentSteps = Math.min(Math.max(Number(input.spec.maxAgentSteps) || 4, 1), 25);
     let remainingToolSteps = maxAgentSteps;
@@ -483,19 +541,19 @@ async function executeRun(input: {
       const maxChildRuns = Math.min(Math.max(Number(chain.maxChildRuns) || 3, 1), 5, remainingToolSteps);
       const childResults = [];
       for (const childAgentId of chain.agentIds.slice(0, maxChildRuns)) {
-        const child = await runChildAgent({ userId: input.userId, resourceOwnerUserId: input.resourceOwnerUserId, childAgentId, inputText: input.inputText });
+        const child = await runChildAgent({ parentRunId: input.runId, resourceOwnerUserId: input.resourceOwnerUserId, childAgentId, inputText: input.inputText, signal: input.signal });
         if (child) childResults.push(child);
       }
       remainingToolSteps -= maxChildRuns;
       if (childResults.length > 0) {
-        await addRunStep({ runId: input.runId, sequenceNo: nextStep++, stepType: "tool_result", status: "completed", name: "Agent chain", input: { agentIds: chain.agentIds.slice(0, maxChildRuns) }, output: { childResults } });
+        await addRunStep({ runId: input.runId, sequenceNo: nextStep++, stepType: "tool_result", status: "completed", name: "Agent context", input: { agentIds: chain.agentIds.slice(0, maxChildRuns) }, output: { childResults } });
         await addRunEvent(input.runId, "tool.agent_chain.completed", { childResults });
-        contextBlocks.push(`Agent chain results:\n${childResults.map((result) => `${result.name}: ${"outputText" in result ? result.outputText : `Error: ${result.error}`}`).join("\n\n")}`);
+        contextBlocks.push(`Agent context results:\n${childResults.map((result) => `${result.name}: ${"outputText" in result ? result.outputText : `Error: ${result.error}`}`).join("\n\n")}`);
       }
     }
 
     if (input.spec.openApiActions?.length && remainingToolSteps > 0) {
-      const actionResults = await executeOpenApiActions({ inputText: input.inputText, actions: input.spec.openApiActions, maxActions: Math.min(5, remainingToolSteps) });
+      const actionResults = await executeOpenApiActions({ inputText: input.inputText, actions: input.spec.openApiActions, maxActions: Math.min(5, remainingToolSteps), signal: input.signal });
       remainingToolSteps -= actionResults.length;
       if (actionResults.length > 0) {
         await addRunStep({ runId: input.runId, sequenceNo: nextStep++, stepType: "tool_result", status: "completed", name: "OpenAPI actions", input: { count: actionResults.length }, output: { actionResults } });
@@ -538,7 +596,7 @@ async function executeRun(input: {
     }
 
     if (input.spec.tools?.urlFetch) {
-      const fetched = await fetchUrlContext(input.inputText);
+      const fetched = await fetchUrlContext(input.inputText, input.signal);
       if (fetched.length > 0) {
         await addRunStep({ runId: input.runId, sequenceNo: nextStep++, stepType: "tool_result", status: "completed", name: "URL fetch", input: { inputText: input.inputText }, output: { fetched } });
         await addRunEvent(input.runId, "tool.url_fetch.completed", { fetched });
@@ -551,10 +609,30 @@ async function executeRun(input: {
     const account = await getProviderAccountForRuntime(input.spec.providerAccountId!, input.resourceOwnerUserId);
     if (!account) throw new Error("Provider account not found or is not available to this user.");
     if (input.spec.provider && account.provider !== input.spec.provider) throw new Error("Agent provider does not match the selected provider account.");
+    const modelBinding = await getEnabledModelBindingForRuntime({
+      accountId: input.spec.providerAccountId!,
+      userId: input.resourceOwnerUserId,
+      provider: account.provider,
+      model: input.spec.model!
+    });
+    if (!modelBinding) throw new Error("Agent model is disabled or no longer available for the selected provider account.");
 
     const adapter = getProviderAdapter(account.provider);
     let outputText = "";
     let providerUsage: NormalizedUsage | null = null;
+    let textDeltaCount = 0;
+    let textDeltaChars = 0;
+    let textDeltaSummaryFlushed = false;
+
+    const flushTextDeltaSummary = async () => {
+      if (textDeltaSummaryFlushed || textDeltaCount === 0) return;
+      textDeltaSummaryFlushed = true;
+      await addRunEvent(input.runId, "provider.text_delta.summary", {
+        deltaCount: textDeltaCount,
+        chars: textDeltaChars,
+        preview: outputText.slice(0, 500)
+      });
+    };
 
     const messages = [];
     const instructions = textOrNull(input.spec.instructions);
@@ -574,12 +652,28 @@ async function executeRun(input: {
       maxOutputTokens: Number.isInteger(input.spec.maxOutputTokens) ? input.spec.maxOutputTokens : undefined
     };
 
-    for await (const event of adapter.streamChat(account, chatRequest)) {
+    for await (const event of adapter.streamChat(account, chatRequest, { signal: input.signal })) {
+      if (event.type === "text_delta") {
+        outputText += event.text;
+        textDeltaCount += 1;
+        textDeltaChars += event.text.length;
+        continue;
+      }
+
+      if (event.type === "message_end") {
+        providerUsage = event.usage ?? null;
+        await flushTextDeltaSummary();
+      }
+
+      if (event.type === "error") {
+        await flushTextDeltaSummary();
+        await addRunEvent(input.runId, `provider.${event.type}`, event as unknown as Record<string, unknown>);
+        throw new Error(event.error.message);
+      }
+
       await addRunEvent(input.runId, `provider.${event.type}`, event as unknown as Record<string, unknown>);
-      if (event.type === "text_delta") outputText += event.text;
-      if (event.type === "message_end") providerUsage = event.usage ?? null;
-      if (event.type === "error") throw new Error(event.error.message);
     }
+    await flushTextDeltaSummary();
 
     await sql`
       update agent_run_steps
@@ -607,6 +701,7 @@ async function executeRun(input: {
     return outputText;
   } catch (error) {
     const message = publicRunError(error);
+    const status = runFailureStatus(message);
     logger.warn("Agent run failed", { runId: input.runId, error: error instanceof Error ? error.message : String(error) });
     await sql`
       update agent_run_steps
@@ -615,7 +710,7 @@ async function executeRun(input: {
     `;
     await sql`
       update agent_runs
-      set status = 'failed', error_code = 'agent_run_failed', error_message = ${message}, ended_at = now()
+      set status = ${status}, error_code = ${status === "failed" ? "agent_run_failed" : `agent_run_${status}`}, error_message = ${message}, ended_at = now()
       where id = ${input.runId}
     `;
     await addRunEvent(input.runId, "run.failed", { message });
@@ -637,8 +732,8 @@ export async function POST(request: Request, context: RouteContext) {
   if (!inputText) return jsonError("inputText or input is required", 400);
 
   const sql = getSql();
-  const versionRows = await sql<{ agent_id: string; version_id: string; spec: AgentSpec; manifest: Record<string, unknown> }[]>`
-    select a.id as agent_id, v.id as version_id, v.spec, v.manifest
+  const versionRows = await sql<{ agent_id: string; agent_name: string; version_id: string; spec: AgentSpec; manifest: Record<string, unknown> }[]>`
+    select a.id as agent_id, a.name as agent_name, v.id as version_id, v.spec, v.manifest
     from agents a
     join agent_versions v on v.id = a.published_version_id
     where a.id = ${agentId}
@@ -652,18 +747,105 @@ export async function POST(request: Request, context: RouteContext) {
   if (!providerAccountId) return jsonError("Agent spec is missing providerAccountId. Save and publish a provider account before running.", 400);
   if (!model) return jsonError("Agent spec is missing model. Save and publish a model before running.", 400);
 
-  const runRows = await sql<{ id: string }[]>`
-    insert into agent_runs (owner_user_id, agent_id, agent_version_id, trigger_type, status, input, resolved_manifest)
-    values (${user.id}, ${version.agent_id}, ${version.version_id}, 'manual', 'running', ${JSON.stringify({ text: inputText })}::jsonb, ${JSON.stringify(version.manifest)}::jsonb)
-    returning id
-  `;
-  const runId = runRows[0]!.id;
+  const requestedConversationId = textOrNull(body?.conversationId);
+  const wantsConversation = body?.conversation === true || Boolean(requestedConversationId);
+  const setup = await sql.begin(async (tx) => {
+    let conversationId: string | null = null;
+    if (wantsConversation) {
+      if (requestedConversationId) {
+        const conversations = await tx<{ id: string }[]>`
+          select id
+          from conversations
+          where id = ${requestedConversationId} and owner_user_id = ${user.id} and archived_at is null
+          limit 1
+        `;
+        if (!conversations[0]) return null;
+        conversationId = conversations[0].id;
+      } else {
+        const conversations = await tx<{ id: string }[]>`
+          insert into conversations (owner_user_id, title, mode)
+          values (${user.id}, ${`Agent: ${version.agent_name} - ${titleFromText(inputText)}`.slice(0, 160)}, 'agent_test')
+          returning id
+        `;
+        conversationId = conversations[0]!.id;
+      }
+
+      await tx`
+        insert into messages (conversation_id, owner_user_id, role, content, metadata)
+        values (
+          ${conversationId},
+          ${user.id},
+          'user',
+          ${JSON.stringify(textMessageContent(inputText))}::jsonb,
+          ${JSON.stringify({ agentId: version.agent_id, agentName: version.agent_name, agentMode: "single_pass_augmented" })}::jsonb
+        )
+      `;
+
+      await tx`
+        update conversations set updated_at = now() where id = ${conversationId} and owner_user_id = ${user.id}
+      `;
+    }
+
+    const runRows = await tx<{ id: string }[]>`
+      insert into agent_runs (owner_user_id, agent_id, agent_version_id, conversation_id, trigger_type, status, input, resolved_manifest)
+      values (
+        ${user.id},
+        ${version.agent_id},
+        ${version.version_id},
+        ${conversationId},
+        ${conversationId ? "chat" : "manual"},
+        'running',
+        ${JSON.stringify({ text: inputText })}::jsonb,
+        ${JSON.stringify(version.manifest)}::jsonb
+      )
+      returning id
+    `;
+
+    return { conversationId, runId: runRows[0]!.id };
+  });
+  if (!setup) return jsonError("Conversation not found", 404);
+  const { conversationId, runId } = setup;
   await addRunEvent(runId, "run.created", { inputText });
 
   try {
-    const outputText = await executeRun({ runId, userId: user.id, resourceOwnerUserId: access.ownerUserId, spec: { ...version.spec, providerAccountId, model }, inputText });
-    return jsonOk({ runId, status: "completed", outputText }, { status: 201 });
+    const outputText = await executeRun({ runId, userId: user.id, resourceOwnerUserId: access.ownerUserId, spec: { ...version.spec, providerAccountId, model }, inputText, signal: request.signal });
+    if (conversationId) {
+      await sql.begin(async (tx) => {
+        await tx`
+          insert into messages (conversation_id, owner_user_id, role, content, metadata)
+          values (
+            ${conversationId},
+            ${user.id},
+            'assistant',
+            ${JSON.stringify(textMessageContent(outputText))}::jsonb,
+            ${JSON.stringify({ agentId: version.agent_id, agentName: version.agent_name, agentRunId: runId, agentMode: "single_pass_augmented" })}::jsonb
+          )
+        `;
+        await tx`
+          update conversations set updated_at = now() where id = ${conversationId} and owner_user_id = ${user.id}
+        `;
+      });
+    }
+    return jsonOk({ runId, conversationId, status: "completed", outputText }, { status: 201 });
   } catch (error) {
-    return jsonOk({ runId, status: "failed", error: publicRunError(error) }, { status: 201 });
+    const message = publicRunError(error);
+    if (conversationId) {
+      await sql.begin(async (tx) => {
+        await tx`
+          insert into messages (conversation_id, owner_user_id, role, content, metadata)
+          values (
+            ${conversationId},
+            ${user.id},
+            'assistant',
+            ${JSON.stringify(textMessageContent(`Error: ${message}`))}::jsonb,
+            ${JSON.stringify({ agentId: version.agent_id, agentName: version.agent_name, agentRunId: runId, agentMode: "single_pass_augmented", status: "failed" })}::jsonb
+          )
+        `;
+        await tx`
+          update conversations set updated_at = now() where id = ${conversationId} and owner_user_id = ${user.id}
+        `;
+      });
+    }
+    return jsonOk({ runId, conversationId, status: "failed", error: message }, { status: 201 });
   }
 }

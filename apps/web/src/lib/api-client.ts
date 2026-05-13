@@ -232,6 +232,7 @@ export type AgentRunRequest = ({
   input?: string;
 }) & {
   conversationId?: string;
+  conversation?: boolean;
   stream?: boolean;
 };
 

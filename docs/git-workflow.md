@@ -30,6 +30,14 @@ npm install
 npm run verify
 ```
 
+Run the production dependency audit before release branches or pilot/prod rollouts:
+
+```shell
+npm run audit:prod
+```
+
+As of the May 2026 local hardening pass this audit gates high-severity production advisories and may still print a moderate Next.js/PostCSS advisory. Keep that visible locally until those dependencies can be upgraded without taking on a framework migration.
+
 If the local Compose stack is running and migrated, run the smoke check too:
 
 ```shell

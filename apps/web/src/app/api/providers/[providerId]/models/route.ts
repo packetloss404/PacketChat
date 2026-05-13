@@ -82,6 +82,31 @@ export async function POST(request: Request, context: { params: Promise<{ provid
   }
 
   await sql.begin(async (tx) => {
+    const discoveredModelIds = [...new Set(models.map((model) => model.id))];
+    if (discoveredModelIds.length > 0) {
+      await tx`
+        update model_account_bindings mab
+        set enabled = false,
+            updated_at = now()
+        where mab.provider_account_id = ${String(body.providerAccountId)}
+          and mab.enabled = true
+          and coalesce(
+            (select mc.vendor_model_id from model_catalog mc where mc.id = mab.model_catalog_id),
+            mab.provider_model_ref->>'id',
+            mab.provider_model_ref->>'model',
+            mab.provider_model_ref->>'deployment'
+          ) <> all(${discoveredModelIds})
+      `;
+    } else {
+      await tx`
+        update model_account_bindings
+        set enabled = false,
+            updated_at = now()
+        where provider_account_id = ${String(body.providerAccountId)}
+          and enabled = true
+      `;
+    }
+
     for (const model of models) {
       const catalogRows = await tx<{ id: string }[]>`
         insert into model_catalog (provider, vendor_model_id, display_name, raw_metadata, updated_at)

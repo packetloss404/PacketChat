@@ -19,12 +19,14 @@ export async function POST(request: Request) {
   }
 
   const sql = getSql();
-  const existing = await sql<{ count: string }[]>`select count(*)::text as count from users`;
-  if (existing[0]?.count !== "0") return jsonError("Bootstrap is already complete", 409);
-
   const passwordHash = await hashPassword(String(body.password));
   const breakGlassPasswordHash = body.breakGlassEmail && body.breakGlassPassword ? await hashPassword(String(body.breakGlassPassword)) : null;
   const rows = await sql.begin(async (tx) => {
+    await tx`select pg_advisory_xact_lock(hashtext('packetchat.bootstrap'))`;
+
+    const existing = await tx<{ count: string }[]>`select count(*)::text as count from users`;
+    if (existing[0]?.count !== "0") return null;
+
     const created = await tx<{ id: string }[]>`
       insert into users (email, display_name, role, status)
       values (${String(body.email).toLowerCase()}, ${String(body.displayName ?? "Admin")}, 'admin', 'active')
@@ -43,6 +45,8 @@ export async function POST(request: Request) {
 
     return created;
   });
+
+  if (!rows) return jsonError("Bootstrap is already complete", 409);
 
   await recordAuditEvent({ actorUserId: rows[0]!.id, action: "bootstrap.completed", targetType: "user", targetId: rows[0]!.id });
   return jsonOk({ ok: true, adminUserId: rows[0]!.id });

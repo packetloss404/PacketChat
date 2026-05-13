@@ -1,6 +1,7 @@
 import { authenticateRequest, encryptJsonSecret } from "@packetchat/auth";
 import { providerIdSchema } from "@packetchat/contracts";
 import { getSql, recordAuditEvent } from "@packetchat/db";
+import { validateProviderBaseUrl } from "@packetchat/providers";
 import { jsonError, jsonOk } from "../../../lib/http";
 import { getUsagePricingStatus } from "../../../lib/usage";
 
@@ -55,6 +56,8 @@ export async function POST(request: Request) {
   const scope = body.scope === "user" ? "user" : "global";
   if (scope === "global" && user.role !== "admin") return jsonError("Admin authorization required", 403);
   if (scope === "user" && !user.byokEnabled) return jsonError("BYOK is disabled for this user", 403);
+  const baseUrlValidation = validateProviderBaseUrl(provider.data, body.baseUrl ? String(body.baseUrl) : null);
+  if (!baseUrlValidation.ok) return jsonError(baseUrlValidation.message, 400, { code: baseUrlValidation.code });
 
   const sql = getSql();
   const accountRows = await sql.begin(async (tx) => {
@@ -87,7 +90,7 @@ export async function POST(request: Request) {
         ${scope},
         ${scope === "user" ? user.id : null},
         ${String(body.displayName ?? provider.data)},
-        ${body.baseUrl ? String(body.baseUrl) : null},
+        ${baseUrlValidation.value},
         ${body.apiVersion ? String(body.apiVersion) : null},
         ${body.region ? String(body.region) : null},
         'enabled',

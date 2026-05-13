@@ -25,7 +25,7 @@ const catalog: Plugin[] = [
     id: "deep-research",
     name: "Deep Research",
     author: "packetchat",
-    summary: "Plans a multi-step research task, runs iterative searches, and returns a sourced brief with confidence notes.",
+    summary: "Prepares a sourced research brief with confidence notes from a guided search flow.",
     tint: "#7c3aed",
     initials: "DR"
   },

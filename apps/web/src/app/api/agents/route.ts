@@ -23,8 +23,8 @@ export async function GET(request: Request) {
       a.published_version_id,
       a.created_at,
       a.updated_at,
-      case when a.owner_user_id = ${user.id} then 'owner' else ap.role end as access_role,
-      a.owner_user_id = ${user.id} as is_owner
+      case when a.owner_user_id = ${user.id} or ${user.role === "admin"} then 'owner' else ap.role end as access_role,
+      (a.owner_user_id = ${user.id} or ${user.role === "admin"}) as is_owner
     from agents a
     left join agent_permissions ap on ap.agent_id = a.id and ap.subject_user_id = ${user.id}
     where a.owner_user_id = ${user.id} or ap.subject_user_id = ${user.id} or ${user.role === "admin"}

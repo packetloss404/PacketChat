@@ -11,6 +11,8 @@ import { useToast } from "../../components/ui";
 const APP_VERSION = "v0.8.2-rc1";
 const BOOKMARKS_KEY = "packetchat.chat.bookmarks";
 const PENDING_AGENT_STORAGE_KEY = "packetchat.chat.pendingAgent";
+const PENDING_PROMPT_STORAGE_KEY = "packetchat.chat.pendingPrompt";
+const LAST_CONVERSATION_STORAGE_KEY = "packetchat.lastConversationId";
 
 type ChatMessage = {
   id: string;
@@ -55,6 +57,30 @@ function normalizedMessages(messages: ChatMessage[]) {
     role: message.role,
     content: [{ type: "text", text: message.content }]
   }));
+}
+
+function textFromContent(content: unknown) {
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => (part && typeof part === "object" && "type" in part && part.type === "text" && "text" in part ? String(part.text) : ""))
+    .filter(Boolean)
+    .join("\n");
+}
+
+function metadataRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function readPendingPrompt(): { id?: string; name?: string; body?: string } | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(PENDING_PROMPT_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed as { id?: string; name?: string; body?: string } : null;
+  } catch {
+    return null;
+  }
 }
 
 function isErrorStatus(status: string) {
@@ -115,6 +141,14 @@ function persistBookmarkSet(set: Set<string>) {
   }
 }
 
+function replaceConversationUrl(conversationId: string) {
+  if (typeof window === "undefined") return;
+  const nextUrl = `/chat?conversation=${encodeURIComponent(conversationId)}`;
+  if (`${window.location.pathname}${window.location.search}` !== nextUrl) {
+    window.history.replaceState(null, "", nextUrl);
+  }
+}
+
 export default function ChatPage() {
   const toast = useToast();
   const [accounts, setAccounts] = useState<ProviderAccount[]>([]);
@@ -165,6 +199,40 @@ export default function ChatPage() {
     setConversations(payload.conversations ?? []);
   }
 
+  const loadConversation = useCallback(async (nextConversationId: string) => {
+    const [messagePayload, conversationPayload] = await Promise.all([
+      apiClient.conversations.messages(nextConversationId),
+      apiClient.conversations.list().catch(() => ({ conversations: [] as Conversation[] }))
+    ]);
+    const restoredMessages = (messagePayload.messages ?? [])
+      .filter((message) => message.role === "user" || message.role === "assistant")
+      .map<ChatMessage>((message) => ({
+        id: message.id,
+        role: message.role === "user" ? "user" : "assistant",
+        content: message.text || textFromContent(message.content),
+        createdAt: message.created_at
+      }));
+    const agentMessage = [...(messagePayload.messages ?? [])].reverse().find((message) => {
+      const metadata = metadataRecord(message.metadata);
+      return typeof metadata?.agentId === "string";
+    });
+    const agentMetadata = metadataRecord(agentMessage?.metadata);
+    setMessages(restoredMessages);
+    setConversationId(nextConversationId);
+    setConversations(conversationPayload.conversations ?? []);
+    if (typeof agentMetadata?.agentId === "string") {
+      setActiveAgent({ id: agentMetadata.agentId, name: typeof agentMetadata.agentName === "string" ? agentMetadata.agentName : "Agent" });
+      setShowSettings(false);
+    } else {
+      setActiveAgent(null);
+    }
+    try {
+      window.localStorage.setItem(LAST_CONVERSATION_STORAGE_KEY, nextConversationId);
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
   useEffect(() => {
     setHour(new Date().getHours());
     setBookmarks(loadBookmarkSet());
@@ -172,6 +240,32 @@ export default function ChatPage() {
       const Ctor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
       setSpeechSupported(typeof Ctor === "function");
     }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const promptId = params.get("prompt");
+    const pendingPrompt = readPendingPrompt();
+    window.sessionStorage.removeItem(PENDING_PROMPT_STORAGE_KEY);
+    if (pendingPrompt?.body) {
+      setInput(pendingPrompt.body);
+      setStatus(`Loaded prompt${pendingPrompt.name ? `: ${pendingPrompt.name}` : ""}.`);
+      return;
+    }
+    if (!promptId) return;
+    apiClient.prompts
+      .list()
+      .then((payload) => {
+        const prompt = payload.prompts.find((item) => item.id === promptId);
+        if (!prompt) {
+          setStatus("Prompt link not found or no longer accessible.");
+          return;
+        }
+        setInput(prompt.body);
+        setStatus(`Loaded prompt: ${prompt.name}.`);
+      })
+      .catch(() => setStatus("Prompt link could not be loaded."));
   }, []);
 
   useEffect(() => {
@@ -204,6 +298,15 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => {
+    if (!conversationId || typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(LAST_CONVERSATION_STORAGE_KEY, conversationId);
+    } catch {
+      // ignore storage errors
+    }
+  }, [conversationId]);
+
+  useEffect(() => {
     const accessToken = token();
     if (!accessToken) {
       setStatus("No access token found. Sign in before chatting.");
@@ -227,6 +330,13 @@ export default function ChatPage() {
         setAccounts(nextAccounts);
         setModelBindings(providerPayload.modelBindings ?? []);
         setConversations(conversationPayload.conversations ?? []);
+
+        const deepConversationId = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("conversation") : null;
+        if (deepConversationId) {
+          void loadConversation(deepConversationId).catch((error) => {
+            setStatus(error instanceof Error ? error.message : "Conversation link could not be loaded.");
+          });
+        }
 
         const me = meResponse?.user ?? meResponse;
         if (me?.displayName || me?.email) {
@@ -259,7 +369,7 @@ export default function ChatPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadConversation]);
 
   useEffect(() => {
     const el = transcriptRef.current;
@@ -327,10 +437,20 @@ export default function ChatPage() {
 
     try {
       if (activeAgent) {
-        const payload = await apiClient.agents.run(activeAgent.id, { inputText: content }) as { outputText?: string; error?: string; status?: string };
+        const payload = await apiClient.agents.run(activeAgent.id, { inputText: content, conversationId: conversationId || undefined, conversation: true }) as {
+          outputText?: string;
+          error?: string;
+          status?: string;
+          conversationId?: string;
+        };
         if (payload.error) throw new Error(payload.error);
+        if (payload.conversationId) {
+          setConversationId(payload.conversationId);
+          replaceConversationUrl(payload.conversationId);
+        }
         updateAssistantMessage(assistantMessage.id, () => payload.outputText ?? "");
         setStatus(`Agent run ${payload.status ?? "completed"}.`);
+        await loadConversations().catch(() => undefined);
         return;
       }
 
@@ -373,6 +493,7 @@ export default function ChatPage() {
             const streamEvent = JSON.parse(line.slice(5).trim()) as StreamEvent;
             if (streamEvent.type === "conversation") {
               setConversationId(streamEvent.conversationId);
+              replaceConversationUrl(streamEvent.conversationId);
             }
             if (streamEvent.type === "text_delta") {
               updateAssistantMessage(assistantMessage.id, (current) => current + streamEvent.text);
@@ -718,7 +839,7 @@ export default function ChatPage() {
           {settingsNode}
         </div>
         <div className="footer">
-          <Link href="/">PacketChat {APP_VERSION}</Link> · self-hosted storage · provider requests use the selected account
+          <Link href="/">PacketChat {APP_VERSION}</Link> · private storage · provider requests use the selected account
         </div>
       </>
     );

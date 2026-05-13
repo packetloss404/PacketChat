@@ -18,7 +18,7 @@ export type AgentAccess = {
   canDelete: boolean;
 };
 
-function roleRank(role: AgentAccessRole) {
+export function roleRank(role: AgentAccessRole) {
   switch (role) {
     case "owner":
       return 4;
@@ -39,6 +39,17 @@ export function isAgentAccessRole(value: unknown): value is AgentAccessRole {
   return normalizeRole(value) !== null;
 }
 
+export function getAgentAccessCapabilities(accessRole: AgentAccessRole, ownAgent = false) {
+  const rank = roleRank(accessRole);
+  return {
+    canView: true,
+    canRun: rank >= roleRank("runner"),
+    canEdit: rank >= roleRank("editor"),
+    canShare: rank >= roleRank("owner"),
+    canDelete: ownAgent || accessRole === "owner"
+  };
+}
+
 export async function getAgentAccess(agentId: string, user: AuthUser): Promise<AgentAccess | null> {
   const sql = getSql();
   const rows = await sql<{ id: string; owner_user_id: string; permission_role: AgentAccessRole | null }[]>`
@@ -55,15 +66,10 @@ export async function getAgentAccess(agentId: string, user: AuthUser): Promise<A
   const accessRole = ownAgent ? "owner" : row.permission_role;
   if (!accessRole) return null;
 
-  const rank = roleRank(accessRole);
   return {
     agentId: row.id,
     ownerUserId: row.owner_user_id,
     accessRole,
-    canView: true,
-    canRun: rank >= roleRank("viewer"),
-    canEdit: rank >= roleRank("editor"),
-    canShare: rank >= roleRank("owner"),
-    canDelete: ownAgent || accessRole === "owner"
+    ...getAgentAccessCapabilities(accessRole, ownAgent)
   };
 }

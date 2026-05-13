@@ -13,6 +13,7 @@ type UsageRecordInput = {
   providerAccountId: string;
   conversationRunId?: string | null;
   agentRunId?: string | null;
+  metadata?: Record<string, unknown>;
   provider: ProviderId;
   model: string;
   request: NormalizedChatRequest;
@@ -134,6 +135,7 @@ export async function recordUsage(input: UsageRecordInput) {
           ? { knownPricing: true, estimatedTokens: estimated, currency: "USD", amount: costUsd }
           : { knownPricing: false, estimatedTokens: estimated, currency: "USD", amount: null },
         providerUsage,
+        metadata: input.metadata ?? {},
         pricing: matchedPrice
           ? { provider: matchedPrice.provider, modelIncludes: matchedPrice.modelIncludes, ...matchedPrice.price }
           : { provider: input.provider, model: input.model, unknown: true }

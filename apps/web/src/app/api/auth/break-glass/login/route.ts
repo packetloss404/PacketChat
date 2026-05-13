@@ -1,4 +1,4 @@
-import { loginWithPassword, refreshCookieName } from "@packetchat/auth";
+import { isAuthError, loginWithPassword, refreshCookieName } from "@packetchat/auth";
 import { cookieOptions, jsonError, jsonOk, requestIp, setCsrfCookie, userAgent } from "../../../../../lib/http";
 import { authRateLimit } from "../../../../../lib/rate-limit";
 
@@ -15,8 +15,12 @@ export async function POST(request: Request) {
     breakGlassOnly: true,
     ipAddress: requestIp(request),
     userAgent: userAgent(request)
+  }).catch((error: unknown) => {
+    if (isAuthError(error)) return error;
+    throw error;
   });
 
+  if (isAuthError(result)) return jsonError(result.message, result.status);
   if (!result) return jsonError("Invalid break-glass credentials", 401);
 
   const response = jsonOk({ user: result.user, accessToken: result.accessToken, warning: "Break-glass session is audited and time-limited." });

@@ -1,6 +1,6 @@
 # Deployment
 
-PacketChat V1 is designed for a single self-hosted deployment with an external reverse proxy.
+PacketChat V1 is designed for a single private deployment with an external reverse proxy.
 
 ## Services
 
@@ -62,7 +62,7 @@ Run `npm run smoke` and the checklist in `docs/smoke-test.md` after first deploy
 - `/projects`: project management.
 - `/prompts`: prompt management.
 - `/knowledge`: knowledge base and document management.
-- `/agents`: agent drafts and publishing. Agent run execution is future post-agent-builder work.
+- `/agents`: single-pass augmented agent drafts, publishing, sharing, and manual/chat-launched runs.
 - `/admin/users`: admin user operations.
 
 ## Backups
@@ -85,4 +85,4 @@ Compose is the supported V1 deployment shape. Treat a deployment as pilot/prod-r
 - Run `npm run smoke` after first deploy, upgrades, and restore drills. Include `PACKETCHAT_SMOKE_EMAIL` / `PACKETCHAT_SMOKE_PASSWORD` for authenticated coverage.
 - Stop the Compose stack with `npm run compose:down`; do not remove volumes unless intentionally wiping local data.
 
-Outside the V1 promise: multi-tenant workspaces/teams, SSO, high availability orchestration, external managed-service recipes, Kubernetes manifests, email-delivered invite/reset flows, scheduled agent runs, evaluations, and Google/Gemini runtime provider support.
+Outside the V1 promise: multi-tenant workspaces/teams, SSO, high availability orchestration, external managed-service recipes, Kubernetes manifests, email-delivered invite/reset flows, scheduled agent runs, evaluations, true multi-step tool loops, and Google/Gemini runtime provider support.

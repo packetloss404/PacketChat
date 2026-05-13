@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 const quickActions = [
   { href: "/chat", title: "Open chat", description: "Start or resume a conversation with your configured model routes." },
   { href: "/knowledge", title: "Manage knowledge", description: "Upload documents, check ingestion, and test retrieval snippets." },
-  { href: "/agents", title: "Build agents", description: "Configure instructions, tools, knowledge, and published test runs." },
+  { href: "/agents", title: "Build agents", description: "Configure instructions, tools, knowledge, and published single-pass runs." },
   { href: "/providers", title: "Provider settings", description: "Manage global keys, BYOK accounts, model sync, and diagnostics." }
 ];
 
@@ -127,7 +127,7 @@ export default function HomePage() {
             <div className="eyebrow">PacketChat</div>
             <h1 style={{ margin: "4px 0 6px" }}>{greeting}</h1>
             <p className="sub" style={{ margin: 0 }}>
-              Private chat, knowledge, providers, and agents routed through a small-instance workspace for local users, admin-managed provider keys, optional BYOK, and operational visibility.
+              Private chat, knowledge, providers, and agents routed through a focused workspace for local users, admin-managed provider keys, optional BYOK, and operational visibility.
             </p>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>

@@ -45,6 +45,7 @@ type UserRow = {
   byok_enabled: boolean;
   is_break_glass: boolean;
   password_hash: string;
+  force_reset: boolean;
 };
 
 export function createOpaqueToken(byteLength = 32): string {
@@ -220,7 +221,8 @@ export async function loginWithPassword(input: {
       u.role,
       u.byok_enabled,
       u.is_break_glass,
-      pc.password_hash
+      pc.password_hash,
+      pc.force_reset
     from users u
     join password_credentials pc on pc.user_id = u.id
     where lower(u.email) = lower(${input.email})
@@ -233,6 +235,18 @@ export async function loginWithPassword(input: {
   if (!row || !(await verifyPassword(row.password_hash, input.password))) {
     await recordAuditEvent({ action: "auth.login.failure", outcome: "failure", metadata: { email: input.email, breakGlassOnly: input.breakGlassOnly ?? false } });
     return null;
+  }
+
+  if (row.force_reset) {
+    await recordAuditEvent({
+      actorUserId: row.id,
+      action: "auth.login.failure",
+      outcome: "failure",
+      targetType: "user",
+      targetId: row.id,
+      metadata: { email: input.email, breakGlassOnly: input.breakGlassOnly ?? false, reason: "force_reset" }
+    });
+    throw new AuthError("Password reset required", 403);
   }
 
   await sql`update users set last_login_at = now(), updated_at = now() where id = ${row.id}`;

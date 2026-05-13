@@ -4,7 +4,7 @@ import { getSql } from "@packetchat/db";
 import { logger } from "@packetchat/observability";
 import { getProviderAdapter } from "@packetchat/providers";
 import { jsonError } from "../../../lib/http";
-import { getProviderAccountForRuntime } from "../../../lib/providers";
+import { getEnabledModelBindingForRuntime, getProviderAccountForRuntime } from "../../../lib/providers";
 import { chatRateLimit } from "../../../lib/rate-limit";
 import { recordUsage } from "../../../lib/usage";
 
@@ -56,6 +56,13 @@ export async function POST(request: Request) {
   const account = await getProviderAccountForRuntime(String(body.providerAccountId), user.id);
   if (!account) return jsonError("Provider account not found", 404);
   if (account.provider !== parsed.data.provider) return jsonError("Provider mismatch", 400);
+  const modelBinding = await getEnabledModelBindingForRuntime({
+    accountId: String(body.providerAccountId),
+    userId: user.id,
+    provider: account.provider,
+    model: parsed.data.model
+  });
+  if (!modelBinding) return jsonError("Selected model is disabled or no longer available for this provider account", 400);
 
   const sql = getSql();
   const lastUserMessage = [...parsed.data.messages].reverse().find((message) => message.role === "user");
@@ -113,6 +120,9 @@ export async function POST(request: Request) {
 
   const adapter = getProviderAdapter(account.provider);
   const encoder = new TextEncoder();
+  const streamAbortController = new AbortController();
+  const abortStream = () => streamAbortController.abort();
+  request.signal.addEventListener("abort", abortStream, { once: true });
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -124,7 +134,7 @@ export async function POST(request: Request) {
       controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "conversation", conversationId: setup.conversationId, runId: setup.runId })}\n\n`));
 
       try {
-        for await (const event of adapter.streamChat(account, parsed.data)) {
+        for await (const event of adapter.streamChat(account, parsed.data, { signal: streamAbortController.signal })) {
           if (event.type === "text_delta") assistantText += event.text;
           if (event.type === "message_end") {
             finishReason = event.finishReason;
@@ -175,7 +185,12 @@ export async function POST(request: Request) {
           });
         }
         controller.close();
+        request.signal.removeEventListener("abort", abortStream);
       }
+    },
+    cancel() {
+      streamAbortController.abort();
+      request.signal.removeEventListener("abort", abortStream);
     }
   });
 

@@ -369,7 +369,7 @@ export function PromptsClient() {
       <header className="prompt-lib__head">
         <div className="prompt-lib__heading">
           <h1>Prompt Library</h1>
-          <p className="sub">Prompts are message templates that you can quickly fill in to use in chat, work with AI agents, or build your workflow.</p>
+          <p className="sub">Prompts are message templates that open in chat for review, editing, and sending.</p>
         </div>
         <div className="prompt-lib__head-actions">
           <button className="button button--primary" type="button" onClick={openCreate}>Add prompt</button>
@@ -516,7 +516,7 @@ export function PromptsClient() {
                   href={`/chat?prompt=${encodeURIComponent(prompt.id)}`}
                   onClick={() => handleUseNow(prompt)}
                 >
-                  Use now
+                  Use in chat
                 </Link>
               </div>
             </article>

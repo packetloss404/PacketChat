@@ -10,6 +10,7 @@
     "lint": "tsc --noEmit -p ../../tsconfig.json"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.787.0",
     "@packetchat/auth": "file:../../packages/auth",
     "@packetchat/config": "file:../../packages/config",
     "@packetchat/contracts": "file:../../packages/contracts",
@@ -18,8 +19,7 @@
     "@packetchat/jobs": "file:../../packages/jobs",
     "@packetchat/observability": "file:../../packages/observability",
     "@packetchat/providers": "file:../../packages/providers",
-    "@aws-sdk/client-s3": "^3.787.0",
-    "next": "^15.3.1",
+    "next": "^15.5.18",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   }

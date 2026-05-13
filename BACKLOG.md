@@ -1,5 +1,15 @@
 # Backlog
 
+## Production Dependency Audit
+
+`npm run audit:prod` currently gates high-severity production dependency advisories and still reports a moderate Next.js/PostCSS install-graph advisory. Keep the audit script local and visible, but do not wire stricter moderate-level audit enforcement into `prod:check` or GitHub CI until the dependency upgrade is verified against the App Router, middleware, auth cookie, SSE chat, and agent-run flows.
+
+Acceptance notes:
+
+- Upgrade Next.js/PostCSS to versions with no moderate-or-higher production audit findings.
+- Run `npm run audit:prod`, `npm run verify`, `npm run build`, and authenticated smoke coverage after the upgrade.
+- Reconsider folding stricter audit enforcement into `prod:check` after moderate-or-higher audit output is clean.
+
 ## MCP Tools
 
 MCP tool support is intentionally deferred from V1 runtime scope. Before enabling it, PacketChat needs server-side MCP connection storage, per-user or owner-scoped credentials, tool allowlists, request/response auditing, timeout and size limits, and run-step persistence for tool calls and results.

@@ -14,28 +14,30 @@ export async function POST(request: Request) {
 
   const tokenHash = hashOpaqueToken(String(body.token));
   const sql = getSql();
-  const rows = await sql<{ id: string; user_id: string }[]>`
-    select id, user_id
-    from password_reset_tokens
-    where token_hash = ${tokenHash}
-      and consumed_at is null
-      and expires_at > now()
-    limit 1
-  `;
-
-  const reset = rows[0];
-  if (!reset) return jsonError("Password reset token is invalid or expired", 404);
-
   const passwordHash = await hashPassword(String(body.password));
-  await sql.begin(async (tx) => {
+  const reset = await sql.begin(async (tx) => {
+    const consumed = await tx<{ id: string; user_id: string }[]>`
+      update password_reset_tokens
+      set consumed_at = now()
+      where token_hash = ${tokenHash}
+        and consumed_at is null
+        and expires_at > now()
+      returning id, user_id
+    `;
+
+    const resetToken = consumed[0];
+    if (!resetToken) return null;
+
     await tx`
       insert into password_credentials (user_id, password_hash, force_reset)
-      values (${reset.user_id}, ${passwordHash}, false)
+      values (${resetToken.user_id}, ${passwordHash}, false)
       on conflict (user_id) do update set password_hash = excluded.password_hash, force_reset = false, updated_at = now()
     `;
-    await tx`update password_reset_tokens set consumed_at = now() where id = ${reset.id}`;
-    await tx`update sessions set revoked_at = now(), revoked_reason = 'password reset' where user_id = ${reset.user_id}`;
+    await tx`update sessions set revoked_at = now(), revoked_reason = 'password reset' where user_id = ${resetToken.user_id}`;
+    return resetToken;
   });
+
+  if (!reset) return jsonError("Password reset token is invalid or expired", 404);
 
   await recordAuditEvent({ actorUserId: reset.user_id, action: "user.updated", targetType: "user", targetId: reset.user_id, metadata: { operation: "password_reset_completed" } });
   return jsonOk({ ok: true });

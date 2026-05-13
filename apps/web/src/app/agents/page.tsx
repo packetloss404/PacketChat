@@ -37,6 +37,8 @@ type Agent = {
   is_owner?: boolean;
 };
 
+type AgentAccessRole = "viewer" | "runner" | "editor" | "owner";
+
 type Draft = {
   agent_id: string;
   draft_id: string;
@@ -163,6 +165,31 @@ function avatarTint(agentId: string) {
 function avatarInitial(name: string) {
   const trimmed = name.trim();
   return trimmed ? trimmed[0].toUpperCase() : "A";
+}
+
+function agentAccessRole(agent: Agent): AgentAccessRole {
+  if (agent.is_owner) return "owner";
+  return agent.access_role === "runner" || agent.access_role === "editor" || agent.access_role === "owner" ? agent.access_role : "viewer";
+}
+
+function agentAccessRank(agent: Agent) {
+  return { viewer: 1, runner: 2, editor: 3, owner: 4 }[agentAccessRole(agent)];
+}
+
+function canRunAgent(agent: Agent) {
+  return agentAccessRank(agent) >= 2;
+}
+
+function canEditAgent(agent: Agent) {
+  return agentAccessRank(agent) >= 3;
+}
+
+function canShareAgent(agent: Agent) {
+  return agentAccessRole(agent) === "owner";
+}
+
+function canDeleteAgent(agent: Agent) {
+  return agent.is_owner || agentAccessRole(agent) === "owner";
 }
 
 function authHeaders() {
@@ -344,6 +371,10 @@ export default function AgentsPage() {
   }
 
   function openEditor(agent: Agent) {
+    if (!canEditAgent(agent)) {
+      toast({ message: "You need editor access to modify this agent.", variant: "warning" });
+      return;
+    }
     void loadDraft(agent.id).then(() => {
       editorOpenRef.current = true;
       editorRef.current?.showModal();
@@ -482,6 +513,10 @@ export default function AgentsPage() {
   }
 
   async function deleteAgent(agent: Agent, options?: { skipConfirm?: boolean }) {
+    if (!canDeleteAgent(agent)) {
+      toast({ message: "You need owner access to delete this agent.", variant: "warning" });
+      return;
+    }
     if (!options?.skipConfirm && !window.confirm(`Delete ${agent.name}?`)) return;
     setIsBusy(true);
     try {
@@ -504,6 +539,10 @@ export default function AgentsPage() {
   }
 
   async function shareAgent(agent: Agent) {
+    if (!canShareAgent(agent)) {
+      toast({ message: "You need owner access to share this agent.", variant: "warning" });
+      return;
+    }
     setShareTarget(agent);
     setShareLoading(true);
     try {
@@ -555,6 +594,10 @@ export default function AgentsPage() {
   }
 
   async function duplicateAgent(agent: Agent) {
+    if (!canEditAgent(agent)) {
+      toast({ message: "You need editor access to duplicate this agent.", variant: "warning" });
+      return;
+    }
     setIsBusy(true);
     try {
       await request<{ agentId: string }>("/api/agents", {
@@ -611,6 +654,11 @@ export default function AgentsPage() {
 
   async function runAgent() {
     if (!draft) return;
+    const currentAgent = agents.find((agent) => agent.id === draft.agent_id);
+    if (currentAgent && !canRunAgent(currentAgent)) {
+      toast({ message: "You need runner access to run this agent.", variant: "warning" });
+      return;
+    }
     const inputText = runInput.trim();
     if (!inputText) {
       toast({ message: "Run input is required.", variant: "warning" });
@@ -751,20 +799,20 @@ export default function AgentsPage() {
       <header className="agents-lib__head">
         <div className="agents-lib__heading">
           <h1>Agents</h1>
-          <p className="sub">Agents are pre-built AI assistants for specific tasks.</p>
+          <p className="sub">Single-pass augmented agents add selected context and tools before one model response.</p>
         </div>
         <div className="agents-lib__head-actions">
           <label className="agents-lib__search">
             <Icon.search />
             <input
-              placeholder="Search AI agents..."
+              placeholder="Search agents..."
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               aria-label="Search agents"
             />
           </label>
           <div className="agents-lib__create" ref={createMenuRef} style={{ position: "relative" }}>
-            <button className="button button--primary" type="button" onClick={() => openCreate()}>Create AI agent</button>
+            <button className="button button--primary" type="button" onClick={() => openCreate()}>Create agent</button>
             <button
               className="button button--primary agents-lib__create-chev"
               type="button"
@@ -890,7 +938,7 @@ export default function AgentsPage() {
           {!loading && sorted.length === 0 ? (
             <div className="empty-state">
               {agents.length === 0
-                ? "No agents yet. Click Create AI agent to build your first one."
+                ? "No agents yet. Click Create agent to build your first one."
                 : "No agents match your search."}
             </div>
           ) : null}
@@ -898,6 +946,12 @@ export default function AgentsPage() {
           <div className={view === "grid" ? "agents-lib__grid" : "agents-lib__list"}>
             {sorted.map((agent) => {
               const favored = favorites.has(agent.id);
+              const canRun = canRunAgent(agent);
+              const canChat = canRun && Boolean(agent.published_version_id);
+              const chatLabel = agent.published_version_id ? "Runner required" : "Publish first";
+              const canEdit = canEditAgent(agent);
+              const canShare = canShareAgent(agent);
+              const canDelete = canDeleteAgent(agent);
               return (
                 <article className="agent-card" key={agent.id}>
                   <div className="agent-card__head">
@@ -911,44 +965,52 @@ export default function AgentsPage() {
                   </div>
                   <div className="agent-card__footer">
                     <div className="agent-card__actions">
-                      <button
-                        className="ib"
-                        type="button"
-                        onClick={() => void duplicateAgent(agent)}
-                        aria-label="Duplicate agent"
-                        title="Duplicate"
-                        disabled={isBusy}
-                      >
-                        <Icon.copy />
-                      </button>
-                      <button
-                        className="ib"
-                        type="button"
-                        onClick={() => openEditor(agent)}
-                        aria-label="Edit agent"
-                        title="Edit"
-                      >
-                        <Icon.edit />
-                      </button>
-                      <button
-                        className="ib"
-                        type="button"
-                        onClick={() => void shareAgent(agent)}
-                        aria-label="Share agent"
-                        title="Share"
-                      >
-                        <Icon.share />
-                      </button>
-                      <button
-                        className="ib"
-                        type="button"
-                        onClick={() => void deleteAgent(agent)}
-                        aria-label="Delete agent"
-                        title="Delete"
-                        disabled={isBusy}
-                      >
-                        <Icon.trash />
-                      </button>
+                      {canEdit ? (
+                        <button
+                          className="ib"
+                          type="button"
+                          onClick={() => void duplicateAgent(agent)}
+                          aria-label="Duplicate agent"
+                          title="Duplicate"
+                          disabled={isBusy}
+                        >
+                          <Icon.copy />
+                        </button>
+                      ) : null}
+                      {canEdit ? (
+                        <button
+                          className="ib"
+                          type="button"
+                          onClick={() => openEditor(agent)}
+                          aria-label="Edit agent"
+                          title="Edit"
+                        >
+                          <Icon.edit />
+                        </button>
+                      ) : null}
+                      {canShare ? (
+                        <button
+                          className="ib"
+                          type="button"
+                          onClick={() => void shareAgent(agent)}
+                          aria-label="Share agent"
+                          title="Share"
+                        >
+                          <Icon.share />
+                        </button>
+                      ) : null}
+                      {canDelete ? (
+                        <button
+                          className="ib"
+                          type="button"
+                          onClick={() => void deleteAgent(agent)}
+                          aria-label="Delete agent"
+                          title="Delete"
+                          disabled={isBusy}
+                        >
+                          <Icon.trash />
+                        </button>
+                      ) : null}
                       <button
                         className={`ib ${favored ? "on" : ""}`}
                         type="button"
@@ -960,13 +1022,24 @@ export default function AgentsPage() {
                         <Icon.pin />
                       </button>
                     </div>
-                    <Link
-                      className="prompt-card__use"
-                      href={`/chat?agent=${encodeURIComponent(agent.id)}`}
-                      onClick={() => startChat(agent)}
-                    >
-                      Chat now
-                    </Link>
+                    {canChat ? (
+                      <Link
+                        className="prompt-card__use"
+                        href={`/chat?agent=${encodeURIComponent(agent.id)}`}
+                        onClick={() => startChat(agent)}
+                      >
+                        Chat now
+                      </Link>
+                    ) : (
+                      <span
+                        className="prompt-card__use"
+                        aria-disabled="true"
+                        title={agent.published_version_id ? "Runner access is required to chat with this agent." : "Publish this agent before starting a chat."}
+                        style={{ opacity: 0.58, pointerEvents: "none" }}
+                      >
+                        {chatLabel}
+                      </span>
+                    )}
                   </div>
                 </article>
               );
@@ -975,10 +1048,10 @@ export default function AgentsPage() {
         </main>
       </div>
 
-      <dialog ref={createRef} className="prompt-dialog agents-create-dialog" onClose={closeCreate} aria-label="Create AI agent">
+      <dialog ref={createRef} className="prompt-dialog agents-create-dialog" onClose={closeCreate} aria-label="Create agent">
         <form className="prompt-dialog__form" onSubmit={(event) => void createAgent(event)}>
           <header className="prompt-dialog__head">
-            <h2>Create AI agent</h2>
+            <h2>Create agent</h2>
             <button className="ib" type="button" onClick={closeCreate} aria-label="Close" title="Close">
               <Icon.plus style={{ transform: "rotate(45deg)" }} />
             </button>
@@ -1103,7 +1176,7 @@ export default function AgentsPage() {
                   <input className="input" type="number" min="1000" max="200000" step="1000" value={draft.spec.maxContextTokens ?? 8000} onChange={(event) => updateSpec({ maxContextTokens: Number(event.target.value) })} />
                 </label>
                 <label>
-                  Max agent steps
+                  Max pre-run steps
                   <input className="input" type="number" min="1" max="25" step="1" value={draft.spec.maxAgentSteps ?? 4} onChange={(event) => updateSpec({ maxAgentSteps: Number(event.target.value) })} />
                 </label>
               </div>
@@ -1155,7 +1228,7 @@ export default function AgentsPage() {
                         else updateSpec({ openApiActions: current.map((action) => ({ ...action, enabled: event.target.checked })) });
                       }}
                     />
-                    <span><strong>OpenAPI actions</strong><small>Call configured HTTP actions during agent runs.</small></span>
+                    <span><strong>OpenAPI actions</strong><small>Run configured HTTPS actions before the model call.</small></span>
                   </label>
                   <label className="agent-tool-card">
                     <input
@@ -1163,7 +1236,7 @@ export default function AgentsPage() {
                       checked={Boolean(draft.spec.agentChain?.enabled)}
                       onChange={(event) => updateSpec({ agentChain: { ...draft.spec.agentChain, enabled: event.target.checked } })}
                     />
-                    <span><strong>Agent chain</strong><small>Run selected child agents as pre-run context.</small></span>
+                    <span><strong>Agent context</strong><small>Run selected published agents as pre-run context.</small></span>
                   </label>
                   {["Code interpreter", "MCP tools"].map((label) => (
                     <label className="agent-tool-card" key={label} aria-disabled="true">
@@ -1218,7 +1291,7 @@ export default function AgentsPage() {
               </div>
 
               <div>
-                <div className="eyebrow" style={{ margin: "8px 0 6px" }}>Agent chain</div>
+                <div className="eyebrow" style={{ margin: "8px 0 6px" }}>Agent context</div>
                 <label>
                   Max child runs
                   <input
@@ -1335,26 +1408,21 @@ export default function AgentsPage() {
               </details>
 
               <div className="prompt-dialog__actions">
-                <ConfirmButton
-                  className="button button--danger"
-                  message={`Delete ${draft.spec.name ?? draft.name}?`}
-                  confirmLabel="Delete"
-                  onConfirm={() => {
-                    const current =
-                      agents.find((agent) => agent.id === draft.agent_id) ??
-                      ({
-                        id: draft.agent_id,
-                        name: draft.spec.name ?? draft.name,
-                        description: draft.spec.description ?? draft.description ?? null,
-                        status: draft.status,
-                        published_version_id: null,
-                        updated_at: ""
-                      } as Agent);
-                    void deleteAgent(current, { skipConfirm: true });
-                  }}
-                >
-                  Delete
-                </ConfirmButton>
+                {(() => {
+                  const current = agents.find((agent) => agent.id === draft.agent_id);
+                  return current && canDeleteAgent(current) ? (
+                    <ConfirmButton
+                      className="button button--danger"
+                      message={`Delete ${draft.spec.name ?? draft.name}?`}
+                      confirmLabel="Delete"
+                      onConfirm={() => {
+                        void deleteAgent(current, { skipConfirm: true });
+                      }}
+                    >
+                      Delete
+                    </ConfirmButton>
+                  ) : null;
+                })()}
                 <div style={{ flex: 1 }} />
                 <button className="button button--ghost" type="button" disabled={isBusy} onClick={() => void publishDraft()}>Publish</button>
                 <button className="button button--primary" type="submit" disabled={isBusy}>Save draft</button>
@@ -1378,7 +1446,7 @@ export default function AgentsPage() {
             </button>
           </header>
           <p className="muted" style={{ margin: 0 }}>
-            Grant Viewer to use the agent, Runner to run it from API/chat surfaces, Editor to modify the builder, or Owner to re-share and administer it.
+            Grant Viewer to inspect the agent, Runner to run it from API/chat surfaces, Editor to modify the builder, or Owner to re-share and administer it.
           </p>
           <div className="checkbox-list">
             {shareUsers.map((user) => {

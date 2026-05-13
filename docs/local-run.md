@@ -268,7 +268,7 @@ Use `npm run backup:postgres` or `npm run backup:minio` to back up one store. Se
 
 ## Agent Run Scope
 
-The `/agents` page supports creating agents, editing drafts, publishing immutable versions, and starting manual runs for published agents when the agent spec has a valid provider account and model. Manual runs can use simple knowledge lookup, calculator, URL fetch, provider streaming, and persisted run events.
+The `/agents` page supports creating single-pass augmented agents, editing drafts, publishing immutable versions, and starting manual runs for published agents when the agent spec has a valid provider account and model. Manual and chat-launched runs can use simple knowledge lookup, calculator, URL fetch, provider streaming, persisted run events, and transcript persistence when launched from chat.
 
 Scheduled runs, evaluations, human approval workflows, and production-grade run observability are outside the V1 scope and should not be promised as wired behavior.
 

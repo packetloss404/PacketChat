@@ -1,6 +1,6 @@
 # PacketChat
 
-PacketChat is a self-hosted, multi-user AI workspace for a small private instance. V1 targets local JWT auth, admin-managed provider keys, optional per-user BYOK, private user-owned chats / projects / prompts / knowledge / agents, and a Docker Compose deployment.
+PacketChat is a privately deployed, multi-user AI workspace. V1 targets local JWT auth, admin-managed provider keys, optional per-user BYOK, private user-owned chats / projects / prompts / knowledge / agents, and a Docker Compose deployment.
 
 The frontend is a v3 LibreChat-style shell — three columns (left rail, main, collapsible right rail), monochrome dark theme with a light-mode toggle, route-aware header pill, and an account popover.
 
@@ -31,7 +31,7 @@ This repository is on branch `main` with origin `git@github.com:packetloss404/Pa
 
 - Keep `.env`, `.env.*`, `secrets/`, local data directories, backups, build outputs, logs, `node_modules/`, and `*.tsbuildinfo` out of git.
 - Keep `.env.example` tracked as the non-secret configuration template.
-- Before committing, run `npm run verify` (typecheck, JS syntax/workspace lint, and tests). If the Compose stack is running, also run `npm run smoke`.
+- Before committing, run `npm run verify` (typecheck, JS syntax/workspace lint, and tests). For local production readiness checks, run `npm run audit:prod` and `npm run prod:check`; `audit:prod` gates high-severity production advisories and may still print lower-severity dependency advisories. If the Compose stack is running, also run `npm run smoke`.
 
 See `docs/git-workflow.md` for the checkpoint checklist.
 
@@ -41,11 +41,11 @@ See `docs/git-workflow.md` for the checkpoint checklist.
 | --- | --- | --- |
 | `/` | Welcome dashboard with quick actions, system status (`/api/healthz`), Resume-last-chat | ✅ |
 | `/login` | Local password login, invite acceptance, password-reset completion, break-glass with audit ack | ✅ |
-| `/chat` | Empty-state greet + pill composer; transcript with turn copy / inline edit / bookmark; SSE streaming for normal chat; `?agent=<id>` and Agent Library handoff run published agents from the composer; per-message timestamps; speech-recognition mic when supported | ✅ |
-| `/agents` | Library grid with deterministic avatars + Create / Browse / Search / Sort / Pin; Create modal (scratch or template); builder with provider/model/parameters, file search, file context, artifact instructions, OpenAPI actions, agent chaining, supported tools, ACL sharing, and manual runs for published agents | ✅ |
+| `/chat` | Empty-state greet + pill composer; transcript with turn copy / inline edit / bookmark; SSE streaming for normal chat; `?conversation=<id>` restores transcripts; `?prompt=<id>` opens a prompt in the composer; `?agent=<id>` runs published single-pass augmented agents with chat persistence; per-message timestamps; speech-recognition mic when supported | ✅ |
+| `/agents` | Library grid with deterministic avatars + Create / Browse / Search / Sort / Pin; Create modal (scratch or template); builder with provider/model/parameters, file search, file context, artifact instructions, OpenAPI actions, pre-run agent context, supported tools, ACL sharing, and manual runs for published single-pass augmented agents | ✅ |
 | `/providers` | Models panel — left rail by provider (`All / per-provider / Others / Custom`), middle list with search + per-account toggle (real `providers.updateAccount` flip), right detail with Overview + Parameters tabs, ⋯ menu Reset / Export, Add custom model dialog (localStorage). Runtime provider IDs are limited to OpenAI-compatible, Azure OpenAI, Anthropic, Perplexity, and MiniMax. | ✅ |
 | `/projects` | Private project management | ✅ |
-| `/prompts` | Prompt Library — Add prompt modal, Browse-templates modal that creates real prompts, search + tag filter + Title / Recently-updated sort, list/grid views, star favorites (localStorage), Use now hands the body to chat via sessionStorage | ✅ |
+| `/prompts` | Prompt Library — Add prompt modal, Browse-templates modal that creates real prompts, search + tag filter + Title / Recently-updated sort, list/grid views, star favorites (localStorage), Use in chat opens the body in the chat composer | ✅ |
 | `/knowledge` | Knowledge bases — create, edit, archive, delete; drag-drop file upload with type-filtered accept; documents list with rename / delete; reembed with detailed counts; Enter-to-search retrieval | ✅ |
 | `/plugins` | Pending integrations — `Perplexity Search`, `Deep Research`, `GPT Image Editor`, `PDF Summarizer`, `Voice Mode` — each with a Join-waitlist email modal (prefilled from `/api/auth/me`), plus a Request-a-plugin form. All persisted to localStorage. | ✅ (UX) |
 | `/plugins/marketplace` | Coming-soon splash with orbital SVG art and three teaser agent cards (`Save interest`) | ✅ (UX, local only) |
@@ -87,7 +87,7 @@ The 48-px right rail expands a 320-px panel when an icon is selected. Each drawe
 - All auth endpoints: login, refresh, logout, invite accept, password reset complete, change password, /me.
 - All conversation, project, prompt, knowledge base, agent, agent draft, agent publish, agent run, admin user, and admin usage CRUD endpoints.
 - SSE streaming chat at `POST /api/chat`.
-- Agent publish, ACL sharing, and manual synchronous agent runs, including file search, file context injection, artifact-format instructions, calculator, hardened URL fetch, HTTPS OpenAPI actions, bounded same-owner agent chains, provider streaming, and run event persistence. Scheduled runs, evaluations, approvals, true multi-step tool loops, and production-grade run observability are outside V1.
+- Agent publish, ACL sharing, and synchronous single-pass augmented agent runs, including file search, file context injection, artifact-format instructions, calculator, hardened URL fetch, HTTPS OpenAPI actions, bounded same-owner pre-run agent context, provider streaming, run event persistence, and chat-launched run transcript persistence. Scheduled runs, evaluations, approvals, true multi-step tool loops, and production-grade run observability are outside V1.
 - Models toggle persists via the existing `providers.updateAccount` (account-level granularity — the backend has no per-binding toggle yet).
 - Speech Synthesis voice picker enumerates real `window.speechSynthesis` voices; chat reply playback is not wired yet.
 - Theme toggle, font-size slider, and most preferences in `/settings` write through to `localStorage` under `packetchat.settings.<section>.<key>`.
