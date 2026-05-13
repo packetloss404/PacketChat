@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { authenticateRequest } from "@packetchat/auth";
 import { getSql } from "@packetchat/db";
+import { getAgentAccess } from "../../../../../lib/agent-access";
 import { jsonError, jsonOk } from "../../../../../lib/http";
 
 type RouteContext = { params: Promise<{ agentId: string }> };
@@ -18,6 +19,8 @@ export async function POST(request: Request, context: RouteContext) {
   if (!user) return jsonError("Unauthenticated", 401);
 
   const { agentId } = await context.params;
+  const access = await getAgentAccess(agentId, user);
+  if (!access?.canEdit) return jsonError("Agent draft not found", 404);
   const body = await request.json().catch(() => ({}));
   const changeSummary = typeof body?.changeSummary === "string" && body.changeSummary.trim().length > 0 ? body.changeSummary.trim() : null;
 
@@ -27,7 +30,7 @@ export async function POST(request: Request, context: RouteContext) {
       select d.id as draft_id, d.spec
       from agents a
       join agent_drafts d on d.id = a.current_draft_id
-      where a.id = ${agentId} and a.owner_user_id = ${user.id}
+      where a.id = ${agentId}
       for update of a
     `;
     if (draftRows.length === 0) return null;
@@ -55,7 +58,7 @@ export async function POST(request: Request, context: RouteContext) {
     await tx`
       update agents
       set published_version_id = ${versions[0]!.id}, status = 'active', updated_at = now()
-      where id = ${agentId} and owner_user_id = ${user.id}
+      where id = ${agentId}
     `;
     return versions[0]!;
   });

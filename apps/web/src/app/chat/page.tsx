@@ -10,6 +10,7 @@ import { useToast } from "../../components/ui";
 
 const APP_VERSION = "v0.8.2-rc1";
 const BOOKMARKS_KEY = "packetchat.chat.bookmarks";
+const PENDING_AGENT_STORAGE_KEY = "packetchat.chat.pendingAgent";
 
 type ChatMessage = {
   id: string;
@@ -137,6 +138,7 @@ export default function ChatPage() {
   const [speechSupported, setSpeechSupported] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [hour, setHour] = useState<number | null>(null);
+  const [activeAgent, setActiveAgent] = useState<{ id: string; name: string } | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
@@ -149,13 +151,14 @@ export default function ChatPage() {
     [accountId, modelBindings]
   );
   const providerMismatch = !!(selectedAccount && selectedAccount.provider !== provider);
-  const composerDisabled = isStreaming || loadingAccounts || !input.trim() || !accountId || !model.trim() || providerMismatch;
+  const composerDisabled = isStreaming || loadingAccounts || !input.trim() || (!activeAgent && (!accountId || !model.trim() || providerMismatch));
   const hasMessages = messages.length > 0;
   const headerTitle = useMemo(() => {
     const active = conversations.find((c) => c.id === conversationId);
+    if (activeAgent) return `${activeAgent.name} · agent`;
     if (active?.title) return `${active.title} · ${model || "no model"}`;
     return model ? `New chat · ${model}` : "New chat";
-  }, [conversations, conversationId, model]);
+  }, [activeAgent, conversations, conversationId, model]);
 
   async function loadConversations() {
     const payload = await apiClient.conversations.list();
@@ -169,6 +172,35 @@ export default function ChatPage() {
       const Ctor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
       setSpeechSupported(typeof Ctor === "function");
     }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const fromQuery = new URLSearchParams(window.location.search).get("agent");
+    const fromSession = window.sessionStorage.getItem(PENDING_AGENT_STORAGE_KEY);
+    const agentId = fromQuery || fromSession;
+    if (!agentId) return;
+    window.sessionStorage.removeItem(PENDING_AGENT_STORAGE_KEY);
+    apiClient.agents
+      .draft(agentId)
+      .then((payload) => {
+        const name = payload.draft.spec.name || payload.draft.name || "Agent";
+        setActiveAgent({ id: agentId, name });
+        setShowSettings(false);
+        setStatus(`Chatting with ${name}.`);
+      })
+      .catch(() => {
+        apiClient.agents
+          .list()
+          .then((payload) => {
+            const agent = payload.agents.find((item) => item.id === agentId);
+            if (!agent) return;
+            setActiveAgent({ id: agent.id, name: agent.name });
+            setShowSettings(false);
+            setStatus(`Chatting with ${agent.name}.`);
+          })
+          .catch(() => undefined);
+      });
   }, []);
 
   useEffect(() => {
@@ -266,17 +298,17 @@ export default function ChatPage() {
       setStatus("No access token found. Sign in before chatting.");
       return;
     }
-    if (!accountId) {
+    if (!activeAgent && !accountId) {
       setStatus("Choose a provider account before sending a message.");
       setShowSettings(true);
       return;
     }
-    if (!model.trim()) {
+    if (!activeAgent && !model.trim()) {
       setStatus("Enter the provider model or Azure deployment name before sending a message.");
       setShowSettings(true);
       return;
     }
-    if (providerMismatch) {
+    if (!activeAgent && providerMismatch) {
       setStatus("Selected provider id must match the selected provider account.");
       return;
     }
@@ -287,13 +319,21 @@ export default function ChatPage() {
     const requestMessages = [...messages, userMessage];
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setInput("");
-    setStatus("Streaming response...");
+    setStatus(activeAgent ? "Running agent..." : "Streaming response...");
     setIsStreaming(true);
 
     const abortController = new AbortController();
     abortRef.current = abortController;
 
     try {
+      if (activeAgent) {
+        const payload = await apiClient.agents.run(activeAgent.id, { inputText: content }) as { outputText?: string; error?: string; status?: string };
+        if (payload.error) throw new Error(payload.error);
+        updateAssistantMessage(assistantMessage.id, () => payload.outputText ?? "");
+        setStatus(`Agent run ${payload.status ?? "completed"}.`);
+        return;
+      }
+
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
@@ -486,7 +526,7 @@ export default function ChatPage() {
     <form className={`composer ${hasMessages ? "composer--float" : ""}`} onSubmit={sendMessage}>
       <textarea
         rows={1}
-        placeholder={`Message assistant · ${model || "select a model"}`}
+        placeholder={activeAgent ? `Message ${activeAgent.name}` : `Message assistant · ${model || "select a model"}`}
         aria-label="Message"
         value={input}
         onChange={(event) => setInput(event.target.value)}
@@ -513,6 +553,7 @@ export default function ChatPage() {
           aria-label="Settings"
           aria-pressed={showSettings}
           onClick={() => setShowSettings((v) => !v)}
+          disabled={Boolean(activeAgent)}
         >
           <Icon.mixer />
         </button>
@@ -537,6 +578,21 @@ export default function ChatPage() {
             <Icon.mic />
           </button>
         )}
+        {activeAgent ? (
+          <button
+            className="ib"
+            type="button"
+            title="Leave agent"
+            aria-label="Leave agent"
+            onClick={() => {
+              setActiveAgent(null);
+              setStatus("");
+            }}
+            disabled={isStreaming}
+          >
+            <Icon.plus style={{ transform: "rotate(45deg)" }} />
+          </button>
+        ) : null}
         <button className="send" type="submit" title="Send" aria-label="Send" disabled={composerDisabled}>
           <Icon.up />
         </button>

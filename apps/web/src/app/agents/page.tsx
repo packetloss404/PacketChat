@@ -33,6 +33,8 @@ type Agent = {
   status: string;
   published_version_id: string | null;
   updated_at: string;
+  access_role?: "viewer" | "runner" | "editor" | "owner" | string;
+  is_owner?: boolean;
 };
 
 type Draft = {
@@ -50,8 +52,34 @@ type Draft = {
     model?: string;
     temperature?: number;
     maxOutputTokens?: number;
+    maxContextTokens?: number;
+    maxAgentSteps?: number;
     knowledgeBaseIds?: string[];
     knowledgeLimit?: number;
+    fileContext?: {
+      enabled?: boolean;
+      knowledgeBaseIds?: string[];
+      maxChars?: number;
+    };
+    artifacts?: {
+      enabled?: boolean;
+      customPromptMode?: boolean;
+      instructions?: string;
+    };
+    openApiActions?: Array<{
+      id?: string;
+      name?: string;
+      method?: string;
+      url?: string;
+      headers?: Record<string, string>;
+      bodyTemplate?: string;
+      enabled?: boolean;
+    }>;
+    agentChain?: {
+      enabled?: boolean;
+      agentIds?: string[];
+      maxChildRuns?: number;
+    };
     tools?: {
       knowledgeSearch?: boolean;
       calculator?: boolean;
@@ -101,6 +129,29 @@ type RunStep = {
 type SortKey = "title" | "updated";
 type ViewMode = "grid" | "list";
 
+type ShareUser = {
+  id: string;
+  email: string;
+  display_name: string | null;
+  role: string;
+  status: string;
+};
+
+type AgentPermission = {
+  subject_user_id: string;
+  role: "viewer" | "runner" | "editor" | "owner";
+  email: string;
+  display_name: string | null;
+};
+
+const SHARE_ROLES = [
+  { value: "none", label: "No access" },
+  { value: "viewer", label: "Viewer" },
+  { value: "runner", label: "Runner" },
+  { value: "editor", label: "Editor" },
+  { value: "owner", label: "Owner" }
+] as const;
+
 const AVATAR_TINTS = ["#4b8ad6", "#d97757", "#1fb8cd", "#10a37f", "#7c3aed", "#c49a3a", "#79b57a"];
 
 function avatarTint(agentId: string) {
@@ -146,9 +197,14 @@ export default function AgentsPage() {
   const [runOutput, setRunOutput] = useState("");
   const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
   const [runSteps, setRunSteps] = useState<RunStep[]>([]);
+  const [shareTarget, setShareTarget] = useState<Agent | null>(null);
+  const [shareUsers, setShareUsers] = useState<ShareUser[]>([]);
+  const [sharePermissions, setSharePermissions] = useState<AgentPermission[]>([]);
+  const [shareLoading, setShareLoading] = useState(false);
 
   const editorRef = useRef<HTMLDialogElement | null>(null);
   const createRef = useRef<HTMLDialogElement | null>(null);
+  const shareRef = useRef<HTMLDialogElement | null>(null);
   const editorOpenRef = useRef(false);
   const pollAbortRef = useRef<{ cancelled: boolean } | null>(null);
   const createMenuRef = useRef<HTMLDivElement | null>(null);
@@ -366,8 +422,26 @@ export default function AgentsPage() {
         model: draft.spec.model,
         temperature: typeof draft.spec.temperature === "number" ? draft.spec.temperature : undefined,
         maxOutputTokens: typeof draft.spec.maxOutputTokens === "number" ? draft.spec.maxOutputTokens : undefined,
+        maxContextTokens: typeof draft.spec.maxContextTokens === "number" ? draft.spec.maxContextTokens : undefined,
+        maxAgentSteps: typeof draft.spec.maxAgentSteps === "number" ? draft.spec.maxAgentSteps : undefined,
         knowledgeBaseIds: draft.spec.knowledgeBaseIds ?? [],
         knowledgeLimit: draft.spec.knowledgeLimit ?? 5,
+        fileContext: {
+          enabled: Boolean(draft.spec.fileContext?.enabled),
+          knowledgeBaseIds: draft.spec.fileContext?.knowledgeBaseIds ?? [],
+          maxChars: draft.spec.fileContext?.maxChars ?? 12000
+        },
+        artifacts: {
+          enabled: Boolean(draft.spec.artifacts?.enabled),
+          customPromptMode: Boolean(draft.spec.artifacts?.customPromptMode),
+          instructions: draft.spec.artifacts?.instructions ?? ""
+        },
+        openApiActions: draft.spec.openApiActions ?? [],
+        agentChain: {
+          enabled: Boolean(draft.spec.agentChain?.enabled),
+          agentIds: draft.spec.agentChain?.agentIds ?? [],
+          maxChildRuns: draft.spec.agentChain?.maxChildRuns ?? 3
+        },
         tools: {
           knowledgeSearch: Boolean(draft.spec.tools?.knowledgeSearch),
           calculator: Boolean(draft.spec.tools?.calculator),
@@ -430,27 +504,44 @@ export default function AgentsPage() {
   }
 
   async function shareAgent(agent: Agent) {
-    const url =
-      typeof window !== "undefined"
-        ? `${window.location.origin}/chat?agent=${encodeURIComponent(agent.id)}`
-        : `/chat?agent=${encodeURIComponent(agent.id)}`;
-    const clipboard =
-      typeof navigator !== "undefined" && navigator.clipboard && typeof navigator.clipboard.writeText === "function"
-        ? navigator.clipboard
-        : null;
+    setShareTarget(agent);
+    setShareLoading(true);
     try {
-      if (clipboard) {
-        await clipboard.writeText(url);
-        toast({ message: "Link copied.", variant: "success" });
-        return;
-      }
-      throw new Error("clipboard-unavailable");
-    } catch {
-      if (typeof window !== "undefined") {
-        window.prompt("Copy share link", url);
-        toast({ message: "Link copied.", variant: "success" });
-      }
+      const data = await request<{ users: ShareUser[]; permissions: AgentPermission[] }>(`/api/agents/${agent.id}/permissions`);
+      setShareUsers(data.users);
+      setSharePermissions(data.permissions);
+      shareRef.current?.showModal();
+    } catch (error) {
+      const nextError = error instanceof Error ? error.message : String(error);
+      toast({ title: "Unable to open sharing", message: nextError, variant: "error" });
+    } finally {
+      setShareLoading(false);
     }
+  }
+
+  async function updateShare(userId: string, role: string) {
+    if (!shareTarget) return;
+    setShareLoading(true);
+    try {
+      const data = await request<{ permissions: AgentPermission[] }>(`/api/agents/${shareTarget.id}/permissions`, {
+        method: "PATCH",
+        body: JSON.stringify({ permissions: [{ userId, role }] })
+      });
+      setSharePermissions(data.permissions);
+      toast({ message: "Sharing updated.", variant: "success" });
+    } catch (error) {
+      const nextError = error instanceof Error ? error.message : String(error);
+      toast({ title: "Unable to update sharing", message: nextError, variant: "error" });
+    } finally {
+      setShareLoading(false);
+    }
+  }
+
+  function closeShare() {
+    shareRef.current?.close();
+    setShareTarget(null);
+    setShareUsers([]);
+    setSharePermissions([]);
   }
 
   function startChat(agent: Agent) {
@@ -574,6 +665,81 @@ export default function AgentsPage() {
     const current = draft.spec.knowledgeBaseIds ?? [];
     const next = enabled ? [...new Set([...current, knowledgeBaseId])] : current.filter((id) => id !== knowledgeBaseId);
     setDraft({ ...draft, spec: { ...draft.spec, knowledgeBaseIds: next } });
+  }
+
+  function toggleFileContextKnowledgeBase(knowledgeBaseId: string, enabled: boolean) {
+    if (!draft) return;
+    const current = draft.spec.fileContext?.knowledgeBaseIds ?? [];
+    const next = enabled ? [...new Set([...current, knowledgeBaseId])] : current.filter((id) => id !== knowledgeBaseId);
+    setDraft({
+      ...draft,
+      spec: {
+        ...draft.spec,
+        fileContext: {
+          ...draft.spec.fileContext,
+          enabled: draft.spec.fileContext?.enabled ?? next.length > 0,
+          knowledgeBaseIds: next
+        }
+      }
+    });
+  }
+
+  function addOpenApiAction() {
+    if (!draft) return;
+    const current = draft.spec.openApiActions ?? [];
+    setDraft({
+      ...draft,
+      spec: {
+        ...draft.spec,
+        openApiActions: [
+          ...current,
+          { id: `action-${Date.now()}`, name: "New action", method: "GET", url: "https://api.example.com/resource?query={{inputEncoded}}", headers: {}, bodyTemplate: "", enabled: true }
+        ]
+      }
+    });
+  }
+
+  function updateOpenApiAction(index: number, patch: Partial<NonNullable<Draft["spec"]["openApiActions"]>[number]>) {
+    if (!draft) return;
+    const current = draft.spec.openApiActions ?? [];
+    const next = current.map((action, actionIndex) => (actionIndex === index ? { ...action, ...patch } : action));
+    setDraft({ ...draft, spec: { ...draft.spec, openApiActions: next } });
+  }
+
+  function removeOpenApiAction(index: number) {
+    if (!draft) return;
+    const next = (draft.spec.openApiActions ?? []).filter((_, actionIndex) => actionIndex !== index);
+    setDraft({ ...draft, spec: { ...draft.spec, openApiActions: next } });
+  }
+
+  function updateOpenApiHeader(actionIndex: number, raw: string) {
+    try {
+      const parsed = raw.trim() ? JSON.parse(raw) : {};
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        updateOpenApiAction(actionIndex, { headers: parsed as Record<string, string> });
+        return;
+      }
+      toast({ message: "Headers must be a JSON object.", variant: "warning" });
+    } catch {
+      toast({ message: "Headers must be valid JSON.", variant: "warning" });
+    }
+  }
+
+  function toggleChainAgent(agentId: string, enabled: boolean) {
+    if (!draft) return;
+    const current = draft.spec.agentChain?.agentIds ?? [];
+    const next = enabled ? [...new Set([...current, agentId])] : current.filter((id) => id !== agentId);
+    setDraft({
+      ...draft,
+      spec: {
+        ...draft.spec,
+        agentChain: {
+          ...draft.spec.agentChain,
+          enabled: draft.spec.agentChain?.enabled ?? next.length > 0,
+          agentIds: next
+        }
+      }
+    });
   }
 
   const selectedProviderModels = draft?.spec.providerAccountId
@@ -932,6 +1098,14 @@ export default function AgentsPage() {
                   Max output tokens
                   <input className="input" type="number" min="1" max="32000" step="1" value={draft.spec.maxOutputTokens ?? 1024} onChange={(event) => updateSpec({ maxOutputTokens: Number(event.target.value) })} />
                 </label>
+                <label>
+                  Max context tokens
+                  <input className="input" type="number" min="1000" max="200000" step="1000" value={draft.spec.maxContextTokens ?? 8000} onChange={(event) => updateSpec({ maxContextTokens: Number(event.target.value) })} />
+                </label>
+                <label>
+                  Max agent steps
+                  <input className="input" type="number" min="1" max="25" step="1" value={draft.spec.maxAgentSteps ?? 4} onChange={(event) => updateSpec({ maxAgentSteps: Number(event.target.value) })} />
+                </label>
               </div>
 
               {providerAccounts.length === 0 ? (
@@ -941,11 +1115,27 @@ export default function AgentsPage() {
               ) : null}
 
               <div>
-                <div className="eyebrow" style={{ margin: "8px 0 6px" }}>Tools</div>
+                <div className="eyebrow" style={{ margin: "8px 0 6px" }}>Capabilities and tools</div>
                 <div className="agent-tool-grid">
                   <label className="agent-tool-card">
                     <input type="checkbox" checked={Boolean(draft.spec.tools?.knowledgeSearch)} onChange={(event) => updateTool("knowledgeSearch", event.target.checked)} />
-                    <span><strong>Knowledge search</strong><small>Add selected snippets before the model call.</small></span>
+                    <span><strong>File search</strong><small>RAG over selected knowledge bases before the model call.</small></span>
+                  </label>
+                  <label className="agent-tool-card">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(draft.spec.fileContext?.enabled)}
+                      onChange={(event) => updateSpec({ fileContext: { ...draft.spec.fileContext, enabled: event.target.checked } })}
+                    />
+                    <span><strong>File context</strong><small>Inject extracted document text into the agent context.</small></span>
+                  </label>
+                  <label className="agent-tool-card">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(draft.spec.artifacts?.enabled)}
+                      onChange={(event) => updateSpec({ artifacts: { ...draft.spec.artifacts, enabled: event.target.checked } })}
+                    />
+                    <span><strong>Artifacts</strong><small>Add artifact-format instructions for HTML, Mermaid, React, or SVG output.</small></span>
                   </label>
                   <label className="agent-tool-card">
                     <input type="checkbox" checked={Boolean(draft.spec.tools?.calculator)} onChange={(event) => updateTool("calculator", event.target.checked)} />
@@ -955,12 +1145,109 @@ export default function AgentsPage() {
                     <input type="checkbox" checked={Boolean(draft.spec.tools?.urlFetch)} onChange={(event) => updateTool("urlFetch", event.target.checked)} />
                     <span><strong>URL fetch</strong><small>Fetch public URLs as read-only context.</small></span>
                   </label>
+                  <label className="agent-tool-card">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(draft.spec.openApiActions?.some((action) => action.enabled !== false))}
+                      onChange={(event) => {
+                        const current = draft.spec.openApiActions ?? [];
+                        if (current.length === 0 && event.target.checked) addOpenApiAction();
+                        else updateSpec({ openApiActions: current.map((action) => ({ ...action, enabled: event.target.checked })) });
+                      }}
+                    />
+                    <span><strong>OpenAPI actions</strong><small>Call configured HTTP actions during agent runs.</small></span>
+                  </label>
+                  <label className="agent-tool-card">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(draft.spec.agentChain?.enabled)}
+                      onChange={(event) => updateSpec({ agentChain: { ...draft.spec.agentChain, enabled: event.target.checked } })}
+                    />
+                    <span><strong>Agent chain</strong><small>Run selected child agents as pre-run context.</small></span>
+                  </label>
+                  {["Code interpreter", "MCP tools"].map((label) => (
+                    <label className="agent-tool-card" key={label} aria-disabled="true">
+                      <input type="checkbox" disabled />
+                      <span><strong>{label}</strong><small>Runtime integration not configured in this release.</small></span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="eyebrow" style={{ margin: "8px 0 6px" }}>OpenAPI actions</div>
+                {(draft.spec.openApiActions ?? []).map((action, index) => (
+                  <div className="agent-tool-card" key={action.id ?? index} style={{ display: "grid", gap: 8 }}>
+                    <label className="checkbox-row">
+                      <input type="checkbox" checked={action.enabled !== false} onChange={(event) => updateOpenApiAction(index, { enabled: event.target.checked })} />
+                      Enabled
+                    </label>
+                    <div className="agent-editor__grid">
+                      <label>
+                        Name
+                        <input className="input" value={action.name ?? ""} onChange={(event) => updateOpenApiAction(index, { name: event.target.value })} />
+                      </label>
+                      <label>
+                        Method
+                        <select value={action.method ?? "GET"} onChange={(event) => updateOpenApiAction(index, { method: event.target.value })}>
+                          {["GET", "POST", "PUT", "PATCH", "DELETE"].map((method) => <option key={method} value={method}>{method}</option>)}
+                        </select>
+                      </label>
+                    </div>
+                    <label>
+                      URL
+                      <input className="input" value={action.url ?? ""} onChange={(event) => updateOpenApiAction(index, { url: event.target.value })} placeholder="https://api.example.com/tickets?query={{inputEncoded}}" />
+                    </label>
+                    <label>
+                      Headers JSON
+                      <textarea
+                        key={`${action.id ?? index}-${JSON.stringify(action.headers ?? {})}`}
+                        defaultValue={JSON.stringify(action.headers ?? {}, null, 2)}
+                        onBlur={(event) => updateOpenApiHeader(index, event.target.value)}
+                        rows={3}
+                      />
+                    </label>
+                    <label>
+                      Body template
+                      <textarea value={action.bodyTemplate ?? ""} onChange={(event) => updateOpenApiAction(index, { bodyTemplate: event.target.value })} rows={3} placeholder='{"query":"{{input}}"}' />
+                    </label>
+                    <button className="button button--ghost" type="button" onClick={() => removeOpenApiAction(index)}>Remove action</button>
+                  </div>
+                ))}
+                <button className="button button--ghost" type="button" onClick={addOpenApiAction}>Add action</button>
+              </div>
+
+              <div>
+                <div className="eyebrow" style={{ margin: "8px 0 6px" }}>Agent chain</div>
+                <label>
+                  Max child runs
+                  <input
+                    className="input"
+                    type="number"
+                    min="1"
+                    max="5"
+                    step="1"
+                    value={draft.spec.agentChain?.maxChildRuns ?? 3}
+                    onChange={(event) => updateSpec({ agentChain: { ...draft.spec.agentChain, maxChildRuns: Number(event.target.value) } })}
+                  />
+                </label>
+                <div className="checkbox-list" style={{ marginTop: 8 }}>
+                  {agents.filter((agent) => agent.id !== draft.agent_id && agent.published_version_id).map((agent) => (
+                    <label key={agent.id} className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={(draft.spec.agentChain?.agentIds ?? []).includes(agent.id)}
+                        onChange={(event) => toggleChainAgent(agent.id, event.target.checked)}
+                      />
+                      {agent.name}
+                    </label>
+                  ))}
                 </div>
               </div>
 
               {knowledgeBases.length > 0 ? (
                 <div>
-                  <div className="eyebrow" style={{ margin: "8px 0 6px" }}>Knowledge</div>
+                  <div className="eyebrow" style={{ margin: "8px 0 6px" }}>File search knowledge</div>
                   <div className="checkbox-list">
                     {knowledgeBases.map((kb) => (
                       <label key={kb.id} className="checkbox-row">
@@ -975,6 +1262,54 @@ export default function AgentsPage() {
                   </div>
                 </div>
               ) : null}
+
+              {knowledgeBases.length > 0 ? (
+                <div>
+                  <div className="eyebrow" style={{ margin: "8px 0 6px" }}>File context knowledge</div>
+                  <div className="checkbox-list">
+                    {knowledgeBases.map((kb) => (
+                      <label key={kb.id} className="checkbox-row">
+                        <input
+                          type="checkbox"
+                          checked={(draft.spec.fileContext?.knowledgeBaseIds ?? []).includes(kb.id)}
+                          onChange={(event) => toggleFileContextKnowledgeBase(kb.id, event.target.checked)}
+                        />
+                        {kb.name} ({kb.document_count} docs)
+                      </label>
+                    ))}
+                  </div>
+                  <label style={{ marginTop: 8 }}>
+                    File context character budget
+                    <input
+                      className="input"
+                      type="number"
+                      min="1000"
+                      max="50000"
+                      step="1000"
+                      value={draft.spec.fileContext?.maxChars ?? 12000}
+                      onChange={(event) => updateSpec({ fileContext: { ...draft.spec.fileContext, maxChars: Number(event.target.value) } })}
+                    />
+                  </label>
+                </div>
+              ) : null}
+
+              <div>
+                <div className="eyebrow" style={{ margin: "8px 0 6px" }}>Artifact instructions</div>
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(draft.spec.artifacts?.customPromptMode)}
+                    onChange={(event) => updateSpec({ artifacts: { ...draft.spec.artifacts, customPromptMode: event.target.checked } })}
+                  />
+                  Use custom artifact prompt only
+                </label>
+                <textarea
+                  value={draft.spec.artifacts?.instructions ?? ""}
+                  onChange={(event) => updateSpec({ artifacts: { ...draft.spec.artifacts, instructions: event.target.value } })}
+                  rows={4}
+                  placeholder="Optional artifact-specific instructions."
+                />
+              </div>
 
               <details className="agent-editor__test">
                 <summary>Test run</summary>
@@ -1026,6 +1361,53 @@ export default function AgentsPage() {
               </div>
             </>
           )}
+        </form>
+      </dialog>
+
+      <dialog ref={shareRef} className="prompt-dialog agent-editor" onClose={closeShare} aria-label="Share agent">
+        <form
+          className="prompt-dialog__form"
+          onSubmit={(event) => {
+            event.preventDefault();
+          }}
+        >
+          <header className="prompt-dialog__head">
+            <h2>Share {shareTarget?.name ?? "agent"}</h2>
+            <button className="ib" type="button" onClick={closeShare} aria-label="Close" title="Close">
+              <Icon.plus style={{ transform: "rotate(45deg)" }} />
+            </button>
+          </header>
+          <p className="muted" style={{ margin: 0 }}>
+            Grant Viewer to use the agent, Runner to run it from API/chat surfaces, Editor to modify the builder, or Owner to re-share and administer it.
+          </p>
+          <div className="checkbox-list">
+            {shareUsers.map((user) => {
+              const current = sharePermissions.find((permission) => permission.subject_user_id === user.id)?.role ?? "none";
+              return (
+                <label key={user.id} className="checkbox-row" style={{ justifyContent: "space-between", gap: 12 }}>
+                  <span>
+                    {user.display_name || user.email}
+                    <span className="muted" style={{ display: "block", fontSize: 12 }}>{user.email}</span>
+                  </span>
+                  <select
+                    value={current}
+                    disabled={shareLoading}
+                    onChange={(event) => void updateShare(user.id, event.target.value)}
+                    aria-label={`Access for ${user.email}`}
+                    style={{ maxWidth: 160 }}
+                  >
+                    {SHARE_ROLES.map((role) => (
+                      <option key={role.value} value={role.value}>{role.label}</option>
+                    ))}
+                  </select>
+                </label>
+              );
+            })}
+          </div>
+          {shareUsers.length === 0 ? <div className="empty-state">No active users available to share with.</div> : null}
+          <div className="prompt-dialog__actions">
+            <button className="button button--primary" type="button" onClick={closeShare}>Done</button>
+          </div>
         </form>
       </dialog>
 

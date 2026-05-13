@@ -144,8 +144,34 @@ export type AgentSpec = {
   model?: string;
   temperature?: number;
   maxOutputTokens?: number;
+  maxContextTokens?: number;
+  maxAgentSteps?: number;
   knowledgeBaseIds?: string[];
   knowledgeLimit?: number;
+  fileContext?: {
+    enabled?: boolean;
+    knowledgeBaseIds?: string[];
+    maxChars?: number;
+  };
+  artifacts?: {
+    enabled?: boolean;
+    customPromptMode?: boolean;
+    instructions?: string;
+  };
+  openApiActions?: Array<{
+    id?: string;
+    name?: string;
+    method?: string;
+    url?: string;
+    headers?: Record<string, string>;
+    bodyTemplate?: string;
+    enabled?: boolean;
+  }>;
+  agentChain?: {
+    enabled?: boolean;
+    agentIds?: string[];
+    maxChildRuns?: number;
+  };
   tools?: {
     knowledgeSearch?: boolean;
     calculator?: boolean;
@@ -162,6 +188,8 @@ export type Agent = {
   published_version_id: string | null;
   created_at?: string;
   updated_at: string;
+  access_role?: "viewer" | "runner" | "editor" | "owner" | string;
+  is_owner?: boolean;
 };
 
 export type AgentDraft = {

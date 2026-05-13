@@ -41,8 +41,8 @@ See `docs/git-workflow.md` for the checkpoint checklist.
 | --- | --- | --- |
 | `/` | Welcome dashboard with quick actions, system status (`/api/healthz`), Resume-last-chat | ✅ |
 | `/login` | Local password login, invite acceptance, password-reset completion, break-glass with audit ack | ✅ |
-| `/chat` | Empty-state greet + pill composer; transcript with turn copy / inline edit / bookmark; SSE streaming; per-message timestamps; speech-recognition mic when supported | ✅ |
-| `/agents` | Library grid with deterministic avatars + Create / Browse / Search / Sort / Pin; Create modal (scratch or template); editor modal with provider/model/temperature/tools/knowledge bindings; manual runs for published agents when a valid provider account/model is configured | ✅ |
+| `/chat` | Empty-state greet + pill composer; transcript with turn copy / inline edit / bookmark; SSE streaming for normal chat; `?agent=<id>` and Agent Library handoff run published agents from the composer; per-message timestamps; speech-recognition mic when supported | ✅ |
+| `/agents` | Library grid with deterministic avatars + Create / Browse / Search / Sort / Pin; Create modal (scratch or template); builder with provider/model/parameters, file search, file context, artifact instructions, OpenAPI actions, agent chaining, supported tools, ACL sharing, and manual runs for published agents | ✅ |
 | `/providers` | Models panel — left rail by provider (`All / per-provider / Others / Custom`), middle list with search + per-account toggle (real `providers.updateAccount` flip), right detail with Overview + Parameters tabs, ⋯ menu Reset / Export, Add custom model dialog (localStorage). Runtime provider IDs are limited to OpenAI-compatible, Azure OpenAI, Anthropic, Perplexity, and MiniMax. | ✅ |
 | `/projects` | Private project management | ✅ |
 | `/prompts` | Prompt Library — Add prompt modal, Browse-templates modal that creates real prompts, search + tag filter + Title / Recently-updated sort, list/grid views, star favorites (localStorage), Use now hands the body to chat via sessionStorage | ✅ |
@@ -87,7 +87,7 @@ The 48-px right rail expands a 320-px panel when an icon is selected. Each drawe
 - All auth endpoints: login, refresh, logout, invite accept, password reset complete, change password, /me.
 - All conversation, project, prompt, knowledge base, agent, agent draft, agent publish, agent run, admin user, and admin usage CRUD endpoints.
 - SSE streaming chat at `POST /api/chat`.
-- Agent publish and manual synchronous agent runs, including simple pre-run knowledge lookup, calculator, hardened URL fetch, provider streaming, and run event persistence. Scheduled runs, evaluations, approvals, and production-grade run observability are outside V1.
+- Agent publish, ACL sharing, and manual synchronous agent runs, including file search, file context injection, artifact-format instructions, calculator, hardened URL fetch, HTTPS OpenAPI actions, bounded same-owner agent chains, provider streaming, and run event persistence. Scheduled runs, evaluations, approvals, true multi-step tool loops, and production-grade run observability are outside V1.
 - Models toggle persists via the existing `providers.updateAccount` (account-level granularity — the backend has no per-binding toggle yet).
 - Speech Synthesis voice picker enumerates real `window.speechSynthesis` voices; chat reply playback is not wired yet.
 - Theme toggle, font-size slider, and most preferences in `/settings` write through to `localStorage` under `packetchat.settings.<section>.<key>`.
@@ -102,7 +102,7 @@ The 48-px right rail expands a 320-px panel when an icon is selected. Each drawe
 - File attachments in chat — picked file shows but isn't uploaded.
 - Custom models — saved to localStorage; there is no backend endpoint for registering them.
 - Per-binding model toggle — not exposed by the backend; account-level toggle is what fires.
-- Agent share — copies a link; there is no published-agent share endpoint yet.
+- Code interpreter and MCP tools — visible in the builder as unavailable until their runtimes are configured.
 
 ## Deployment Notes
 

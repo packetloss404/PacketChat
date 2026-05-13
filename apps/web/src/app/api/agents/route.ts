@@ -14,10 +14,21 @@ export async function GET(request: Request) {
 
   const sql = getSql();
   const agents = await sql`
-    select id, name, description, status, current_draft_id, published_version_id, created_at, updated_at
-    from agents
-    where owner_user_id = ${user.id}
-    order by updated_at desc
+    select
+      a.id,
+      a.name,
+      a.description,
+      a.status,
+      a.current_draft_id,
+      a.published_version_id,
+      a.created_at,
+      a.updated_at,
+      case when a.owner_user_id = ${user.id} then 'owner' else ap.role end as access_role,
+      a.owner_user_id = ${user.id} as is_owner
+    from agents a
+    left join agent_permissions ap on ap.agent_id = a.id and ap.subject_user_id = ${user.id}
+    where a.owner_user_id = ${user.id} or ap.subject_user_id = ${user.id} or ${user.role === "admin"}
+    order by a.updated_at desc
   `;
 
   return jsonOk({ agents });
@@ -38,8 +49,26 @@ export async function POST(request: Request) {
     instructions: typeof body?.instructions === "string" ? body.instructions : "",
     temperature: 0.7,
     maxOutputTokens: 1024,
+    maxContextTokens: 8000,
+    maxAgentSteps: 4,
     knowledgeBaseIds: [],
     knowledgeLimit: 5,
+    fileContext: {
+      enabled: false,
+      knowledgeBaseIds: [],
+      maxChars: 12000
+    },
+    artifacts: {
+      enabled: false,
+      customPromptMode: false,
+      instructions: ""
+    },
+    openApiActions: [],
+    agentChain: {
+      enabled: false,
+      agentIds: [],
+      maxChildRuns: 3
+    },
     tools: {
       knowledgeSearch: false,
       calculator: false,
