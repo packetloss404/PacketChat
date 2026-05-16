@@ -152,6 +152,9 @@ select {
 .skip-link:focus-visible {
   transform: translateY(0);
 }
+.mobile-nav-scrim {
+  display: none;
+}
 
 /* ---------------- Left rail ---------------- */
 .lr {
@@ -179,6 +182,9 @@ select {
 .lr__top .brand span {
   color: var(--ink-3);
   font-weight: 400;
+}
+.lr__mobile-close {
+  display: none;
 }
 
 .ib {
@@ -467,6 +473,9 @@ select {
 .hdr .ib {
   color: var(--ink-3);
 }
+.hdr__nav-toggle {
+  display: none;
+}
 
 /* ---------------- Stage (empty state) ---------------- */
 .stage {
@@ -649,11 +658,8 @@ select {
   display: flex;
   gap: 4px;
   margin-top: 10px;
-  opacity: 0;
-  transition: opacity 120ms;
-}
-.turn:hover .turn__tools {
   opacity: 1;
+  transition: opacity 120ms;
 }
 .turn__tools .ib {
   width: 26px;
@@ -664,6 +670,24 @@ select {
 .turn__tools .ib:hover {
   background: var(--hover);
   color: var(--ink-2);
+}
+@media (hover: hover) and (pointer: fine) {
+  .turn__tools {
+    opacity: 0;
+  }
+  .turn:hover .turn__tools,
+  .turn:focus-within .turn__tools {
+    opacity: 1;
+  }
+}
+@media (hover: none), (pointer: coarse) {
+  .turn__tools {
+    opacity: 1;
+  }
+  .turn__tools .ib {
+    width: 34px;
+    height: 34px;
+  }
 }
 
 /* ---------------- Admin sheets ---------------- */
@@ -3632,6 +3656,7 @@ label {
 @media (max-width: 720px) {
   .app { grid-template-columns: 1fr; }
   .lr, .rr { display: none; }
+  .hdr__nav-toggle { display: grid; }
   .home-dashboard__hero { grid-template-columns: 1fr; }
   .home-dashboard__quick-grid { grid-template-columns: 1fr; }
   .admin-console-stats { grid-template-columns: 1fr; }
@@ -3675,17 +3700,23 @@ label {
     position: fixed;
     inset: 0 auto 0 0;
     width: min(280px, 80vw);
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     z-index: 60;
     box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
   }
-  .app[data-mobilenav="open"]::after {
-    content: "";
+  .app[data-mobilenav="open"] .lr__mobile-close {
+    display: grid;
+  }
+  .app[data-mobilenav="open"] .mobile-nav-scrim {
+    display: block;
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.55);
     backdrop-filter: blur(2px);
     z-index: 55;
-    pointer-events: auto;
   }
 }
 

@@ -231,7 +231,7 @@ const anthropicAdapter: ProviderAdapter = {
     }
   },
   async listModels(account) {
-    const baseUrl = (account.baseUrl || this.defaultBaseUrl).replace(/\/$/, "");
+    const baseUrl = await providerBaseUrlForRequest(account.provider, this.defaultBaseUrl, account.baseUrl);
     const response = await fetchWithTimeout(`${baseUrl}/v1/models`, {
       headers: {
         "x-api-key": account.apiKey,

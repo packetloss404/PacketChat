@@ -64,3 +64,26 @@ jobs:
 
       - name: Run production gate
         run: npm run prod:check
+
+  compose-check:
+    name: Validate Docker Compose build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Prepare Compose env
+        run: cp .env.example .env
+
+      - name: Validate Compose config
+        run: npm run compose:config
+
+      - name: Build Compose application images
+        run: npm run compose:build

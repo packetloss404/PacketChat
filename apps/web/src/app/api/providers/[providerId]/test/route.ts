@@ -1,6 +1,7 @@
-import { authenticateRequest, requireAdmin } from "@packetchat/auth";
+import { authenticateRequest } from "@packetchat/auth";
 import { getProviderAdapter } from "@packetchat/providers";
 import { getSql, recordAuditEvent } from "@packetchat/db";
+import { requireAdminOrJson } from "../../../../../lib/admin-auth";
 import { jsonError, jsonOk } from "../../../../../lib/http";
 import { getProviderAccountForRuntime } from "../../../../../lib/providers";
 import { providerRateLimit } from "../../../../../lib/rate-limit";
@@ -32,7 +33,8 @@ export async function POST(request: Request, context: { params: Promise<{ provid
   if (visibleAccount.provider !== providerId) return jsonError("Provider mismatch", 400);
 
   if (visibleAccount.scope === "global") {
-    await requireAdmin(request.headers);
+    const admin = await requireAdminOrJson(request.headers);
+    if (admin instanceof Response) return admin;
   }
 
   const account = await getProviderAccountForRuntime(String(body.providerAccountId), user.id, visibleAccount.scope === "user");

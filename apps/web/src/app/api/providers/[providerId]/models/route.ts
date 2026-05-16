@@ -2,6 +2,7 @@ import { authenticateRequest } from "@packetchat/auth";
 import { getSql, recordAuditEvent } from "@packetchat/db";
 import { getProviderAdapter, isUnsupportedModelDiscovery, normalizeFetchError, type ProviderModelSnapshot } from "@packetchat/providers";
 import { jsonError, jsonOk } from "../../../../../lib/http";
+import { canSyncProviderModels } from "../../../../../lib/provider-model-sync";
 import { getProviderAccountForRuntime } from "../../../../../lib/providers";
 import { providerRateLimit } from "../../../../../lib/rate-limit";
 
@@ -39,8 +40,13 @@ export async function POST(request: Request, context: { params: Promise<{ provid
   const visibleAccount = visibleAccounts[0];
   if (!visibleAccount) return jsonError("Provider account not found", 404);
   if (visibleAccount.provider !== providerId) return jsonError("Provider mismatch", 400);
+  if (!canSyncProviderModels(user, visibleAccount)) {
+    return visibleAccount.scope === "global"
+      ? jsonError("Admin authorization required", 403)
+      : jsonError("Provider account not found", 404);
+  }
 
-  const runtimeAccount = await getProviderAccountForRuntime(String(body.providerAccountId), user.id);
+  const runtimeAccount = await getProviderAccountForRuntime(String(body.providerAccountId), user.id, visibleAccount.scope === "user");
   if (!runtimeAccount) return jsonError("Provider account not found", 404);
 
   const adapter = getProviderAdapter(runtimeAccount.provider);

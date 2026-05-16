@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, S3Client, type GetObjectCommandOutput } from "@aws-sdk/client-s3";
 import { getConfig } from "@packetchat/config";
 import { createRequire } from "node:module";
 import JSZip from "jszip";
@@ -32,13 +32,73 @@ export async function checkObjectStorage(): Promise<void> {
   await client.send(new HeadBucketCommand({ Bucket: config.S3_BUCKET_ARTIFACTS }));
 }
 
-export async function downloadObject(bucket: string, key: string): Promise<Buffer> {
+export class FileLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FileLimitError";
+  }
+}
+
+export type DownloadObjectOptions = {
+  maxBytes?: number;
+};
+
+type S3ObjectBody = NonNullable<GetObjectCommandOutput["Body"]>;
+
+function assertByteLimit(bytes: number, maxBytes: number, label: string) {
+  if (bytes > maxBytes) {
+    throw new FileLimitError(`${label} exceeds the ${maxBytes} byte limit`);
+  }
+}
+
+function isAsyncIterableBody(body: S3ObjectBody) {
+  return typeof (body as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] === "function";
+}
+
+function bodyChunkToBuffer(chunk: Uint8Array | string) {
+  if (typeof chunk === "string") return Buffer.from(chunk);
+  if (Buffer.isBuffer(chunk)) return chunk;
+  return Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+}
+
+async function readObjectBody(body: S3ObjectBody, maxBytes?: number) {
+  if (isAsyncIterableBody(body)) {
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+
+    for await (const chunk of body as AsyncIterable<Uint8Array | string>) {
+      const buffer = bodyChunkToBuffer(chunk);
+      totalBytes += buffer.byteLength;
+      if (maxBytes !== undefined) assertByteLimit(totalBytes, maxBytes, "Object body");
+      chunks.push(buffer);
+    }
+
+    return Buffer.concat(chunks, totalBytes);
+  }
+
+  const transformToByteArray = (body as { transformToByteArray?: () => Promise<Uint8Array> }).transformToByteArray;
+  if (typeof transformToByteArray === "function") {
+    const bytes = await transformToByteArray.call(body);
+    if (maxBytes !== undefined) assertByteLimit(bytes.byteLength, maxBytes, "Object body");
+    return Buffer.from(bytes);
+  }
+
+  throw new Error("Unsupported object body returned by object storage");
+}
+
+export async function downloadObject(bucket: string, key: string, options: DownloadObjectOptions = {}): Promise<Buffer> {
   const response = await getS3Client().send(new GetObjectCommand({ Bucket: bucket, Key: key }));
   const body = response.Body;
   if (!body) throw new Error("Object body was empty");
 
-  const bytes = await body.transformToByteArray();
-  return Buffer.from(bytes);
+  if (options.maxBytes !== undefined) {
+    if (!Number.isSafeInteger(options.maxBytes) || options.maxBytes <= 0) {
+      throw new Error("downloadObject maxBytes must be a positive integer");
+    }
+    if (response.ContentLength !== undefined) assertByteLimit(response.ContentLength, options.maxBytes, "Object");
+  }
+
+  return readObjectBody(body, options.maxBytes);
 }
 
 export async function deleteObject(bucket: string, key: string): Promise<void> {
@@ -51,11 +111,24 @@ export const LOCAL_EMBEDDING_SCHEMA_VERSION = 2;
 export const LOCAL_EMBEDDING_VERSION = `${LOCAL_EMBEDDING_MODEL}-v${LOCAL_EMBEDDING_SCHEMA_VERSION}`;
 // Embeddings remain JSONB for now: the local stack cannot assume pgvector is installed
 // in every Postgres target, and this deterministic model is intentionally small.
+export const MAX_EXTRACTED_TEXT_CHARS = 1_000_000;
+export const MAX_PDF_TEXT_PAGES = 100;
+const MAX_TEXT_DECODE_BYTES = MAX_EXTRACTED_TEXT_CHARS * 4;
+const MAX_JSON_FORMAT_BYTES = 1_000_000;
+const MAX_OFFICE_XML_PARTS = 250;
+const MAX_OFFICE_XML_PART_BYTES = 5_000_000;
+const MAX_OFFICE_XML_TOTAL_BYTES = 10_000_000;
 const MIN_PDF_TEXT_CHARS = 20;
 const SCANNED_PDF_MESSAGE = "Scanned PDF OCR not available without rasterizer. Upload an image file for local OCR or a PDF with embedded text.";
 
 const requirePackage = createRequire(import.meta.url);
 const tesseractEnglishData = requirePackage("@tesseract.js-data/eng") as { langPath: string; gzip: boolean };
+
+export type ExtractedSupportedText = {
+  text: string;
+  detectedType: string;
+  truncated?: true;
+};
 
 export type LocalEmbedding = {
   schemaVersion: number;
@@ -82,6 +155,42 @@ function xmlText(xml: string): string {
     .replace(/&apos;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function limitedExtractedText(text: string, forceTruncated = false): { text: string; truncated?: true } {
+  if (forceTruncated || text.length > MAX_EXTRACTED_TEXT_CHARS) {
+    return { text: text.slice(0, MAX_EXTRACTED_TEXT_CHARS), truncated: true };
+  }
+
+  return { text };
+}
+
+function extractionResult(text: string, detectedType: string, forceTruncated = false): ExtractedSupportedText {
+  return extractionFromLimited(limitedExtractedText(text, forceTruncated), detectedType);
+}
+
+function extractionFromLimited(limited: { text: string; truncated?: true }, detectedType: string): ExtractedSupportedText {
+  return {
+    text: limited.text,
+    detectedType,
+    ...(limited.truncated ? { truncated: true as const } : {})
+  };
+}
+
+function decodeBoundedUtf8(bytes: Buffer) {
+  const boundedBytes = bytes.byteLength > MAX_TEXT_DECODE_BYTES ? bytes.subarray(0, MAX_TEXT_DECODE_BYTES) : bytes;
+  const text = boundedBytes.toString("utf8");
+  return limitedExtractedText(text, boundedBytes.byteLength < bytes.byteLength);
+}
+
+type OfficeXmlPart = JSZip.JSZipObject & { _data?: { uncompressedSize?: number } };
+
+function officeXmlUncompressedSize(file: OfficeXmlPart, name: string) {
+  const rawSize = file._data?.uncompressedSize;
+  if (typeof rawSize !== "number" || !Number.isFinite(rawSize)) {
+    throw new FileLimitError(`Office XML part ${name} is missing size metadata`);
+  }
+  return rawSize;
 }
 
 function fnv1a(text: string): number {
@@ -187,12 +296,12 @@ export function cosineSimilarity(a: LocalEmbedding | number[] | null | undefined
 async function extractPdfText(bytes: Buffer) {
   const parser = new PDFParse({ data: new Uint8Array(bytes) });
   try {
-    const result = await parser.getText();
-    const text = result.text;
-    if (text.replace(/\s+/g, "").length < MIN_PDF_TEXT_CHARS) {
+    const result = await parser.getText({ first: MAX_PDF_TEXT_PAGES });
+    const limited = limitedExtractedText(result.text, result.total > MAX_PDF_TEXT_PAGES);
+    if (limited.text.replace(/\s+/g, "").length < MIN_PDF_TEXT_CHARS) {
       throw new Error(SCANNED_PDF_MESSAGE);
     }
-    return text;
+    return limited;
   } finally {
     await parser.destroy();
   }
@@ -205,7 +314,7 @@ async function extractImageText(bytes: Buffer) {
     cacheMethod: "none"
   });
 
-  return result.data.text;
+  return limitedExtractedText(result.data.text);
 }
 
 async function extractOfficeOpenXmlText(bytes: Buffer, detectedType: string) {
@@ -218,21 +327,57 @@ async function extractOfficeOpenXmlText(bytes: Buffer, detectedType: string) {
     return false;
   };
 
-  const parts: string[] = [];
-  for (const name of fileNames.filter(include).sort()) {
-    const content = await zip.files[name].async("string");
-    const text = xmlText(content);
-    if (text) parts.push(text);
+  const includedFileNames = fileNames.filter(include).sort();
+  if (includedFileNames.length > MAX_OFFICE_XML_PARTS) {
+    throw new FileLimitError(`Office document has too many text parts (${includedFileNames.length}; limit ${MAX_OFFICE_XML_PARTS})`);
   }
 
-  return parts.join("\n\n");
+  const parts: string[] = [];
+  let totalTextChars = 0;
+  let totalXmlBytes = 0;
+  let truncated = false;
+
+  for (const name of includedFileNames) {
+    const file = zip.files[name] as OfficeXmlPart;
+    const uncompressedSize = officeXmlUncompressedSize(file, name);
+    if (uncompressedSize > MAX_OFFICE_XML_PART_BYTES) {
+      throw new FileLimitError(`Office XML part ${name} exceeds the ${MAX_OFFICE_XML_PART_BYTES} byte limit`);
+    }
+    totalXmlBytes += uncompressedSize;
+    if (totalXmlBytes > MAX_OFFICE_XML_TOTAL_BYTES) {
+      throw new FileLimitError(`Office XML content exceeds the ${MAX_OFFICE_XML_TOTAL_BYTES} byte limit`);
+    }
+
+    const content = await file.async("string");
+
+    const text = xmlText(content);
+    if (!text) continue;
+
+    const separatorChars = parts.length > 0 ? 2 : 0;
+    const remainingChars = MAX_EXTRACTED_TEXT_CHARS - totalTextChars - separatorChars;
+    if (remainingChars <= 0) {
+      truncated = true;
+      break;
+    }
+
+    if (text.length > remainingChars) {
+      parts.push(text.slice(0, remainingChars));
+      truncated = true;
+      break;
+    }
+
+    parts.push(text);
+    totalTextChars += separatorChars + text.length;
+  }
+
+  return limitedExtractedText(parts.join("\n\n"), truncated);
 }
 
 export async function extractSupportedText(input: {
   bytes: Buffer;
   fileName?: string | null;
   mimeType?: string | null;
-}): Promise<{ text: string; detectedType: string }> {
+}): Promise<ExtractedSupportedText> {
   const mimeType = input.mimeType?.toLowerCase() ?? "";
   const fileName = input.fileName?.toLowerCase() ?? "";
   const isText = mimeType.startsWith("text/");
@@ -254,22 +399,26 @@ export async function extractSupportedText(input: {
   }
 
   if (isJson) {
-    const raw = input.bytes.toString("utf8");
-    try {
-      return { text: JSON.stringify(JSON.parse(raw), null, 2), detectedType: "json" };
-    } catch {
-      return { text: raw, detectedType: "json" };
+    const raw = decodeBoundedUtf8(input.bytes);
+    if (!raw.truncated && input.bytes.byteLength <= MAX_JSON_FORMAT_BYTES) {
+      try {
+        return extractionResult(JSON.stringify(JSON.parse(raw.text), null, 2), "json");
+      } catch {
+        return extractionFromLimited(raw, "json");
+      }
     }
+
+    return extractionFromLimited(raw, "json");
   }
 
-  if (isCsv) return { text: input.bytes.toString("utf8"), detectedType: "csv" };
-  if (isMarkdown) return { text: input.bytes.toString("utf8"), detectedType: "markdown" };
-  if (isPlainText) return { text: input.bytes.toString("utf8"), detectedType: "text" };
-  if (isPdf) return { text: await extractPdfText(input.bytes), detectedType: "pdf" };
-  if (isImage) return { text: await extractImageText(input.bytes), detectedType: "image-ocr" };
-  if (isDocx) return { text: await extractOfficeOpenXmlText(input.bytes, "docx"), detectedType: "docx" };
-  if (isPptx) return { text: await extractOfficeOpenXmlText(input.bytes, "pptx"), detectedType: "pptx" };
-  if (isXlsx) return { text: await extractOfficeOpenXmlText(input.bytes, "xlsx"), detectedType: "xlsx" };
+  if (isCsv) return extractionFromLimited(decodeBoundedUtf8(input.bytes), "csv");
+  if (isMarkdown) return extractionFromLimited(decodeBoundedUtf8(input.bytes), "markdown");
+  if (isPlainText) return extractionFromLimited(decodeBoundedUtf8(input.bytes), "text");
+  if (isPdf) return extractionFromLimited(await extractPdfText(input.bytes), "pdf");
+  if (isImage) return extractionFromLimited(await extractImageText(input.bytes), "image-ocr");
+  if (isDocx) return extractionFromLimited(await extractOfficeOpenXmlText(input.bytes, "docx"), "docx");
+  if (isPptx) return extractionFromLimited(await extractOfficeOpenXmlText(input.bytes, "pptx"), "pptx");
+  if (isXlsx) return extractionFromLimited(await extractOfficeOpenXmlText(input.bytes, "xlsx"), "xlsx");
 
   throw new Error(`Unsupported file type for knowledge ingestion: ${input.mimeType || fileName || "unknown MIME type"}`);
 }

@@ -6,11 +6,14 @@ Run this checklist after a local start, release deployment, restore drill, or op
 
 - `.env` exists and has non-default `BOOTSTRAP_TOKEN`, `JWT_SECRET`, and `ENCRYPTION_KEY_BASE64` for any shared environment.
 - `APP_BASE_URL` matches the URL being tested.
+- `npm run compose:check` passes for Docker/Compose or dependency changes. This renders the Compose config and builds the `web`, `worker`, and `migrate` image targets without starting containers.
 - `npm run compose:up` completed without container restart loops.
 - `npm run compose:migrate` completed exactly once for the current release.
 - `docker compose --env-file .env -f infrastructure/compose/docker-compose.yml ps` shows expected services running or healthy.
 
 ## Health
+
+CI runs the static production gate plus `npm run compose:check`. It intentionally does not run this live smoke script because readiness depends on a started stack, applied migrations, object storage buckets, and optional deployment credentials.
 
 - Run the lightweight API smoke script:
 

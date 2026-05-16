@@ -33,7 +33,7 @@ This repository is on branch `main` with origin `git@github.com:packetloss404/Pa
 
 - Keep `.env`, `.env.*`, `secrets/`, local data directories, backups, build outputs, logs, `node_modules/`, and `*.tsbuildinfo` out of git.
 - Keep `.env.example` tracked as the non-secret configuration template.
-- Before committing, run `npm run verify` (typecheck, JS syntax/workspace lint, and tests). For local production readiness checks, run `npm run audit:prod` and `npm run prod:check`; `audit:prod` gates high-severity production advisories and may still print lower-severity dependency advisories. If the Compose stack is running, also run `npm run smoke`.
+- Before committing, run `npm run verify` (typecheck, JS syntax/workspace lint, and tests). For local production readiness checks, run `npm run audit:prod`, `npm run prod:check`, and `npm run compose:check` when Docker is available; `audit:prod` gates high-severity production advisories and may still print lower-severity dependency advisories. If the Compose stack is running, also run `npm run smoke`.
 
 See `docs/git-workflow.md` for the checkpoint checklist.
 

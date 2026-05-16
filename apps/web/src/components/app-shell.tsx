@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiClient } from "../lib/api-client";
 import { changePassword, getAccessToken } from "../lib/auth-client";
 import { useAuth } from "./auth-provider";
@@ -65,7 +65,12 @@ function resolveTitle(pathname: string) {
   return hit?.title ?? "PacketChat";
 }
 
-function LeftRail() {
+type LeftRailProps = {
+  onMobileClose?: () => void;
+  onNavigate?: () => void;
+};
+
+function LeftRail({ onMobileClose, onNavigate }: LeftRailProps) {
   const pathname = usePathname() ?? "/";
   const { user } = useAuth();
   const displayName = user?.displayName || user?.email?.split("@")[0] || "Guest";
@@ -133,7 +138,11 @@ function LeftRail() {
   }, [user]);
 
   return (
-    <aside className="lr" aria-label="Primary navigation">
+    <aside
+      className="lr"
+      id="primary-navigation"
+      aria-label="Primary navigation"
+    >
       <div className="lr__top">
         <button
           className="ib ib--preview"
@@ -158,9 +167,21 @@ function LeftRail() {
           <Icon.bookmark />
           <span className="preview-dot" aria-hidden="true">Preview</span>
         </button>
-        <Link className="ib" href="/chat" title="New chat" aria-label="New chat">
+        <Link className="ib" href="/chat" title="New chat" aria-label="New chat" onClick={onNavigate}>
           <Icon.edit />
         </Link>
+        {onMobileClose ? (
+          <button
+            className="ib lr__mobile-close"
+            type="button"
+            title="Close navigation"
+            aria-label="Close navigation"
+            onClick={onMobileClose}
+            data-mobile-nav-close
+          >
+            <Icon.plus style={{ transform: "rotate(45deg)" }} />
+          </button>
+        ) : null}
       </div>
 
       <label className="lr__search lr__search--preview" aria-label="Search messages (preview)">
@@ -178,7 +199,7 @@ function LeftRail() {
           const active = isActivePath(pathname, item.href);
           const badge = counts[item.id] ?? item.badge;
           const link = (
-            <Link key={item.id} href={item.href} aria-current={active ? "page" : undefined} className={active ? "on" : undefined}>
+            <Link key={item.id} href={item.href} aria-current={active ? "page" : undefined} className={active ? "on" : undefined} onClick={onNavigate}>
               {item.icon}
               <span>{item.label}</span>
               {badge ? <span className="badge">{badge}</span> : null}
@@ -210,7 +231,7 @@ function LeftRail() {
         {pluginsNav.map((item) => {
           const active = isActivePath(pathname, item.href);
           return (
-            <Link key={item.id} href={item.href} aria-current={active ? "page" : undefined} className={active ? "on" : undefined}>
+            <Link key={item.id} href={item.href} aria-current={active ? "page" : undefined} className={active ? "on" : undefined} onClick={onNavigate}>
               {item.icon}
               <span>{item.label}</span>
             </Link>
@@ -221,12 +242,12 @@ function LeftRail() {
       <div className="lr__list" />
 
 
-      <UserFooter displayName={displayName} initials={initials} />
+      <UserFooter displayName={displayName} initials={initials} onNavigate={onNavigate} />
     </aside>
   );
 }
 
-function UserFooter({ displayName, initials }: { displayName: string; initials: string }) {
+function UserFooter({ displayName, initials, onNavigate }: { displayName: string; initials: string; onNavigate?: () => void }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const { user, logout } = useAuth();
@@ -277,7 +298,7 @@ function UserFooter({ displayName, initials }: { displayName: string; initials: 
         <span className="nm">{displayName}</span>
         <Icon.chev />
       </button>
-      <Link className="ib" href="/settings" title="Settings" aria-label="Settings">
+      <Link className="ib" href="/settings" title="Settings" aria-label="Settings" onClick={onNavigate}>
         <Icon.gear />
       </Link>
 
@@ -334,7 +355,10 @@ function UserFooter({ displayName, initials }: { displayName: string; initials: 
                 role="menuitem"
                 href="/settings"
                 className="user-pop__btn"
-                onClick={() => setMenuOpen(false)}
+                onClick={() => {
+                  setMenuOpen(false);
+                  onNavigate?.();
+                }}
               >
                 <span className="user-pop__icon user-pop__icon--key"><Icon.key /></span>
                 API Keys <span className="inline-preview">Preview</span>
@@ -357,7 +381,10 @@ function UserFooter({ displayName, initials }: { displayName: string; initials: 
               target="_blank"
               rel="noreferrer"
               className="user-pop__btn"
-              onClick={() => setMenuOpen(false)}
+              onClick={() => {
+                setMenuOpen(false);
+                onNavigate?.();
+              }}
             >
               <span className="user-pop__icon user-pop__icon--gh"><Icon.github /></span>
               packetloss404 GitHub
@@ -471,7 +498,13 @@ function ChangePasswordDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-function HeaderBar() {
+type HeaderBarProps = {
+  mobileNavOpen?: boolean;
+  mobileNavButtonRef?: React.RefObject<HTMLButtonElement | null>;
+  onMobileNavOpen?: () => void;
+};
+
+function HeaderBar({ mobileNavOpen = false, mobileNavButtonRef, onMobileNavOpen }: HeaderBarProps = {}) {
   const pathname = usePathname() ?? "/";
   const title = resolveTitle(pathname);
   const { user, logout } = useAuth();
@@ -490,6 +523,20 @@ function HeaderBar() {
 
   return (
     <header className="hdr" aria-label="Workspace header">
+      {onMobileNavOpen ? (
+        <button
+          ref={mobileNavButtonRef}
+          className="ib hdr__nav-toggle"
+          type="button"
+          title="Open navigation"
+          aria-label="Open navigation"
+          aria-controls="primary-navigation"
+          aria-expanded={mobileNavOpen}
+          onClick={onMobileNavOpen}
+        >
+          <Icon.sidebar />
+        </button>
+      ) : null}
       <button
         className="hdr__model hdr__model--preview"
         type="button"
@@ -550,9 +597,10 @@ type RightRailProps = {
   onToggle: () => void;
   activePanel: string | null;
   onPanelChange: (panel: string | null) => void;
+  ariaHidden?: boolean;
 };
 
-function RightRail({ expanded, onToggle, activePanel, onPanelChange }: RightRailProps) {
+function RightRail({ expanded, onToggle, activePanel, onPanelChange, ariaHidden = false }: RightRailProps) {
   const router = useRouter();
   const item = (id: string, icon: React.ReactNode, label: string) => {
     const on = activePanel === id;
@@ -572,7 +620,7 @@ function RightRail({ expanded, onToggle, activePanel, onPanelChange }: RightRail
   };
 
   return (
-    <aside className="rr" aria-label="Panels">
+    <aside className="rr" aria-label="Panels" aria-hidden={ariaHidden ? true : undefined}>
       <button
         className="ib"
         type="button"
@@ -1012,9 +1060,18 @@ function RightDrawer({ panel, onClose }: RightDrawerProps) {
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname() ?? "/";
   const [rrExpanded, setRrExpanded] = useState(false);
   const [rrPanel, setRrPanel] = useState<string | null>(null);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const mobileNavButtonRef = useRef<HTMLButtonElement | null>(null);
   const drawerOpen = rrPanel !== null && PANEL_TITLES[rrPanel] !== undefined;
+  const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
+  const openMobileNav = useCallback(() => setMobileNavOpen(true), []);
+
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [pathname]);
 
   useEffect(() => {
     if (!drawerOpen) return;
@@ -1024,6 +1081,87 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [drawerOpen]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const query = window.matchMedia("(max-width: 720px)");
+    if (!query.matches) {
+      setMobileNavOpen(false);
+      return;
+    }
+
+    function handleChange(event: MediaQueryListEvent) {
+      if (!event.matches) setMobileNavOpen(false);
+    }
+
+    query.addEventListener("change", handleChange);
+    return () => query.removeEventListener("change", handleChange);
+  }, [mobileNavOpen]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const drawer = document.getElementById("primary-navigation");
+    const focusableSelector = [
+      "a[href]",
+      "button:not([disabled])",
+      "input:not([disabled])",
+      "textarea:not([disabled])",
+      "select:not([disabled])",
+      "[tabindex]:not([tabindex='-1'])"
+    ].join(",");
+    const getFocusable = () =>
+      Array.from(drawer?.querySelectorAll<HTMLElement>(focusableSelector) ?? []).filter((element) => element.getClientRects().length > 0);
+    const focusFirst = () => {
+      const closeButton = drawer?.querySelector<HTMLElement>("[data-mobile-nav-close]");
+      const first = closeButton ?? getFocusable()[0];
+      first?.focus();
+    };
+    const frame = window.requestAnimationFrame(focusFirst);
+
+    function handleKeydown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMobileNavOpen(false);
+        return;
+      }
+
+      if (event.key !== "Tab" || !drawer) return;
+      const focusable = getFocusable();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (!drawer.contains(active)) {
+        event.preventDefault();
+        first.focus();
+        return;
+      }
+      if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeydown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", handleKeydown);
+      if (previouslyFocused && document.contains(previouslyFocused)) {
+        previouslyFocused.focus();
+      } else {
+        mobileNavButtonRef.current?.focus();
+      }
+    };
+  }, [mobileNavOpen]);
 
   function handleHidePanelToggle() {
     setRrExpanded((v) => !v);
@@ -1037,11 +1175,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       data-rightrail="on"
       data-rrexpanded={rrExpanded ? "on" : "off"}
       data-rrpanel={drawerOpen ? "open" : "closed"}
+      data-mobilenav={mobileNavOpen ? "open" : "closed"}
     >
       <a className="skip-link" href="#main-content">Skip to main content</a>
-      <LeftRail />
-      <main className="main" id="main-content" tabIndex={-1}>
-        <HeaderBar />
+      <LeftRail onMobileClose={closeMobileNav} onNavigate={closeMobileNav} />
+      {mobileNavOpen ? (
+        <button className="mobile-nav-scrim" type="button" aria-label="Close navigation" onClick={closeMobileNav} tabIndex={-1} />
+      ) : null}
+      <main className="main" id="main-content" tabIndex={-1} aria-hidden={mobileNavOpen ? true : undefined}>
+        <HeaderBar
+          mobileNavOpen={mobileNavOpen}
+          mobileNavButtonRef={mobileNavButtonRef}
+          onMobileNavOpen={openMobileNav}
+        />
         {children}
       </main>
       {drawerOpen && rrPanel ? <RightDrawer panel={rrPanel} onClose={() => setRrPanel(null)} /> : null}
@@ -1050,6 +1196,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         onToggle={handleHidePanelToggle}
         activePanel={rrPanel}
         onPanelChange={setRrPanel}
+        ariaHidden={mobileNavOpen}
       />
     </div>
   );

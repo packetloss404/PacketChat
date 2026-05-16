@@ -1,6 +1,7 @@
 import { createWorker, queueNames, type FileIngestionJob } from "@packetchat/jobs";
+import { getConfig } from "@packetchat/config";
 import { checkDatabase, getSql } from "@packetchat/db";
-import { checkObjectStorage, createLocalEmbedding, downloadObject, extractSupportedText, LOCAL_EMBEDDING_VERSION } from "@packetchat/files";
+import { checkObjectStorage, createLocalEmbedding, downloadObject, extractSupportedText, LOCAL_EMBEDDING_VERSION, MAX_EXTRACTED_TEXT_CHARS } from "@packetchat/files";
 import { checkRedis } from "@packetchat/jobs";
 import { logger } from "@packetchat/observability";
 import { writeFile } from "node:fs/promises";
@@ -130,6 +131,7 @@ function attachFailureRecorder<DataType, ResultType, NameType extends string>(
 }
 
 async function ingestFile(jobData: FileIngestionJob) {
+  const config = getConfig();
   const sql = getSql();
   const documents = await sql<{
     id: string;
@@ -176,7 +178,7 @@ async function ingestFile(jobData: FileIngestionJob) {
       `;
     });
 
-    const bytes = await downloadObject(document.bucket, document.object_key);
+    const bytes = await downloadObject(document.bucket, document.object_key, { maxBytes: config.MAX_UPLOAD_BYTES });
     const extracted = await extractSupportedText({
       bytes,
       fileName: document.file_name || document.title,
@@ -184,6 +186,11 @@ async function ingestFile(jobData: FileIngestionJob) {
     });
     const chunks = chunkText(extracted.text);
     if (chunks.length === 0) throw new Error("No text content could be extracted from this file");
+    const extractionMetadata = {
+      detectedType: extracted.detectedType,
+      embeddingVersion: LOCAL_EMBEDDING_VERSION,
+      ...(extracted.truncated ? { extractionTruncated: true, extractionLimitChars: MAX_EXTRACTED_TEXT_CHARS } : {})
+    };
 
     await sql.begin(async (tx) => {
       await tx`delete from knowledge_chunks where document_id = ${document.id}`;
@@ -197,14 +204,14 @@ async function ingestFile(jobData: FileIngestionJob) {
             ${chunk.content},
             ${chunk.tokenCount},
             ${JSON.stringify(createLocalEmbedding(chunk.content))}::jsonb,
-            ${JSON.stringify({ startWord: chunk.startWord, endWord: chunk.endWord, detectedType: extracted.detectedType, embeddingVersion: LOCAL_EMBEDDING_VERSION })}::jsonb
+            ${JSON.stringify({ startWord: chunk.startWord, endWord: chunk.endWord, ...extractionMetadata })}::jsonb
           )
         `;
       }
       await tx`
         update knowledge_documents
         set ingest_status = 'ready',
-            source_metadata = source_metadata || ${JSON.stringify({ chunkCount: chunks.length, detectedType: extracted.detectedType, embeddingVersion: LOCAL_EMBEDDING_VERSION })}::jsonb,
+            source_metadata = source_metadata || ${JSON.stringify({ chunkCount: chunks.length, ...extractionMetadata })}::jsonb,
             updated_at = now()
         where id = ${document.id}
       `;

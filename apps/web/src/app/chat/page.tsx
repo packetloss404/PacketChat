@@ -940,7 +940,7 @@ function Turn({
         <div className="turn__body">{renderBody(message.content || placeholder)}</div>
       )}
       {showTools && !isEditing ? (
-        <div className="turn__tools">
+        <div className="turn__tools" role="group" aria-label="Assistant message actions">
           <button className="ib" type="button" title="Copy" aria-label="Copy" onClick={() => onCopy(message.content)}>
             <Icon.copy />
           </button>

@@ -65,6 +65,24 @@ test("provider base URL validation rejects embedded credentials", () => {
   if (!result.ok) assert.equal(result.code, "provider_base_url_credentials_blocked");
 });
 
+test("Anthropic model discovery uses runtime base URL safety checks", async () => {
+  let fetchCalled = false;
+  globalThis.fetch = async () => {
+    fetchCalled = true;
+    return new Response(JSON.stringify({ data: [] }), { status: 200 });
+  };
+
+  await assert.rejects(
+    () => getProviderAdapter("anthropic").listModels({ ...account("anthropic"), baseUrl: "https://192.168.1.10:8080" }),
+    (error: unknown) => {
+      assert.equal(error instanceof Error ? error.name : "", "ProviderFetchError");
+      assert.equal((error as { code?: string }).code, "provider_base_url_private_blocked");
+      return true;
+    }
+  );
+  assert.equal(fetchCalled, false);
+});
+
 test("OpenAI-compatible streams surface provider error chunks", async () => {
   globalThis.fetch = async () => new Response(
     new ReadableStream({
