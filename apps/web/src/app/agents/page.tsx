@@ -24,7 +24,7 @@ Constraints:
 When to use context:
 - Reference attached knowledge bases when the user asks domain-specific questions.
 `;
-const TERMINAL_RUN_STATUSES = new Set(["succeeded", "failed", "cancelled", "canceled", "completed", "errored"]);
+const TERMINAL_RUN_STATUSES = new Set(["succeeded", "failed", "cancelled", "canceled", "completed", "errored", "waiting_input"]);
 
 type Agent = {
   id: string;
@@ -121,11 +121,46 @@ type RunEvent = {
 
 type RunStep = {
   id: string;
+  parent_step_id?: string | null;
   sequence_no: number;
   step_type: string;
   status: string;
   name: string | null;
+  input?: Record<string, unknown>;
   output: Record<string, unknown>;
+  started_at?: string | null;
+  ended_at?: string | null;
+};
+
+type RunUsage = {
+  provider: string | null;
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  search_queries: number;
+  cost_usd: number | null;
+  usage_count: number;
+  unknown_cost_count: number;
+  estimated_count: number;
+};
+
+type AgentRunSummary = {
+  id: string;
+  agent_id: string;
+  agent_version_id: string;
+  conversation_id: string | null;
+  trigger_type: string;
+  status: string;
+  input: Record<string, unknown>;
+  started_at: string | null;
+  ended_at: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  step_count: number;
+  event_count: number;
+  usage: RunUsage;
 };
 
 type SortKey = "title" | "updated";
@@ -155,6 +190,95 @@ const SHARE_ROLES = [
 ] as const;
 
 const AVATAR_TINTS = ["#4b8ad6", "#d97757", "#1fb8cd", "#10a37f", "#7c3aed", "#c49a3a", "#79b57a"];
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "Not started";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown";
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function formatDuration(start?: string | null, end?: string | null) {
+  if (!start) return "Not started";
+  const started = new Date(start).getTime();
+  const ended = end ? new Date(end).getTime() : Date.now();
+  if (!Number.isFinite(started) || !Number.isFinite(ended) || ended < started) return "Unknown";
+  const totalSeconds = Math.max(1, Math.round((ended - started) / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${seconds}s`;
+}
+
+function formatNumber(value?: number | null) {
+  return new Intl.NumberFormat().format(value ?? 0);
+}
+
+function formatCost(value?: number | null) {
+  if (value == null) return "Cost unknown";
+  const precision = value > 0 && value < 0.01 ? 6 : 2;
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: precision,
+    maximumFractionDigits: 6
+  }).format(value);
+}
+
+function runStatusTone(status?: string | null): "neutral" | "success" | "warning" | "danger" | "info" {
+  if (status === "completed" || status === "succeeded") return "success";
+  if (status === "running" || status === "preparing") return "info";
+  if (status === "queued" || status === "waiting_input") return "warning";
+  if (status === "failed" || status === "errored" || status === "timed_out" || status === "cancelled" || status === "canceled") return "danger";
+  return "neutral";
+}
+
+function compactJson(value: unknown, maxLength = 1400) {
+  if (typeof value === "string") return value.length > maxLength ? `${value.slice(0, maxLength)}\n...` : value;
+  try {
+    const text = JSON.stringify(value ?? {}, null, 2);
+    return text.length > maxLength ? `${text.slice(0, maxLength)}\n...` : text;
+  } catch {
+    return String(value);
+  }
+}
+
+function payloadString(payload: Record<string, unknown> | undefined, key: string) {
+  const value = payload?.[key];
+  return typeof value === "string" ? value : null;
+}
+
+function runInputText(input: Record<string, unknown>) {
+  const text = payloadString(input, "text") ?? payloadString(input, "inputText") ?? payloadString(input, "input");
+  if (!text) return "Untitled run";
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > 120 ? `${normalized.slice(0, 120)}...` : normalized;
+}
+
+function outputFromRun(events: RunEvent[], steps: RunStep[]) {
+  const completed = [...events].reverse().find((event) => event.event_type === "run.completed");
+  const eventOutput = payloadString(completed?.payload, "outputText");
+  if (eventOutput) return eventOutput;
+  const llmStep = [...steps].reverse().find((step) => step.step_type === "llm" && typeof step.output?.text === "string");
+  return payloadString(llmStep?.output, "text") ?? "";
+}
+
+function usageCostLabel(usage: RunUsage | null) {
+  if (!usage || usage.usage_count === 0) return "No usage";
+  const suffix = usage.estimated_count > 0 ? " est." : "";
+  if (usage.cost_usd == null) return "Cost unknown";
+  return `${formatCost(usage.cost_usd)}${suffix}`;
+}
+
+function usageTokenLabel(usage: RunUsage | null) {
+  if (!usage || usage.usage_count === 0) return "0 tokens";
+  return `${formatNumber(usage.input_tokens + usage.output_tokens + usage.reasoning_tokens)} tokens`;
+}
+
+function usageModelLabel(usage: RunUsage | null) {
+  if (!usage || usage.usage_count === 0) return "No provider usage";
+  return [usage.provider, usage.model].filter(Boolean).join(" / ") || "Provider usage";
+}
 
 function avatarTint(agentId: string) {
   let hash = 0;
@@ -224,6 +348,11 @@ export default function AgentsPage() {
   const [runOutput, setRunOutput] = useState("");
   const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
   const [runSteps, setRunSteps] = useState<RunStep[]>([]);
+  const [runUsage, setRunUsage] = useState<RunUsage | null>(null);
+  const [runHistory, setRunHistory] = useState<AgentRunSummary[]>([]);
+  const [runHistoryLoading, setRunHistoryLoading] = useState(false);
+  const [runDetailLoading, setRunDetailLoading] = useState(false);
+  const [runHistoryError, setRunHistoryError] = useState("");
   const [shareTarget, setShareTarget] = useState<Agent | null>(null);
   const [shareUsers, setShareUsers] = useState<ShareUser[]>([]);
   const [sharePermissions, setSharePermissions] = useState<AgentPermission[]>([]);
@@ -250,6 +379,9 @@ export default function AgentsPage() {
     if (sort === "updated") copy.sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
     return copy;
   }, [filtered, sort]);
+
+  const selectedRun = useMemo(() => runHistory.find((run) => run.id === runId) ?? null, [runHistory, runId]);
+  const selectedRunUsage = runUsage ?? selectedRun?.usage ?? null;
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const headers = new Headers(init?.headers);
@@ -360,9 +492,15 @@ export default function AgentsPage() {
       setRunOutput("");
       setRunEvents([]);
       setRunSteps([]);
+      setRunUsage(null);
+      setRunHistory([]);
+      setRunDetailLoading(false);
+      setRunHistoryError("");
       setRunInput("");
+      void loadRunHistory(agentId, { selectLatest: true });
     } catch (error) {
       setDraft(null);
+      setRunHistory([]);
       const nextError = error instanceof Error ? error.message : String(error);
       toast({ title: "Unable to load draft", message: nextError, variant: "error" });
     } finally {
@@ -386,6 +524,9 @@ export default function AgentsPage() {
     if (pollAbortRef.current) pollAbortRef.current.cancelled = true;
     editorRef.current?.close();
     setDraft(null);
+    setRunHistory([]);
+    setRunDetailLoading(false);
+    setRunHistoryError("");
   }
 
   function openCreate(prefill?: { instructions?: string }) {
@@ -623,17 +764,68 @@ export default function AgentsPage() {
     });
   }
 
+  function setRunDetailError(error: unknown) {
+    const nextError = error instanceof Error ? error.message : String(error);
+    setRunHistoryError(nextError);
+  }
+
+  async function loadRunHistory(agentId: string, options?: { selectLatest?: boolean }) {
+    setRunHistoryLoading(true);
+    setRunHistoryError("");
+    try {
+      const data = await request<{ runs: AgentRunSummary[] }>(`/api/agents/${agentId}/runs`);
+      setRunHistory(data.runs);
+      if (data.runs.length === 0) {
+        setRunId(null);
+        setRunStatus(null);
+        setRunOutput("");
+        setRunEvents([]);
+        setRunSteps([]);
+        setRunUsage(null);
+        return;
+      }
+      if (options?.selectLatest && data.runs[0]) {
+        const latest = data.runs[0];
+        setRunId(latest.id);
+        setRunStatus(latest.status);
+        setRunUsage(latest.usage);
+        void fetchRun(agentId, latest.id).catch(setRunDetailError);
+      }
+    } catch (error) {
+      const nextError = error instanceof Error ? error.message : String(error);
+      setRunHistoryError(nextError);
+    } finally {
+      setRunHistoryLoading(false);
+    }
+  }
+
   async function fetchRun(agentId: string, nextRunId: string) {
-    const data = await request<{ run: { status: string; error_message: string | null }; steps: RunStep[]; events: RunEvent[] }>(
-      `/api/agents/${agentId}/runs/${nextRunId}`
-    );
-    setRunStatus(data.run.status);
-    setRunEvents(data.events);
-    setRunSteps(data.steps);
-    const completed = data.events.find((event) => event.event_type === "run.completed");
-    const outputText = completed?.payload?.outputText;
-    if (typeof outputText === "string") setRunOutput(outputText);
-    return data.run.status;
+    setRunDetailLoading(true);
+    try {
+      const data = await request<{ run: { status: string; error_message: string | null }; usage: RunUsage; steps: RunStep[]; events: RunEvent[] }>(
+        `/api/agents/${agentId}/runs/${nextRunId}`
+      );
+      setRunId(nextRunId);
+      setRunStatus(data.run.status);
+      setRunEvents(data.events);
+      setRunSteps(data.steps);
+      setRunUsage(data.usage);
+      setRunOutput(outputFromRun(data.events, data.steps));
+      return data.run.status;
+    } finally {
+      setRunDetailLoading(false);
+    }
+  }
+
+  function openRun(run: AgentRunSummary) {
+    if (!draft) return;
+    setRunId(run.id);
+    setRunStatus(run.status);
+    setRunUsage(run.usage);
+    setRunOutput("");
+    setRunEvents([]);
+    setRunSteps([]);
+    void fetchRun(draft.agent_id, run.id).catch(setRunDetailError);
   }
 
   async function pollRunUntilDone(agentId: string, nextRunId: string, token: { cancelled: boolean }) {
@@ -670,6 +862,7 @@ export default function AgentsPage() {
     setRunOutput("");
     setRunEvents([]);
     setRunSteps([]);
+    setRunUsage(null);
     if (pollAbortRef.current) pollAbortRef.current.cancelled = true;
     const token = { cancelled: false };
     pollAbortRef.current = token;
@@ -686,6 +879,8 @@ export default function AgentsPage() {
         ? data.status
         : await pollRunUntilDone(agentId, data.runId, token);
       if (token.cancelled || !editorOpenRef.current) return;
+      await fetchRun(agentId, data.runId).catch(setRunDetailError);
+      await loadRunHistory(agentId);
       const status = finalStatus ?? data.status;
       const isError = Boolean(data.error) || status === "failed" || status === "errored";
       toast({ message: data.error ?? `Run ${status}.`, variant: isError ? "error" : "success" });
@@ -1384,8 +1579,8 @@ export default function AgentsPage() {
                 />
               </div>
 
-              <details className="agent-editor__test">
-                <summary>Test run</summary>
+              <details className="agent-editor__test" open>
+                <summary>Test runs</summary>
                 <div className="agent-editor__test-body">
                   <label>
                     Input
@@ -1393,17 +1588,107 @@ export default function AgentsPage() {
                   </label>
                   <div className="cluster">
                     <button className="button button--ghost" type="button" disabled={isBusy} onClick={() => void runAgent()}>Run published version</button>
-                    {runId ? <StatusBadge>{runStatus ?? "running"}</StatusBadge> : null}
+                    <button className="button button--ghost" type="button" disabled={runHistoryLoading} onClick={() => void loadRunHistory(draft.agent_id)}>Refresh history</button>
+                    {runId ? <StatusBadge tone={runStatusTone(runStatus ?? selectedRun?.status)}>{runStatus ?? selectedRun?.status ?? "running"}</StatusBadge> : null}
                   </div>
-                  {runStatus === "running" ? <LoadingBlock title="Run is in progress" /> : null}
-                  {runOutput ? <pre className="agent-trace__entry">{runOutput}</pre> : null}
-                  {runSteps.length > 0 ? (
-                    <div className="agent-trace">
-                      {runSteps.map((step) => (
-                        <pre key={step.id} className="agent-trace__entry">{step.sequence_no}. {step.step_type} / {step.status}</pre>
-                      ))}
+                  {runStatus && !TERMINAL_RUN_STATUSES.has(runStatus) ? <LoadingBlock title="Run is in progress" /> : null}
+                  <div className="agent-run-history">
+                    <div className="agent-run-history__toolbar">
+                      <strong>Run history</strong>
+                      <span className="muted">{runHistoryLoading ? "Refreshing..." : `${runHistory.length} recent`}</span>
                     </div>
-                  ) : null}
+                    {runHistoryError ? <div className="error-state">{runHistoryError}</div> : null}
+                    {runHistory.length > 0 ? (
+                      <div className="agent-run-history__layout">
+                        <div className="agent-run-history__list" aria-label="Run history">
+                          {runHistory.map((run) => (
+                            <button
+                              key={run.id}
+                              className="agent-run-history__item"
+                              type="button"
+                              aria-pressed={run.id === runId}
+                              onClick={() => openRun(run)}
+                            >
+                              <span className="agent-run-history__item-head">
+                                <strong>{runInputText(run.input)}</strong>
+                                <StatusBadge tone={runStatusTone(run.status)}>{run.status}</StatusBadge>
+                              </span>
+                              <span className="agent-run-history__item-meta">
+                                <span>{formatDateTime(run.created_at)}</span>
+                                <span>{usageCostLabel(run.usage)}</span>
+                                <span>{run.step_count} steps</span>
+                                <span>{run.event_count} events</span>
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                        <div className="agent-run-detail">
+                          {runId ? (
+                            <>
+                              <div className="agent-run-detail__stats">
+                                <span><span className="muted">Started</span>{formatDateTime(selectedRun?.started_at ?? selectedRun?.created_at)}</span>
+                                <span><span className="muted">Duration</span>{formatDuration(selectedRun?.started_at ?? selectedRun?.created_at, selectedRun?.ended_at)}</span>
+                                <span><span className="muted">Cost</span>{usageCostLabel(selectedRunUsage)}</span>
+                                <span><span className="muted">Usage</span>{usageTokenLabel(selectedRunUsage)}</span>
+                                <span><span className="muted">Model</span>{usageModelLabel(selectedRunUsage)}</span>
+                              </div>
+                              {selectedRun?.error_message ? <div className="error-state">{selectedRun.error_message}</div> : null}
+                              {runDetailLoading ? <LoadingBlock title="Loading run detail" /> : null}
+                              {runOutput ? (
+                                <div className="agent-run-detail__section">
+                                  <h3>Output</h3>
+                                  <pre className="agent-trace__entry">{runOutput}</pre>
+                                </div>
+                              ) : null}
+                              {runSteps.length > 0 ? (
+                                <div className="agent-run-detail__section">
+                                  <h3>Steps</h3>
+                                  <div className="agent-run-timeline">
+                                    {runSteps.map((step) => (
+                                      <div key={step.id} className="agent-run-timeline__item">
+                                        <div className="agent-run-timeline__head">
+                                          <strong>{step.sequence_no}. {step.name ?? step.step_type}</strong>
+                                          <StatusBadge tone={runStatusTone(step.status)}>{step.status}</StatusBadge>
+                                        </div>
+                                        <div className="agent-run-timeline__meta">
+                                          <span>{step.step_type}</span>
+                                          <span>{formatDuration(step.started_at, step.ended_at)}</span>
+                                        </div>
+                                        <details>
+                                          <summary>Input and output</summary>
+                                          <pre className="agent-trace__entry">{`Input\n${compactJson(step.input ?? {})}\n\nOutput\n${compactJson(step.output ?? {})}`}</pre>
+                                        </details>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null}
+                              {runEvents.length > 0 ? (
+                                <div className="agent-run-detail__section">
+                                  <h3>Events</h3>
+                                  <div className="agent-run-events">
+                                    {runEvents.map((event) => (
+                                      <details key={event.id} className="agent-run-event">
+                                        <summary>
+                                          <span>{event.sequence_no}. {event.event_type}</span>
+                                          <span className="muted">{formatDateTime(event.created_at)}</span>
+                                        </summary>
+                                        <pre className="agent-trace__entry">{compactJson(event.payload)}</pre>
+                                      </details>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null}
+                            </>
+                          ) : (
+                            <div className="empty-state">No run selected.</div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="empty-state">No runs yet.</div>
+                    )}
+                  </div>
                 </div>
               </details>
 

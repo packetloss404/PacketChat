@@ -68,6 +68,52 @@ type KnowledgeResult = {
   citation: string;
 };
 
+type AgentRunListRow = {
+  id: string;
+  agent_id: string;
+  agent_version_id: string;
+  conversation_id: string | null;
+  trigger_type: string;
+  status: string;
+  input: Record<string, unknown>;
+  started_at: string | null;
+  ended_at: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  step_count: number;
+  event_count: number;
+  provider: string | null;
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  search_queries: number;
+  cost_usd: number | null;
+  usage_count: number;
+  unknown_cost_count: number;
+  estimated_count: number;
+};
+
+type RunExecutionResult =
+  | { status: "completed"; outputText: string }
+  | { status: "waiting_input"; approvalId: string; outputText: string };
+
+function usageFromRow(row: AgentRunListRow) {
+  return {
+    provider: row.provider,
+    model: row.model,
+    input_tokens: row.input_tokens,
+    output_tokens: row.output_tokens,
+    reasoning_tokens: row.reasoning_tokens,
+    search_queries: row.search_queries,
+    cost_usd: row.cost_usd,
+    usage_count: row.usage_count,
+    unknown_cost_count: row.unknown_cost_count,
+    estimated_count: row.estimated_count
+  };
+}
+
 function textOrNull(value: unknown) {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -398,6 +444,27 @@ function renderTemplate(template: string | undefined, values: Record<string, str
   return Object.entries(values).reduce((next, [key, value]) => next.replaceAll(`{{${key}}}`, value), template);
 }
 
+function enabledOpenApiActions(actions: AgentSpec["openApiActions"]) {
+  return (actions ?? []).filter((item) => item.enabled !== false);
+}
+
+function externalActionApprovalInput(spec: AgentSpec, inputText: string) {
+  const openApiActions = enabledOpenApiActions(spec.openApiActions).map((action) => ({
+    id: action.id ?? null,
+    name: action.name ?? action.id ?? "OpenAPI action",
+    method: (action.method || "GET").toUpperCase(),
+    url: action.url ?? null
+  }));
+  const needsUrlFetchApproval = Boolean(spec.tools?.urlFetch && /https?:\/\//i.test(inputText));
+  if (openApiActions.length === 0 && !needsUrlFetchApproval) return null;
+  return {
+    reason: "External network actions require approval before PacketChat executes them.",
+    inputPreview: inputText.slice(0, 500),
+    openApiActions,
+    urlFetch: needsUrlFetchApproval
+  };
+}
+
 async function executeOpenApiActions(input: { inputText: string; actions: NonNullable<AgentSpec["openApiActions"]>; maxActions: number; signal?: AbortSignal }) {
   const results = [];
   for (const action of input.actions.filter((item) => item.enabled !== false).slice(0, input.maxActions)) {
@@ -536,6 +603,30 @@ async function executeRun(input: {
     const contextBlocks: string[] = [];
     const maxAgentSteps = Math.min(Math.max(Number(input.spec.maxAgentSteps) || 4, 1), 25);
     let remainingToolSteps = maxAgentSteps;
+    const externalApprovalInput = externalActionApprovalInput(input.spec, input.inputText);
+    if (externalApprovalInput) {
+      const approvalId = await addRunStep({
+        runId: input.runId,
+        sequenceNo: nextStep++,
+        stepType: "approval",
+        status: "running",
+        name: "Approve external actions",
+        input: externalApprovalInput,
+        output: { state: "pending" }
+      });
+      await sql`
+        update agent_runs
+        set status = 'waiting_input'
+        where id = ${input.runId}
+      `;
+      await addRunEvent(input.runId, "approval.required", { approvalId, ...externalApprovalInput });
+      return {
+        status: "waiting_input",
+        approvalId,
+        outputText: "Waiting for approval before external actions run."
+      };
+    }
+
     const chain = input.spec.agentChain;
     if (chain?.enabled && chain.agentIds?.length && remainingToolSteps > 0) {
       const maxChildRuns = Math.min(Math.max(Number(chain.maxChildRuns) || 3, 1), 5, remainingToolSteps);
@@ -698,7 +789,7 @@ async function executeRun(input: {
       logger.warn("Failed to record agent usage", { runId: input.runId, error: error instanceof Error ? error.message : String(error) });
     });
     await addRunEvent(input.runId, "run.completed", { outputText });
-    return outputText;
+    return { status: "completed", outputText };
   } catch (error) {
     const message = publicRunError(error);
     const status = runFailureStatus(message);
@@ -808,7 +899,7 @@ export async function POST(request: Request, context: RouteContext) {
   await addRunEvent(runId, "run.created", { inputText });
 
   try {
-    const outputText = await executeRun({ runId, userId: user.id, resourceOwnerUserId: access.ownerUserId, spec: { ...version.spec, providerAccountId, model }, inputText, signal: request.signal });
+    const result = await executeRun({ runId, userId: user.id, resourceOwnerUserId: access.ownerUserId, spec: { ...version.spec, providerAccountId, model }, inputText, signal: request.signal });
     if (conversationId) {
       await sql.begin(async (tx) => {
         await tx`
@@ -817,8 +908,8 @@ export async function POST(request: Request, context: RouteContext) {
             ${conversationId},
             ${user.id},
             'assistant',
-            ${JSON.stringify(textMessageContent(outputText))}::jsonb,
-            ${JSON.stringify({ agentId: version.agent_id, agentName: version.agent_name, agentRunId: runId, agentMode: "single_pass_augmented" })}::jsonb
+            ${JSON.stringify(textMessageContent(result.outputText))}::jsonb,
+            ${JSON.stringify({ agentId: version.agent_id, agentName: version.agent_name, agentRunId: runId, agentMode: "single_pass_augmented", status: result.status })}::jsonb
           )
         `;
         await tx`
@@ -826,7 +917,13 @@ export async function POST(request: Request, context: RouteContext) {
         `;
       });
     }
-    return jsonOk({ runId, conversationId, status: "completed", outputText }, { status: 201 });
+    return jsonOk({
+      runId,
+      conversationId,
+      status: result.status,
+      outputText: result.outputText,
+      ...("approvalId" in result ? { approvalId: result.approvalId } : {})
+    }, { status: 201 });
   } catch (error) {
     const message = publicRunError(error);
     if (conversationId) {
@@ -848,4 +945,92 @@ export async function POST(request: Request, context: RouteContext) {
     }
     return jsonOk({ runId, conversationId, status: "failed", error: message }, { status: 201 });
   }
+}
+
+export async function GET(request: Request, context: RouteContext) {
+  const user = await authenticateRequest(request.headers);
+  if (!user) return jsonError("Unauthenticated", 401);
+
+  const { agentId } = await context.params;
+  const access = await getAgentAccess(agentId, user);
+  if (!access?.canRun) return jsonError("Agent runs not found", 404);
+
+  const sql = getSql();
+  const rows = await sql<AgentRunListRow[]>`
+    select
+      r.id,
+      r.agent_id,
+      r.agent_version_id,
+      r.conversation_id,
+      r.trigger_type,
+      r.status,
+      r.input,
+      r.started_at,
+      r.ended_at,
+      r.error_code,
+      r.error_message,
+      r.created_at,
+      coalesce(steps.step_count, 0)::integer as step_count,
+      coalesce(events.event_count, 0)::integer as event_count,
+      usage.provider,
+      usage.model,
+      coalesce(usage.input_tokens, 0)::integer as input_tokens,
+      coalesce(usage.output_tokens, 0)::integer as output_tokens,
+      coalesce(usage.reasoning_tokens, 0)::integer as reasoning_tokens,
+      coalesce(usage.search_queries, 0)::integer as search_queries,
+      usage.cost_usd::float8 as cost_usd,
+      coalesce(usage.usage_count, 0)::integer as usage_count,
+      coalesce(usage.unknown_cost_count, 0)::integer as unknown_cost_count,
+      coalesce(usage.estimated_count, 0)::integer as estimated_count
+    from agent_runs r
+    left join lateral (
+      select count(*)::integer as step_count
+      from agent_run_steps ars
+      where ars.run_id = r.id
+    ) steps on true
+    left join lateral (
+      select count(*)::integer as event_count
+      from agent_run_events arev
+      where arev.run_id = r.id
+    ) events on true
+    left join lateral (
+      select
+        string_agg(distinct ur.provider, ', ') filter (where ur.provider is not null) as provider,
+        string_agg(distinct ur.model, ', ') filter (where ur.model is not null) as model,
+        coalesce(sum(ur.input_tokens), 0)::integer as input_tokens,
+        coalesce(sum(ur.output_tokens), 0)::integer as output_tokens,
+        coalesce(sum(ur.reasoning_tokens), 0)::integer as reasoning_tokens,
+        coalesce(sum(ur.search_queries), 0)::integer as search_queries,
+        sum(ur.cost_usd)::float8 as cost_usd,
+        count(*)::integer as usage_count,
+        count(*) filter (where ur.cost_usd is null)::integer as unknown_cost_count,
+        count(*) filter (where coalesce((ur.raw_usage->>'estimated')::boolean, false))::integer as estimated_count
+      from usage_records ur
+      where ur.agent_run_id = r.id
+    ) usage on true
+    where r.agent_id = ${agentId}
+      and r.owner_user_id = ${user.id}
+    order by r.created_at desc
+    limit 25
+  `;
+
+  const runs = rows.map((row) => ({
+    id: row.id,
+    agent_id: row.agent_id,
+    agent_version_id: row.agent_version_id,
+    conversation_id: row.conversation_id,
+    trigger_type: row.trigger_type,
+    status: row.status,
+    input: row.input,
+    started_at: row.started_at,
+    ended_at: row.ended_at,
+    error_code: row.error_code,
+    error_message: row.error_message,
+    created_at: row.created_at,
+    step_count: row.step_count,
+    event_count: row.event_count,
+    usage: usageFromRow(row)
+  }));
+
+  return jsonOk({ runs });
 }

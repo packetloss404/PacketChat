@@ -2,6 +2,20 @@
 
 All notable PacketChat changes are tracked here.
 
+## Unreleased
+
+### Added
+
+- User-owned project workspaces now surface reusable instructions, default-model readiness, linked chat counts, and workspace search.
+- Knowledge search now includes a retrieval debugger with matched terms, score breakdown, source metadata, freshness, embedding status, and citations.
+- Provider governance now surfaces enabled/disabled routes, default route state, synced model bindings, capability metadata, and pricing coverage.
+- Admin release-readiness pages now cover usage governance, audit logs, operations health, pending approval steps, and approval queue monitoring.
+- Agent runs now expose persisted run history with run status, step/event traces, provider/model usage, token counts, estimated cost, and approval decisions.
+
+### Changed
+
+- Current docs now treat approvals, agent run history, audit, operations, model governance, and usage governance as wired V1 surfaces while keeping scheduled runs, evaluations, and true multi-step loops outside V1.
+
 ## 0.1.0 - 2026-05-13
 
 ### Added

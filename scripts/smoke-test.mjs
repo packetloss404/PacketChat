@@ -112,6 +112,14 @@ async function verifyProtectedRoutesRejectAnonymous() {
     ["POST", "/api/knowledge", { name: "anonymous knowledge" }],
     ["POST", "/api/knowledge/00000000-0000-0000-0000-000000000000/search", { query: "packet" }],
     ["GET", "/api/providers"],
+    ["GET", "/api/approvals"],
+    ["PATCH", "/api/approvals/00000000-0000-0000-0000-000000000000", { decision: "approved" }],
+    ["GET", "/api/admin/usage"],
+    ["GET", "/api/admin/audit"],
+    ["GET", "/api/admin/operations"],
+    ["GET", "/api/admin/approvals"],
+    ["GET", "/api/agents/00000000-0000-0000-0000-000000000000/runs"],
+    ["GET", "/api/agents/00000000-0000-0000-0000-000000000000/runs/00000000-0000-0000-0000-000000000000"],
     ["POST", "/api/chat", { messages: [{ role: "user", content: "hello" }] }]
   ];
 
@@ -123,6 +131,35 @@ async function verifyProtectedRoutesRejectAnonymous() {
     });
   }
   console.log(`anonymous protection ok (${protectedChecks.length} routes)`);
+}
+
+async function verifyReadinessSurfaces(accessToken, me, agentId) {
+  const authHeaders = { authorization: `Bearer ${accessToken}` };
+  const approvals = await getJson("/api/approvals", { headers: authHeaders });
+  expect(Array.isArray(approvals?.approvals), "approvals did not return approvals array");
+  expect(Array.isArray(approvals?.recentActions), "approvals did not return recentActions array");
+
+  const runs = await getJson(`/api/agents/${agentId}/runs`, { headers: authHeaders });
+  expect(Array.isArray(runs?.runs), "agent runs did not return runs array");
+
+  if (me?.user?.role === "admin") {
+    const usage = await getJson("/api/admin/usage", { headers: authHeaders });
+    expect(Array.isArray(usage?.summary), "admin usage did not return summary array");
+    expect(usage?.governance?.totals, "admin usage did not return governance totals");
+    const audit = await getJson("/api/admin/audit", { headers: authHeaders });
+    expect(Array.isArray(audit?.events), "admin audit did not return events array");
+    const operations = await getJson("/api/admin/operations", { headers: authHeaders });
+    expect(Array.isArray(operations?.providerAccounts), "admin operations did not return providerAccounts array");
+    const adminApprovals = await getJson("/api/admin/approvals", { headers: authHeaders });
+    expect(Array.isArray(adminApprovals?.approvals), "admin approvals did not return approvals array");
+  } else {
+    await expectStatus("/api/admin/usage", 403, { headers: authHeaders });
+    await expectStatus("/api/admin/audit", 403, { headers: authHeaders });
+    await expectStatus("/api/admin/operations", 403, { headers: authHeaders });
+    await expectStatus("/api/admin/approvals", 403, { headers: authHeaders });
+  }
+
+  console.log("approval, admin readiness, and agent-run list surfaces ok");
 }
 
 async function verifyAuthenticatedFlows(accessToken) {
@@ -188,6 +225,7 @@ async function verifyAuthenticatedFlows(accessToken) {
   expect(Array.isArray(agents?.agents), "agents list did not return agents array");
   const updatedAgent = await patchJson(`/api/agents/${agentId}`, accessToken, { name: `Smoke agent updated ${stamp}` });
   expect(updatedAgent?.agent?.name?.includes("updated"), "agent update did not return updated name");
+  await verifyReadinessSurfaces(accessToken, me, agentId);
   const archivedAgent = await patchJson(`/api/agents/${agentId}`, accessToken, { archived: true });
   expect(archivedAgent?.agent?.status === "archived", "agent archive did not return archived status");
   const deletedAgent = await deleteJson(`/api/agents/${agentId}`, accessToken);

@@ -9,6 +9,7 @@ export async function GET(request: Request) {
   const user = await authenticateRequest(request.headers);
   if (!user) return jsonError("Unauthenticated", 401);
 
+  const includeDisabledModelBindings = new URL(request.url).searchParams.get("includeDisabledModelBindings") === "true";
   const sql = getSql();
   const accounts = await sql`
     select id, provider, scope, owner_user_id, display_name, base_url, api_version, region, status, is_default, created_at, updated_at
@@ -30,15 +31,18 @@ export async function GET(request: Request) {
           mab.capability_overrides
         from model_account_bindings mab
         left join model_catalog mc on mc.id = mab.model_catalog_id
-        where mab.enabled = true and mab.provider_account_id = any(${accountIds})
-        order by display_name asc
+        where mab.provider_account_id = any(${accountIds})
+          and (${includeDisabledModelBindings} or mab.enabled = true)
+        order by mab.enabled desc, display_name asc
       `
     : [];
   return jsonOk({
     accounts,
     modelBindings: modelBindings.map((binding) => ({
       ...binding,
-      usagePricing: getUsagePricingStatus(providerByAccountId.get(binding.provider_account_id), binding.model)
+      usagePricing: binding.model
+        ? getUsagePricingStatus(providerByAccountId.get(binding.provider_account_id), binding.model)
+        : { known: false, source: "unknown" }
     })),
     byokEnabled: user.byokEnabled
   });

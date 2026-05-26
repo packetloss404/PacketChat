@@ -2,15 +2,14 @@
 
 ## Multi-Step Agent Runtime
 
-PacketChat currently supports synchronous single-pass augmented agent runs. True multi-step tool loops remain out of V1 until planning, execution, approval, and observability contracts are explicit.
+PacketChat currently supports synchronous single-pass augmented agent runs with persisted run steps/events, run history, usage summaries, and human approval checkpoints. True multi-step tool loops remain out of V1 until planning and execution contracts are explicit across repeated model/tool turns.
 
-Acceptance notes:
+Remaining acceptance notes:
 
 - Built-in tools and future external tools execute as explicit tool-call / tool-result steps, not only pre-run context.
 - Runs enforce step, token, timeout, and payload budgets across the full loop.
-- Mutating or external actions support approval gates before execution.
-- Run detail views show ordered planning, tool calls, tool results, model responses, failures, and skipped steps.
-- Tests cover loop limits, tool failure recovery, approval-required paths, and transcript persistence.
+- Multi-step continuations resume after approved checkpoints instead of ending at the current single-pass boundary.
+- Tests cover loop limits, tool failure recovery, approval-resume paths, and transcript persistence.
 
 ## Artifacts and Chat Files
 

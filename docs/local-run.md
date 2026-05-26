@@ -14,7 +14,12 @@ This guide runs the full PacketChat stack locally with Docker Compose.
 - Prompts: `http://localhost:3000/prompts`
 - Knowledge: `http://localhost:3000/knowledge`
 - Agents: `http://localhost:3000/agents`
+- Approvals: `http://localhost:3000/approvals`
 - Admin users: `http://localhost:3000/admin/users`
+- Admin usage: `http://localhost:3000/admin/usage`
+- Admin audit: `http://localhost:3000/admin/audit`
+- Admin operations: `http://localhost:3000/admin/operations`
+- Admin approvals shortcut: `http://localhost:3000/admin/approvals`
 
 If `PACKETCHAT_WEB_PORT` is set in `.env`, replace `3000` with that port.
 
@@ -232,7 +237,7 @@ npm run verify
 npm run build
 ```
 
-When credentials are available and the Compose stack is running, also run the authenticated smoke command above because it exercises no-key CRUD, archive/delete, and knowledge text upload/search paths without requiring provider API keys or Resend.
+When credentials are available and the Compose stack is running, also run the authenticated smoke command above because it exercises no-key CRUD, archive/delete, and knowledge text upload/search paths without requiring provider API keys or Resend. For release handoff, pair smoke with the manual checks in `docs/release-readiness.md`.
 
 ## Mobile Use
 
@@ -266,11 +271,24 @@ npm run backup
 
 Use `npm run backup:postgres` or `npm run backup:minio` to back up one store. See `docs/runbooks/backup-restore.md` for manual commands and restore-drill guidance.
 
+## Release Readiness Surfaces
+
+Use these pages after smoke tests when validating a local candidate build:
+
+- `/projects`: verify project workspaces show persistent instructions, default-model readiness, and linked chat counts.
+- `/knowledge`: run a test search and expand result debug details for matched terms, scores, source metadata, freshness, and embedding status.
+- `/providers`: verify enabled routes, default route, synced model bindings, pricing coverage, and disabled-account guardrails.
+- `/agents`: run a published agent, then inspect run history, trace steps/events, usage, and any approval step state.
+- `/approvals` and the `/admin/approvals` shortcut: verify pending approval steps are visible and can be resolved by an authorized user.
+- `/admin/usage`, `/admin/audit`, and `/admin/operations`: review cost governance, latest audit events, and provider/model/knowledge/run/job health rollups.
+
+See `docs/release-readiness.md` for the concise operator checklist.
+
 ## Agent Run Scope
 
 The `/agents` page supports creating single-pass augmented agents, editing drafts, publishing immutable versions, and starting manual runs for published agents when the agent spec has a valid provider account and model. Manual and chat-launched runs can use simple knowledge lookup, calculator, URL fetch, provider streaming, persisted run events, and transcript persistence when launched from chat.
 
-Scheduled runs, evaluations, human approval workflows, and production-grade run observability are outside the V1 scope and should not be promised as wired behavior.
+Run history, trace steps/events, usage summaries, and approval checkpoints are wired for the current single-pass runtime. Scheduled runs, evaluations, and true multi-step tool loops are outside the V1 scope and should not be promised as wired behavior.
 
 ## Stop The Stack
 

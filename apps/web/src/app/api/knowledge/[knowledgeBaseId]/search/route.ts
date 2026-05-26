@@ -55,8 +55,17 @@ export async function POST(request: Request, { params }: { params: Promise<{ kno
     chunk_index: number;
     content: string;
     embedding: unknown;
+    chunk_metadata: Record<string, unknown> | null;
+    token_count: number | null;
+    chunk_created_at: string;
     title: string;
     mime_type: string | null;
+    attachment_id: string | null;
+    document_created_at: string;
+    document_updated_at: string;
+    source_metadata: Record<string, unknown> | null;
+    file_name: string | null;
+    size_bytes: string | number | null;
   }[]>`
     select
       kc.id as chunk_id,
@@ -64,10 +73,20 @@ export async function POST(request: Request, { params }: { params: Promise<{ kno
       kc.chunk_index,
       kc.content,
       kc.embedding,
+      kc.metadata as chunk_metadata,
+      kc.token_count,
+      kc.created_at as chunk_created_at,
       kd.title,
-      kd.mime_type
+      kd.mime_type,
+      kd.attachment_id,
+      kd.created_at as document_created_at,
+      kd.updated_at as document_updated_at,
+      kd.source_metadata,
+      a.file_name,
+      a.size_bytes
     from knowledge_chunks kc
     join knowledge_documents kd on kd.id = kc.document_id
+    left join attachments a on a.id = kd.attachment_id and a.owner_user_id = kd.owner_user_id
     where kd.knowledge_base_id = ${knowledgeBaseId}
       and kd.owner_user_id = ${user.id}
       and kd.ingest_status = 'ready'
@@ -91,10 +110,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ kno
       const title = chunk.title.toLowerCase();
       let lexicalScore = 0;
       let matchedTerms = 0;
+      let contentHitTotal = 0;
+      let titleHitTotal = 0;
       for (const term of terms) {
         const contentHits = content.split(term).length - 1;
         const titleHits = title.split(term).length - 1;
         if (contentHits > 0 || titleHits > 0) matchedTerms += 1;
+        contentHitTotal += contentHits;
+        titleHitTotal += titleHits;
         lexicalScore += contentHits + titleHits * 3;
       }
       const parsedEmbedding = parseLocalEmbedding(chunk.embedding);
@@ -103,10 +126,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ kno
         if (parsedEmbedding.reason === "outdated") outdatedEmbeddingCount += 1;
         if (parsedEmbedding.reason === "invalid") invalidEmbeddingCount += 1;
       }
+      const matchedTermList = terms.filter((term) => content.includes(term) || title.includes(term));
       return {
         chunk,
         lexicalScore,
         matchedTerms,
+        contentHitTotal,
+        titleHitTotal,
+        matchedTermList,
         semanticScore: parsedEmbedding.embedding ? Math.max(0, cosineSimilarity(parsedEmbedding.embedding, queryEmbedding)) : 0,
         embeddingStatus: parsedEmbedding.embedding ? "current" : parsedEmbedding.reason ?? "invalid"
       };
@@ -122,20 +149,71 @@ export async function POST(request: Request, { params }: { params: Promise<{ kno
       score: result.lexicalNormalized * 0.4 + result.coverageScore * 0.2 + result.semanticScore * 0.4
     }))
     .sort((a, b) => b.score - a.score)
-    .map(({ chunk, score, lexicalScore, semanticScore, coverageScore, embeddingStatus }) => ({
-      documentId: chunk.document_id,
-      chunkId: chunk.chunk_id,
-      chunkIndex: chunk.chunk_index,
-      title: chunk.title,
-      mimeType: chunk.mime_type,
-      score: Number(score.toFixed(4)),
-      lexicalScore,
-      semanticScore: Number(semanticScore.toFixed(4)),
-      coverageScore: Number(coverageScore.toFixed(4)),
-      embeddingStatus,
-      snippet: snippetFor(chunk.content, terms),
-      citation: `${chunk.title}#chunk-${chunk.chunk_index}`
-    }));
+    .map(({ chunk, score, lexicalScore, semanticScore, coverageScore, embeddingStatus, matchedTermList, contentHitTotal, titleHitTotal }, index) => {
+      const sourceMetadata = chunk.source_metadata && typeof chunk.source_metadata === "object" ? chunk.source_metadata : {};
+      const chunkMetadata = chunk.chunk_metadata && typeof chunk.chunk_metadata === "object" ? chunk.chunk_metadata : {};
+      const embeddingMetadata = chunk.embedding && typeof chunk.embedding === "object" && !Array.isArray(chunk.embedding) ? chunk.embedding as Record<string, unknown> : {};
+      const detectedType = typeof sourceMetadata.detectedType === "string"
+        ? sourceMetadata.detectedType
+        : typeof chunkMetadata.detectedType === "string"
+          ? chunkMetadata.detectedType
+          : null;
+      const metadataFileName = typeof sourceMetadata.fileName === "string" ? sourceMetadata.fileName : null;
+      const metadataSourceName = typeof sourceMetadata.source === "string" ? sourceMetadata.source : null;
+      const sourceName = chunk.file_name ?? metadataFileName ?? metadataSourceName ?? chunk.title;
+      const ageMs = Date.now() - new Date(chunk.document_updated_at).getTime();
+      const ageDays = Number.isFinite(ageMs) ? Math.max(0, Math.floor(ageMs / 86_400_000)) : null;
+      const citation = `${chunk.title}#chunk-${chunk.chunk_index}`;
+      return {
+        documentId: chunk.document_id,
+        chunkId: chunk.chunk_id,
+        chunkIndex: chunk.chunk_index,
+        title: chunk.title,
+        mimeType: chunk.mime_type,
+        score: Number(score.toFixed(4)),
+        lexicalScore,
+        semanticScore: Number(semanticScore.toFixed(4)),
+        coverageScore: Number(coverageScore.toFixed(4)),
+        embeddingStatus,
+        matchedTerms: matchedTermList,
+        source: {
+          name: sourceName,
+          fileName: chunk.file_name,
+          detectedType,
+          attachmentId: chunk.attachment_id,
+          sizeBytes: chunk.size_bytes,
+          createdAt: chunk.document_created_at,
+          updatedAt: chunk.document_updated_at,
+          metadata: sourceMetadata
+        },
+        freshness: {
+          updatedAt: chunk.document_updated_at,
+          chunkCreatedAt: chunk.chunk_created_at,
+          embeddingStatus,
+          embeddingVersion: typeof embeddingMetadata.version === "string"
+            ? embeddingMetadata.version
+            : typeof chunkMetadata.embeddingVersion === "string"
+              ? chunkMetadata.embeddingVersion
+              : typeof sourceMetadata.embeddingVersion === "string"
+                ? sourceMetadata.embeddingVersion
+                : null,
+          embeddingCreatedAt: typeof embeddingMetadata.createdAt === "string" ? embeddingMetadata.createdAt : null,
+          embeddingRefreshedAt: typeof chunkMetadata.embeddingRefreshedAt === "string" ? chunkMetadata.embeddingRefreshedAt : null,
+          ageDays,
+          label: ageDays === null ? "unknown" : ageDays === 0 ? "updated today" : `${ageDays}d old`
+        },
+        explanation: [
+          `Citation ${citation}`,
+          `Matched ${matchedTermList.length}/${terms.length} query terms${matchedTermList.length ? `: ${matchedTermList.join(", ")}` : ""}`,
+          `Rank #${index + 1} with lexical ${lexicalScore} from ${titleHitTotal} title hits and ${contentHitTotal} content hits`,
+          `semantic ${Number(semanticScore.toFixed(4))}`,
+          `coverage ${Number(coverageScore.toFixed(4))}`,
+          `embedding ${embeddingStatus}`
+        ].join(" | "),
+        snippet: snippetFor(chunk.content, terms),
+        citation
+      };
+    });
 
   const results = rankedResults.slice(offset, offset + limit);
 

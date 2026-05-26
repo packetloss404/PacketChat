@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiClient, type Project } from "../../lib/api-client";
-import { ConfirmButton, EmptyState, ErrorState, LoadingBlock, useToast } from "../ui";
+import { ConfirmButton, EmptyState, ErrorState, LoadingBlock, StatusBadge, useToast } from "../ui";
 
 type ProjectDraft = {
   name: string;
@@ -20,6 +20,35 @@ function draftFromProject(project: Project): ProjectDraft {
   };
 }
 
+function hasInstructions(project: Pick<Project, "instructions">) {
+  return Boolean(project.instructions?.trim());
+}
+
+function defaultModelLabel(project: Project | null) {
+  if (!project) return "Global default";
+  if (project.default_model_preset) {
+    return `${project.default_model_preset.name} - ${project.default_model_preset.model}`;
+  }
+  return project.default_model_preset_id ? "Preset configured" : "Global default";
+}
+
+function defaultModelDetail(project: Project | null) {
+  if (!project) return "New workspaces inherit the account default model.";
+  if (project.default_model_preset) {
+    return `${project.default_model_preset.provider} provider preset`;
+  }
+  return project.default_model_preset_id ? "A preset is linked, but details are hidden for this account." : "Inherits the account default model.";
+}
+
+function formatUpdated(value?: string | null) {
+  if (!value) return "recently";
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(value));
+}
+
+function pluralize(count: number, label: string) {
+  return `${count.toLocaleString()} ${label}${count === 1 ? "" : "s"}`;
+}
+
 export function ProjectsClient() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -35,8 +64,20 @@ export function ProjectsClient() {
   const filteredProjects = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return projects;
-    return projects.filter((project) => [project.name, project.description, project.instructions].some((value) => value?.toLowerCase().includes(needle)));
+    return projects.filter((project) =>
+      [
+        project.name,
+        project.description,
+        project.instructions,
+        project.default_model_preset?.name,
+        project.default_model_preset?.provider,
+        project.default_model_preset?.model
+      ].some((value) => value?.toLowerCase().includes(needle))
+    );
   }, [projects, query]);
+
+  const draftHasInstructions = draft.instructions.trim().length > 0;
+  const selectedConversationCount = selectedProject?.conversation_count ?? 0;
 
   async function loadProjects() {
     setError(null);
@@ -143,9 +184,20 @@ export function ProjectsClient() {
           <div className="projects-prompts-list">
             {filteredProjects.map((project) => (
               <button className="projects-prompts-list-item" key={project.id} type="button" aria-pressed={project.id === selectedProjectId} onClick={() => selectProject(project)}>
-                <strong>{project.name}</strong>
+                <div className="projects-prompts-list-item__header">
+                  <strong>{project.name}</strong>
+                  <small>{pluralize(project.conversation_count ?? 0, "chat")}</small>
+                </div>
                 {project.description ? <span>{project.description}</span> : <span className="muted">No description</span>}
-                <small>Updated {project.updated_at ? new Date(project.updated_at).toLocaleDateString() : "recently"}</small>
+                <div className="projects-prompts-chip-row" aria-label={`Workspace readiness for ${project.name}`}>
+                  <span className={`projects-prompts-chip ${hasInstructions(project) ? "projects-prompts-chip--success" : "projects-prompts-chip--warning"}`}>
+                    {hasInstructions(project) ? "Instructions ready" : "Needs instructions"}
+                  </span>
+                  <span className={`projects-prompts-chip ${project.default_model_preset_id ? "projects-prompts-chip--success" : ""}`}>
+                    {defaultModelLabel(project)}
+                  </span>
+                </div>
+                <small>Updated {formatUpdated(project.updated_at)}</small>
               </button>
             ))}
           </div>
@@ -156,13 +208,36 @@ export function ProjectsClient() {
             <div>
               <div className="eyebrow">{selectedProject ? "Edit" : "Create"}</div>
               <h2>{selectedProject ? selectedProject.name : "New project"}</h2>
-              <p className="muted">Project instructions are private to your account in this V1 build.</p>
+              <p className="muted">Workspace settings collect the persistent context this project contributes to chats, prompts, and agents.</p>
             </div>
             {selectedProject ? (
               <ConfirmButton className="button button--danger" message="Delete this project?" confirmLabel="Delete" disabled={deletingId === selectedProject.id} onConfirm={() => deleteProject(selectedProject)}>
                 Delete
               </ConfirmButton>
             ) : null}
+          </div>
+
+          <div className="projects-workspace-summary" aria-label="Workspace readiness">
+            <div className="projects-workspace-summary__item">
+              <StatusBadge tone={draftHasInstructions ? "success" : "warning"}>{draftHasInstructions ? "Ready" : "Missing"}</StatusBadge>
+              <strong>Instructions</strong>
+              <small>{draftHasInstructions ? `${draft.instructions.trim().length.toLocaleString()} characters of workspace guidance` : "No persistent guidance yet"}</small>
+            </div>
+            <div className="projects-workspace-summary__item">
+              <StatusBadge tone={selectedProject?.default_model_preset_id ? "success" : "neutral"}>{selectedProject?.default_model_preset_id ? "Pinned" : "Inherited"}</StatusBadge>
+              <strong>Default model</strong>
+              <small>{defaultModelLabel(selectedProject)}. {defaultModelDetail(selectedProject)}</small>
+            </div>
+            <div className="projects-workspace-summary__item">
+              <StatusBadge tone="neutral">Agent-level</StatusBadge>
+              <strong>Knowledge</strong>
+              <small>Project-level knowledge binding is not available in this workspace view.</small>
+            </div>
+            <div className="projects-workspace-summary__item">
+              <StatusBadge tone={selectedConversationCount > 0 ? "info" : "neutral"}>{selectedConversationCount > 0 ? "Active" : "Empty"}</StatusBadge>
+              <strong>Chats</strong>
+              <small>{selectedProject ? pluralize(selectedConversationCount, "linked chat") : "No linked chats yet"}</small>
+            </div>
           </div>
 
           <form className="projects-prompts-form" onSubmit={(event) => void saveProject(event)}>

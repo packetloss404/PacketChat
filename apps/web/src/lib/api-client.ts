@@ -72,12 +72,22 @@ export type ConversationMessage = {
   created_at: string;
 };
 
+export type ProjectDefaultModelPreset = {
+  id: string;
+  name: string;
+  provider: string;
+  model: string;
+};
+
 export type Project = {
   id: string;
   name: string;
   description: string | null;
   instructions: string | null;
   default_model_preset_id?: string | null;
+  default_model_preset?: ProjectDefaultModelPreset | null;
+  conversation_count?: number;
+  last_conversation_at?: string | null;
   created_at?: string;
   updated_at: string;
 };
@@ -131,6 +141,28 @@ export type KnowledgeSearchResult = {
   semanticScore?: number;
   coverageScore?: number;
   embeddingStatus?: string;
+  matchedTerms?: string[];
+  source?: {
+    name: string;
+    fileName?: string | null;
+    detectedType?: string | null;
+    attachmentId?: string | null;
+    sizeBytes?: string | number | null;
+    createdAt: string;
+    updatedAt: string;
+    metadata?: Record<string, unknown>;
+  };
+  freshness?: {
+    updatedAt: string;
+    chunkCreatedAt?: string | null;
+    embeddingStatus?: string;
+    embeddingVersion?: string | null;
+    embeddingCreatedAt?: string | null;
+    embeddingRefreshedAt?: string | null;
+    ageDays: number | null;
+    label: string;
+  };
+  explanation?: string;
   snippet: string;
   citation: string;
 };
@@ -216,12 +248,94 @@ export type AgentRunEvent = {
 
 export type AgentRunStep = {
   id: string;
+  parent_step_id?: string | null;
   sequence_no: number;
   step_type: string;
   status: string;
   name: string | null;
   input?: Record<string, unknown>;
   output: Record<string, unknown>;
+  started_at?: string | null;
+  ended_at?: string | null;
+};
+
+export type AgentRunUsage = {
+  provider: string | null;
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  search_queries: number;
+  cost_usd: number | null;
+  usage_count: number;
+  unknown_cost_count: number;
+  estimated_count: number;
+};
+
+export type AgentRun = {
+  id: string;
+  agent_id: string;
+  agent_version_id: string;
+  conversation_id?: string | null;
+  trigger_type?: string;
+  status: string;
+  input: Record<string, unknown>;
+  started_at?: string | null;
+  ended_at?: string | null;
+  error_code?: string | null;
+  error_message?: string | null;
+  created_at: string;
+  step_count?: number;
+  event_count?: number;
+  usage?: AgentRunUsage;
+};
+
+export type ApprovalQueueItem = {
+  id: string;
+  runId: string;
+  agentId: string;
+  agentName: string;
+  requesterEmail: string | null;
+  sequenceNo: number;
+  status: string;
+  state: "pending" | "approved" | "rejected" | "closed" | string;
+  name: string;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  runStatus: string;
+  runInput: Record<string, unknown>;
+  startedAt: string;
+  endedAt: string | null;
+  createdAt: string;
+  canDecide?: boolean;
+};
+
+export type SafeActionActivity = {
+  id: string;
+  runId: string;
+  agentId: string;
+  agentName: string;
+  requesterEmail: string | null;
+  sequenceNo: number;
+  stepType: string;
+  status: string;
+  name: string;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  runStatus: string;
+  startedAt: string;
+  endedAt: string | null;
+  createdAt: string;
+};
+
+export type ApprovalsResponse = {
+  approvals: ApprovalQueueItem[];
+  recentActions: SafeActionActivity[];
+  stats: {
+    pending: number;
+    approvals: number;
+    recentActions: number;
+  };
 };
 
 export type AgentRunRequest = ({
@@ -289,6 +403,55 @@ export type UsageRecentRow = {
 export type UsageResponse = {
   summary: UsageSummaryRow[];
   recent: UsageRecentRow[];
+  governance?: {
+    totals: {
+      requests: number;
+      costUsd: number;
+      unknownCostCount: number;
+      estimatedCount: number;
+      activeUsers: number;
+      projectedMonthCostUsd: number;
+    };
+    byUser: Array<{ user_email: string; request_count: number; cost_usd: number; unknown_cost_count: number }>;
+    byProvider: Array<{ provider: string; request_count: number; cost_usd: number; unknown_cost_count: number }>;
+    recommendations: string[];
+  };
+};
+
+export type AdminAuditEvent = {
+  id: string;
+  actor_user_id: string | null;
+  actor_email: string | null;
+  action: string;
+  outcome: "success" | "failure" | string;
+  target_type: string | null;
+  target_id: string | null;
+  ip_address: string | null;
+  user_agent: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AdminOperationsResponse = {
+  providerAccounts: Array<{ provider: string; scope: string; status: string; count: number }>;
+  modelBindings: Array<{ provider: string; enabled: boolean; count: number }>;
+  knowledge: Array<{ ingest_status: string; count: number }>;
+  agentRuns: Array<{ status: string; count: number }>;
+  jobFailures: Array<{ id: string; queue_name: string; job_name: string; job_id: string | null; error_message: string; created_at: string }>;
+  recentProviderAudits: AdminAuditEvent[];
+};
+
+export type AdminApproval = {
+  step_id: string;
+  run_id: string;
+  agent_id: string;
+  agent_name: string;
+  user_email: string;
+  sequence_no: number;
+  name: string | null;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  started_at: string;
 };
 
 export async function parseApiResponse<T>(response: Response): Promise<T> {
@@ -322,7 +485,11 @@ export const apiClient = {
     me: (init?: RequestInit) => apiFetch<{ user: AuthUser }>("/api/auth/me", init)
   },
   providers: {
-    list: (init?: RequestInit) => apiFetch<ProvidersResponse>("/api/providers", init),
+    list: (init?: RequestInit & { includeDisabledModelBindings?: boolean }) => {
+      const { includeDisabledModelBindings, ...requestInit } = init ?? {};
+      const path = includeDisabledModelBindings ? "/api/providers?includeDisabledModelBindings=true" : "/api/providers";
+      return apiFetch<ProvidersResponse>(path, requestInit);
+    },
     create: (body: { provider: ProviderId; scope?: ProviderScope; displayName?: string; apiKey: string; baseUrl?: string; apiVersion?: string; region?: string; isDefault?: boolean }) =>
       apiFetch<{ providerAccountId: string }>("/api/providers", jsonInit("POST", body)),
     updateAccount: (accountId: string, body: { displayName?: string; baseUrl?: string | null; apiVersion?: string | null; region?: string | null; status?: "enabled" | "disabled" | string; isDefault?: boolean }) =>
@@ -390,10 +557,17 @@ export const apiClient = {
       apiFetch<{ draft: AgentDraft }>(`/api/agents/${encodePath(agentId)}/draft`, jsonInit("PATCH", body)),
     publish: (agentId: string, body: { changeSummary?: string } = {}) =>
       apiFetch<{ version: { id: string; version_number: number } }>(`/api/agents/${encodePath(agentId)}/publish`, jsonInit("POST", body)),
+    runs: (agentId: string, init?: RequestInit) =>
+      apiFetch<{ runs: AgentRun[] }>(`/api/agents/${encodePath(agentId)}/runs`, init),
     run: (agentId: string, body: AgentRunRequest) =>
       apiFetch<Record<string, unknown>>(`/api/agents/${encodePath(agentId)}/runs`, jsonInit("POST", { ...body, inputText: body.inputText ?? body.input })),
     runDetails: (agentId: string, runId: string, init?: RequestInit) =>
-      apiFetch<{ run: Record<string, unknown>; events: AgentRunEvent[]; steps: AgentRunStep[] }>(`/api/agents/${encodePath(agentId)}/runs/${encodePath(runId)}`, init)
+      apiFetch<{ run: AgentRun; usage: AgentRunUsage; events: AgentRunEvent[]; steps: AgentRunStep[] }>(`/api/agents/${encodePath(agentId)}/runs/${encodePath(runId)}`, init)
+  },
+  approvals: {
+    list: (init?: RequestInit) => apiFetch<ApprovalsResponse>("/api/approvals", init),
+    decide: (approvalId: string, body: { decision: "approved" | "rejected"; note?: string }) =>
+      apiFetch<{ approval: Record<string, unknown> }>(`/api/approvals/${encodePath(approvalId)}`, jsonInit("PATCH", body))
   },
   admin: {
     users: {
@@ -405,6 +579,9 @@ export const apiClient = {
       createPasswordReset: (userId: string) =>
         apiFetch<{ resetId: string; resetUrl: string; emailDelivery?: EmailDelivery; email: string }>(`/api/admin/users/${encodePath(userId)}/password-reset`, { method: "POST" })
     },
-    usage: (init?: RequestInit) => apiFetch<UsageResponse>("/api/admin/usage", init)
+    usage: (init?: RequestInit) => apiFetch<UsageResponse>("/api/admin/usage", init),
+    audit: (init?: RequestInit) => apiFetch<{ events: AdminAuditEvent[] }>("/api/admin/audit", init),
+    operations: (init?: RequestInit) => apiFetch<AdminOperationsResponse>("/api/admin/operations", init),
+    approvals: (init?: RequestInit) => apiFetch<{ approvals: AdminApproval[] }>("/api/admin/approvals", init)
   }
 };

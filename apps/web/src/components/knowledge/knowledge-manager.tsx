@@ -42,12 +42,15 @@ function draftFromKnowledgeBase(kb: KnowledgeBase | null): KnowledgeDraft {
   return { name: kb?.name ?? "", description: kb?.description ?? "" };
 }
 
-function metadataValue(document: KnowledgeDocument, key: string) {
-  const metadata = document.source_metadata;
+function metadataRecordValue(metadata: Record<string, unknown> | null | undefined, key: string) {
   if (!metadata || typeof metadata !== "object") return null;
-  const value = (metadata as Record<string, unknown>)[key];
+  const value = metadata[key];
   if (value === undefined || value === null) return null;
   return String(value);
+}
+
+function metadataValue(document: KnowledgeDocument, key: string) {
+  return metadataRecordValue(document.source_metadata as Record<string, unknown> | null | undefined, key);
 }
 
 function formatSize(value?: string | number | null) {
@@ -57,6 +60,22 @@ function formatSize(value?: string | number | null) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "Unknown";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function formatDebugScore(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "0";
+  return value.toFixed(4);
+}
+
+function compactId(value?: string | null) {
+  return value ? value.slice(0, 8) : "unknown";
 }
 
 export function KnowledgeManager() {
@@ -615,19 +634,69 @@ export function KnowledgeManager() {
                 ) : null}
                 {!searched && searchResults.length === 0 ? <EmptyState title="No search yet" description="Search results will appear here after documents finish ingestion." /> : null}
                 <div className="knowledge-search-results">
-                  {searchResults.map((result) => (
-                    <article key={result.chunkId} className="knowledge-search-result">
-                      <strong>{result.title}</strong>
-                      <p>{result.snippet}</p>
-                      <div className="knowledge-score-row">
-                        <span>{result.citation}</span>
-                        <span>score {result.score}</span>
-                        <span>lexical {result.lexicalScore ?? 0}</span>
-                        <span>semantic {result.semanticScore ?? 0}</span>
-                        {result.embeddingStatus ? <span>{result.embeddingStatus}</span> : null}
-                      </div>
-                    </article>
-                  ))}
+                  {searchResults.map((result) => {
+                    const source = result.source;
+                    const freshness = result.freshness;
+                    const detectedType = source?.detectedType ?? metadataRecordValue(source?.metadata, "detectedType") ?? result.mimeType ?? "unknown type";
+                    const objectKey = metadataRecordValue(source?.metadata, "objectKey");
+                    const chunkCount = metadataRecordValue(source?.metadata, "chunkCount");
+                    const sourceName = source?.fileName ?? source?.name ?? result.title;
+
+                    return (
+                      <article key={result.chunkId} className="knowledge-search-result">
+                        <strong>{result.title}</strong>
+                        <p>{result.snippet}</p>
+                        <div className="knowledge-score-row">
+                          <span>{result.citation}</span>
+                          <span>score {result.score}</span>
+                          <span>lexical {result.lexicalScore ?? 0}</span>
+                          <span>semantic {result.semanticScore ?? 0}</span>
+                          {result.coverageScore !== undefined ? <span>coverage {result.coverageScore}</span> : null}
+                          {result.embeddingStatus ? <span>{result.embeddingStatus}</span> : null}
+                        </div>
+                        <details className="knowledge-result-debug">
+                          <summary>Why this result</summary>
+                          <div className="knowledge-result-debug__grid">
+                            <div className="knowledge-result-debug__section">
+                              <span className="eyebrow">Why</span>
+                              <p>{result.explanation ?? "No explanation returned."}</p>
+                              {result.matchedTerms?.length ? (
+                                <div className="knowledge-debug-chip-row" aria-label="Matched terms">
+                                  {result.matchedTerms.map((term) => <span key={term} className="knowledge-debug-chip">{term}</span>)}
+                                </div>
+                              ) : null}
+                            </div>
+                            <div className="knowledge-result-debug__section">
+                              <span className="eyebrow">Source</span>
+                              <span><strong>Citation</strong> {result.citation}</span>
+                              <span><strong>File</strong> {sourceName}</span>
+                              <span><strong>Type</strong> {detectedType}</span>
+                              {source?.sizeBytes != null ? <span><strong>Size</strong> {formatSize(source.sizeBytes)}</span> : null}
+                              {source?.attachmentId ? <span><strong>Attachment</strong> {compactId(source.attachmentId)}</span> : null}
+                              {objectKey ? <span><strong>Object</strong> {objectKey}</span> : null}
+                            </div>
+                            <div className="knowledge-result-debug__section">
+                              <span className="eyebrow">Freshness</span>
+                              <span><strong>Document</strong> {freshness?.label ?? "unknown"} ({formatDateTime(freshness?.updatedAt)})</span>
+                              <span><strong>Chunk</strong> {formatDateTime(freshness?.chunkCreatedAt)}</span>
+                              <span><strong>Embedding</strong> {freshness?.embeddingStatus ?? result.embeddingStatus ?? "unknown"}</span>
+                              {freshness?.embeddingVersion ? <span><strong>Version</strong> {freshness.embeddingVersion}</span> : null}
+                              {freshness?.embeddingCreatedAt ? <span><strong>Embedded</strong> {formatDateTime(freshness.embeddingCreatedAt)}</span> : null}
+                              {freshness?.embeddingRefreshedAt ? <span><strong>Refreshed</strong> {formatDateTime(freshness.embeddingRefreshedAt)}</span> : null}
+                            </div>
+                            <div className="knowledge-result-debug__section">
+                              <span className="eyebrow">Ranking</span>
+                              <span><strong>Score</strong> {formatDebugScore(result.score)}</span>
+                              <span><strong>Lexical</strong> {result.lexicalScore ?? 0}</span>
+                              <span><strong>Semantic</strong> {formatDebugScore(result.semanticScore)}</span>
+                              <span><strong>Coverage</strong> {formatDebugScore(result.coverageScore)}</span>
+                              {chunkCount ? <span><strong>Document chunks</strong> {chunkCount}</span> : null}
+                            </div>
+                          </div>
+                        </details>
+                      </article>
+                    );
+                  })}
                 </div>
               </section>
             </>

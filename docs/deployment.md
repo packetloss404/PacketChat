@@ -5,7 +5,7 @@ PacketChat V1 is designed for a single private deployment with an external rever
 ## Services
 
 - `web`: Next.js UI and API on port `3000`.
-- `worker`: background jobs for ingestion, provider sync, agent runs, and cleanup.
+- `worker`: background jobs for file ingestion. Provider-sync, agent-run, and cleanup queues are reserved for post-V1 worker expansion and currently log received jobs.
 - `migrate`: one-shot DB migration command.
 - `postgres`: primary database.
 - `redis`: queues and transient coordination.
@@ -59,11 +59,16 @@ Run `npm run smoke` and the checklist in `docs/smoke-test.md` after first deploy
 - `/login`: local password login.
 - `/chat`: authenticated chat test surface.
 - `/providers`: provider account management.
-- `/projects`: project management.
+- `/projects`: user-owned project workspaces and persistent instructions.
 - `/prompts`: prompt management.
-- `/knowledge`: knowledge base and document management.
-- `/agents`: single-pass augmented agent drafts, publishing, sharing, and manual/chat-launched runs.
+- `/knowledge`: knowledge base, document management, retrieval test search, and per-result debug metadata.
+- `/agents`: single-pass augmented agent drafts, publishing, sharing, manual/chat-launched runs, and run history.
+- `/approvals`: user approval queue for pending agent action checkpoints.
 - `/admin/users`: admin user operations.
+- `/admin/usage`: usage governance, run-rate projection, and estimated-cost review.
+- `/admin/audit`: latest audit events and action summaries.
+- `/admin/operations`: provider/model/knowledge/run/job health rollups.
+- `/admin/approvals`: admin view of pending approval steps.
 
 ## Backups
 
@@ -83,6 +88,7 @@ Compose is the supported V1 deployment shape. Treat a deployment as pilot/prod-r
 - Run a restore drill before calling the deployment production-ready.
 - Run the migration job exactly once per release before app rollout.
 - Run `npm run smoke` after first deploy, upgrades, and restore drills. Include `PACKETCHAT_SMOKE_EMAIL` / `PACKETCHAT_SMOKE_PASSWORD` for authenticated coverage.
+- Review the release-readiness surfaces in `docs/release-readiness.md` before pilot/prod handoff.
 - Stop the Compose stack with `npm run compose:down`; do not remove volumes unless intentionally wiping local data.
 
 Outside the V1 promise: multi-tenant workspaces/teams, SSO, high availability orchestration, external managed-service recipes, Kubernetes manifests, email-delivered invite/reset flows, scheduled agent runs, evaluations, true multi-step tool loops, and Google/Gemini runtime provider support.

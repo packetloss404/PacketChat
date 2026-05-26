@@ -37,3 +37,10 @@ This script is credential-only coverage. It does not create PacketChat provider 
 - If a provider omits usage, PacketChat estimates text tokens locally and marks the usage record as estimated or partially estimated.
 - Cost is an estimate from the local pricing table in `apps/web/src/lib/usage.ts`; unknown pricing is recorded explicitly instead of implying a zero-cost request.
 - Never commit real API keys. Use shell environment variables, a local untracked `.env`, or your deployment secret store.
+
+## Model Governance Notes
+
+- `/providers` shows global and user BYOK accounts, enabled/disabled route state, default route state, synced model bindings, pricing coverage, and available capability metadata.
+- Disabled provider accounts are excluded from runtime routing, model sync, and connection tests until re-enabled.
+- `GET /api/providers` returns enabled model bindings by default; `?includeDisabledModelBindings=true` includes disabled bindings for governance views.
+- `/admin/operations` summarizes provider account status, model binding status, and recent provider audit events for release checks.

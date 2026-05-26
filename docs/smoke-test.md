@@ -29,6 +29,7 @@ PowerShell:
 ```powershell
 $env:PACKETCHAT_SMOKE_EMAIL = "admin@example.com"
 $env:PACKETCHAT_SMOKE_PASSWORD = "replace-with-admin-password"
+$env:PACKETCHAT_SMOKE_REQUIRE_AUTH = "1"
 npm run smoke
 ```
 
@@ -55,6 +56,10 @@ For non-local targets, also set `PACKETCHAT_BASE_URL` to the deployment URL. The
 
 The authenticated smoke path creates timestamped test records and deletes them before exit. Knowledge text upload waits briefly for worker ingestion; if the document is still queued, the script reports that search validation was skipped for local non-strict runs. With `PACKETCHAT_SMOKE_REQUIRE_AUTH=1`, unfinished ingestion fails the smoke run.
 
+## Manual Release Readiness
+
+After authenticated smoke passes, use `docs/release-readiness.md` for the concise P0/P1 surface check. At minimum, open `/projects`, `/knowledge`, `/providers`, `/agents`, `/approvals`, `/admin/usage`, `/admin/audit`, `/admin/operations`, and `/admin/approvals` as an authorized user and confirm each page loads current data without console, auth, or server errors.
+
 ## Auth And Admin
 
 - Open `http://localhost:3000` or the deployed base URL.
@@ -70,6 +75,7 @@ The authenticated smoke path creates timestamped test records and deletes them b
 - Add at least one global provider account as admin.
 - `GET /api/providers` lists the new provider account.
 - `GET /api/providers` includes `usagePricing` on model bindings so operators can see whether local cost estimates are matched, fallback, or unknown.
+- The `/providers` page shows enabled/disabled provider routes, default route state, synced model binding counts, pricing coverage, and capability metadata.
 - `POST /api/providers/{providerId}/test` succeeds or returns a sanitized provider failure. The server decides whether the account requires admin access based on account scope.
 - With BYOK enabled, a regular user can add a `scope: "user"` provider account.
 - With BYOK disabled, the same user receives `403` when adding a `scope: "user"` provider account.
@@ -100,6 +106,7 @@ These checks still require external credentials, provider configuration, or emai
 - MinIO readiness remains `ok` after uploads or provider tests that touch object storage.
 - Redis readiness remains `ok` after login and chat activity.
 - Worker logs remain clean during provider sync or queued work.
+- `/admin/operations` shows provider account status, model binding status, knowledge ingestion status, seven-day agent run status, and recent job failures.
 
 ## Shutdown
 

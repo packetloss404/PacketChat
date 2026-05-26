@@ -20,12 +20,16 @@ type NavItem = {
 const primaryNav: NavItem[] = [
   { id: "chats", label: "Chats", href: "/chat", icon: <Icon.chat /> },
   { id: "agents", label: "Agents", href: "/agents", icon: <Icon.grid /> },
+  { id: "approval-queue", label: "Action Queue", href: "/approvals", icon: <Icon.bell /> },
   { id: "providers", label: "Models", href: "/providers", icon: <Icon.key /> },
   { id: "projects", label: "Projects", href: "/projects", icon: <Icon.folder /> },
   { id: "prompts", label: "Prompts", href: "/prompts", icon: <Icon.text /> },
   { id: "knowledge", label: "Knowledge", href: "/knowledge", icon: <Icon.layers /> },
   { id: "users", label: "Users", href: "/admin/users", icon: <Icon.users /> },
-  { id: "usage", label: "Usage", href: "/admin/usage", icon: <Icon.mixer /> }
+  { id: "usage", label: "Usage", href: "/admin/usage", icon: <Icon.mixer /> },
+  { id: "audit", label: "Audit", href: "/admin/audit", icon: <Icon.lock /> },
+  { id: "operations", label: "Ops", href: "/admin/operations", icon: <Icon.database /> },
+  { id: "approvals", label: "Approvals", href: "/admin/approvals", icon: <Icon.bell /> }
 ];
 
 const pluginsNav: NavItem[] = [
@@ -36,6 +40,7 @@ const pluginsNav: NavItem[] = [
 const routeTitles: Array<{ match: (p: string) => boolean; title: string }> = [
   { match: (p) => p.startsWith("/plugins/marketplace"), title: "Agent Marketplace" },
   { match: (p) => p === "/plugins" || p.startsWith("/plugins/"), title: "Plugins" },
+  { match: (p) => p.startsWith("/approvals"), title: "Approvals" },
   { match: (p) => p.startsWith("/agents"), title: "Agents" },
   { match: (p) => p.startsWith("/providers"), title: "Models" },
   { match: (p) => p.startsWith("/projects"), title: "Projects" },
@@ -43,6 +48,9 @@ const routeTitles: Array<{ match: (p: string) => boolean; title: string }> = [
   { match: (p) => p.startsWith("/knowledge"), title: "Knowledge" },
   { match: (p) => p.startsWith("/admin/users"), title: "Users" },
   { match: (p) => p.startsWith("/admin/usage"), title: "Usage" },
+  { match: (p) => p.startsWith("/admin/audit"), title: "Audit" },
+  { match: (p) => p.startsWith("/admin/operations"), title: "Operations" },
+  { match: (p) => p.startsWith("/admin/approvals"), title: "Approvals" },
   { match: (p) => p.startsWith("/login"), title: "Sign in" },
   { match: (p) => p.startsWith("/settings"), title: "Settings" },
   { match: (p) => p.startsWith("/chat"), title: "Chat" }
@@ -99,6 +107,11 @@ function LeftRail({ onMobileClose, onNavigate }: LeftRailProps) {
     apiClient.agents
       .list()
       .then((res) => apply("agents", String(res.agents.length)))
+      .catch(() => undefined);
+
+    apiClient.approvals
+      .list()
+      .then((res) => apply("approval-queue", res.stats.pending > 0 ? String(res.stats.pending) : ""))
       .catch(() => undefined);
 
     apiClient.providers
@@ -194,52 +207,52 @@ function LeftRail({ onMobileClose, onNavigate }: LeftRailProps) {
         <span className="inline-preview" aria-hidden="true">Preview</span>
       </label>
 
-      <nav className="lr__nav" aria-label="Primary sections">
-        {visiblePrimaryNav.map((item) => {
-          const active = isActivePath(pathname, item.href);
-          const badge = counts[item.id] ?? item.badge;
-          const link = (
-            <Link key={item.id} href={item.href} aria-current={active ? "page" : undefined} className={active ? "on" : undefined} onClick={onNavigate}>
-              {item.icon}
-              <span>{item.label}</span>
-              {badge ? <span className="badge">{badge}</span> : null}
-            </Link>
-          );
+      <div className="lr__list">
+        <nav className="lr__nav" aria-label="Primary sections">
+          {visiblePrimaryNav.map((item) => {
+            const active = isActivePath(pathname, item.href);
+            const badge = counts[item.id] ?? item.badge;
+            const link = (
+              <Link key={item.id} href={item.href} aria-current={active ? "page" : undefined} className={active ? "on" : undefined} onClick={onNavigate}>
+                {item.icon}
+                <span>{item.label}</span>
+                {badge ? <span className="badge">{badge}</span> : null}
+              </Link>
+            );
 
-          if (item.id !== "chats") return link;
+            if (item.id !== "chats") return link;
 
-          return (
-            <div className="lr__nav-group" key={item.id}>
-              {link}
-              <div className="lr__nav-children" aria-label="Recent chats">
-                <div className="lr__group">
-                  <h4>Recent chats</h4>
-                  <p className="muted" style={{ margin: "4px 12px 8px", fontSize: 12 }}>
-                    Chats appear here after you start them.
-                  </p>
+            return (
+              <div className="lr__nav-group" key={item.id}>
+                {link}
+                <div className="lr__nav-children" aria-label="Recent chats">
+                  <div className="lr__group">
+                    <h4>Recent chats</h4>
+                    <p className="muted" style={{ margin: "4px 12px 8px", fontSize: 12 }}>
+                      Chats appear here after you start them.
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
-          );
-        })}
-      </nav>
+            );
+          })}
+        </nav>
 
-      <div className="lr__section">
-        packetchat+ <span className="ch"><Icon.chev /></span>
+        <div className="lr__section">
+          packetchat+ <span className="ch"><Icon.chev /></span>
+        </div>
+        <nav className="lr__nav" aria-label="packetchat+">
+          {pluginsNav.map((item) => {
+            const active = isActivePath(pathname, item.href);
+            return (
+              <Link key={item.id} href={item.href} aria-current={active ? "page" : undefined} className={active ? "on" : undefined} onClick={onNavigate}>
+                {item.icon}
+                <span>{item.label}</span>
+              </Link>
+            );
+          })}
+        </nav>
       </div>
-      <nav className="lr__nav" aria-label="packetchat+">
-        {pluginsNav.map((item) => {
-          const active = isActivePath(pathname, item.href);
-          return (
-            <Link key={item.id} href={item.href} aria-current={active ? "page" : undefined} className={active ? "on" : undefined} onClick={onNavigate}>
-              {item.icon}
-              <span>{item.label}</span>
-            </Link>
-          );
-        })}
-      </nav>
-
-      <div className="lr__list" />
 
 
       <UserFooter displayName={displayName} initials={initials} onNavigate={onNavigate} />

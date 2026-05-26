@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { ProvidersManager } from "../../components/providers/providers-manager";
 import { apiClient, type ProviderAccount, type ProviderModelBinding } from "../../lib/api-client";
-import { LoadingBlock, useToast } from "../../components/ui";
+import { LoadingBlock, StatusBadge, useToast } from "../../components/ui";
 import { Icon } from "../../components/icons";
 
 type ModelTab = "models" | "settings";
@@ -55,18 +55,52 @@ function formatContext(binding: ProviderModelBinding): string | null {
   return String(value);
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
 function readPricing(binding: ProviderModelBinding) {
-  const source = (binding.usagePricing ?? binding.capability_overrides ?? {}) as Record<string, unknown>;
+  const usagePricing = asRecord(binding.usagePricing);
+  const rates = asRecord(usagePricing?.rates);
+  const source = rates ?? usagePricing ?? asRecord(binding.capability_overrides) ?? {};
   const pick = (key: string) => {
     const value = source?.[key];
-    return typeof value === "number" ? value : typeof value === "string" ? Number(value) : null;
+    const next = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+    return Number.isFinite(next) ? next : null;
   };
   return {
     input: pick("input") ?? pick("inputPerMillion") ?? pick("prompt"),
     output: pick("output") ?? pick("outputPerMillion") ?? pick("completion"),
     cacheRead: pick("cacheRead") ?? pick("cache_read"),
-    cacheWrite: pick("cacheWrite") ?? pick("cache_write")
+    cacheWrite: pick("cacheWrite") ?? pick("cache_write"),
+    search: pick("searchPerQuery") ?? pick("search_per_query")
   };
+}
+
+function hasPricing(binding: ProviderModelBinding) {
+  const usagePricing = asRecord(binding.usagePricing);
+  if (typeof usagePricing?.known === "boolean") return usagePricing.known;
+  return Object.values(readPricing(binding)).some((value) => value !== null && Number.isFinite(value));
+}
+
+function formatPrice(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return null;
+  return Number.isInteger(value) ? String(value) : String(value);
+}
+
+function priceSummary(binding: ProviderModelBinding) {
+  const pricing = readPricing(binding);
+  const parts = [
+    pricing.input !== null ? `in $${formatPrice(pricing.input)}` : null,
+    pricing.output !== null ? `out $${formatPrice(pricing.output)}` : null,
+    pricing.search !== null ? `search $${formatPrice(pricing.search)}` : null
+  ].filter(Boolean);
+  return parts.length ? parts.join(" / ") : null;
+}
+
+function isRuntimeEnabledStatus(status: string) {
+  const normalized = status.toLowerCase();
+  return normalized === "enabled" || normalized === "active" || normalized === "ok";
 }
 
 const FEATURE_CATALOG = [
@@ -148,24 +182,6 @@ function ProviderBadge({ id, size = 22 }: { id: string; size?: number }) {
   );
 }
 
-function Toggle({ on, onToggle, label }: { on: boolean; onToggle: () => void; label: string }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      aria-label={label}
-      className={`model-toggle ${on ? "on" : ""}`}
-      onClick={(event) => {
-        event.stopPropagation();
-        onToggle();
-      }}
-    >
-      <span className="model-toggle__thumb" />
-    </button>
-  );
-}
-
 export function ModelsClient() {
   const [tab, setTab] = useState<ModelTab>("models");
   const [accounts, setAccounts] = useState<ProviderAccount[]>([]);
@@ -175,8 +191,6 @@ export function ModelsClient() {
   const [categoryId, setCategoryId] = useState<string>("all");
   const [query, setQuery] = useState("");
   const [selectedBindingId, setSelectedBindingId] = useState<string | null>(null);
-  const [accountStatusOverrides, setAccountStatusOverrides] = useState<Record<string, "enabled" | "disabled">>({});
-  const [pendingAccountIds, setPendingAccountIds] = useState<Record<string, true>>({});
   const [detailTab, setDetailTab] = useState<DetailTab>("overview");
   const [moreOpen, setMoreOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
@@ -189,7 +203,7 @@ export function ModelsClient() {
     async function load() {
       setLoading(true);
       try {
-        const data = await apiClient.providers.list();
+        const data = await apiClient.providers.list({ includeDisabledModelBindings: true });
         if (cancelled) return;
         setAccounts(data.accounts ?? []);
         setBindings(data.modelBindings ?? []);
@@ -236,13 +250,11 @@ export function ModelsClient() {
 
   const isAccountEnabled = useMemo(() => {
     return (accountId: string) => {
-      const override = accountStatusOverrides[accountId];
-      if (override) return override === "enabled";
       const account = accountById.get(accountId);
       if (!account) return false;
-      return account.status === "enabled" || account.status === "active" || account.status === "ok";
+      return isRuntimeEnabledStatus(account.status);
     };
-  }, [accountStatusOverrides, accountById]);
+  }, [accountById]);
 
   const rows = useMemo<ModelRow[]>(() => {
     return bindings
@@ -322,49 +334,6 @@ export function ModelsClient() {
   }, [filtered, selectedBindingId]);
 
   const selected = useMemo(() => rows.find((row) => row.id === selectedBindingId) ?? null, [rows, selectedBindingId]);
-
-  async function toggleAccount(account: ProviderAccount) {
-    if (pendingAccountIds[account.id]) return;
-    const currentlyEnabled = isAccountEnabled(account.id);
-    const nextStatus: "enabled" | "disabled" = currentlyEnabled ? "disabled" : "enabled";
-
-    setAccountStatusOverrides((prev) => ({ ...prev, [account.id]: nextStatus }));
-    setPendingAccountIds((prev) => ({ ...prev, [account.id]: true }));
-
-    try {
-      await apiClient.providers.updateAccount(account.id, { status: nextStatus });
-      setAccounts((prev) => prev.map((entry) => entry.id === account.id ? { ...entry, status: nextStatus } : entry));
-      toast({
-        message: `${nextStatus === "enabled" ? "Enabled" : "Disabled"} ${account.display_name}`,
-        variant: "success"
-      });
-    } catch (err) {
-      setAccountStatusOverrides((prev) => {
-        const next = { ...prev };
-        delete next[account.id];
-        return next;
-      });
-      toast({
-        title: "Could not update provider",
-        message: err instanceof Error ? err.message : String(err),
-        variant: "error"
-      });
-    } finally {
-      setPendingAccountIds((prev) => {
-        const next = { ...prev };
-        delete next[account.id];
-        return next;
-      });
-    }
-  }
-
-  function handleResetToggles() {
-    setMoreOpen(false);
-    toast({
-      message: "Reset is a no-op until per-binding overrides are persisted server-side.",
-      variant: "info"
-    });
-  }
 
   function handleExport() {
     setMoreOpen(false);
@@ -555,14 +524,6 @@ export function ModelsClient() {
                     <button
                       role="menuitem"
                       type="button"
-                      onClick={handleResetToggles}
-                      style={popoverItemStyle}
-                    >
-                      Reset all toggles
-                    </button>
-                    <button
-                      role="menuitem"
-                      type="button"
                       onClick={handleExport}
                       style={popoverItemStyle}
                     >
@@ -580,31 +541,37 @@ export function ModelsClient() {
             <div className="models-lib__rows">
               {filtered.map((row) => {
                 const accountEnabled = isAccountEnabled(row.account.id);
-                const enabled = accountEnabled && (row.enabled ?? true);
+                const bindingEnabled = row.enabled ?? true;
+                const enabled = accountEnabled && bindingEnabled;
                 const selectedActive = row.id === selectedBindingId;
                 const ctx = formatContext(row);
                 const isDefault = row.account.is_default && enabled;
+                const routeState = enabled ? "Route enabled" : accountEnabled ? "Model disabled" : `Account ${row.account.status}`;
+                const routeMeta = [
+                  routeState,
+                  ctx ? `${ctx} context` : null,
+                  priceSummary(row)
+                ].filter(Boolean).join(" / ");
                 return (
-                  <button
+                  <div
                     key={row.id}
-                    type="button"
-                    className={`model-row ${selectedActive ? "on" : ""}`}
-                    onClick={() => setSelectedBindingId(row.id)}
+                    className={`model-row ${selectedActive ? "on" : ""} ${enabled ? "" : "model-row--disabled-route"}`}
                   >
-                    <ProviderBadge id={row.account.provider} size={24} />
-                    <span className="model-row__body">
-                      <span className="model-row__name">
-                        {row.display_name || row.model}
-                        {isDefault ? <span className="model-row__default" aria-label="Default">✓</span> : null}
+                    <button
+                      type="button"
+                      className="model-row__select"
+                      onClick={() => setSelectedBindingId(row.id)}
+                    >
+                      <ProviderBadge id={row.account.provider} size={24} />
+                      <span className="model-row__body">
+                        <span className="model-row__name">
+                          {row.display_name || row.model}
+                          {isDefault ? <span className="model-row__default" aria-label="Default">✓</span> : null}
+                        </span>
+                        {routeMeta ? <span className="model-row__ctx">{routeMeta}</span> : null}
                       </span>
-                      {ctx ? <span className="model-row__ctx">{ctx}</span> : null}
-                    </span>
-                    <Toggle
-                      on={enabled}
-                      onToggle={() => toggleAccount(row.account)}
-                      label={`Toggle ${row.model ?? row.display_name ?? "model"}`}
-                    />
-                  </button>
+                    </button>
+                  </div>
                 );
               })}
 
@@ -709,12 +676,17 @@ function ModelDetail({ row, tab, onTabChange }: { row: ModelRow; tab: DetailTab;
   const meta = providerMeta(row.account.provider);
   const ctx = formatContext(row);
   const pricing = readPricing(row);
+  const pricingKnown = hasPricing(row);
+  const hasPriceValues = Object.values(pricing).some((value) => value !== null && Number.isFinite(value));
   const overrides = (row.capability_overrides ?? null) as Record<string, unknown> | null;
   const releaseDate = (overrides?.releaseDate ?? overrides?.release_date ?? null) as string | null;
   const knowledgeCutoff = (overrides?.knowledgeCutoff ?? overrides?.knowledge_cutoff ?? null) as string | null;
   const apiType = (overrides?.apiType ?? overrides?.api_type ?? null) as string | null;
   const description = (overrides?.description ?? null) as string | null;
   const providerTools = PROVIDER_TOOLS[row.account.provider] ?? [];
+  const accountEnabled = isRuntimeEnabledStatus(row.account.status);
+  const bindingEnabled = row.enabled ?? true;
+  const routeEnabled = accountEnabled && bindingEnabled;
 
   const parameterEntries = useMemo(() => {
     const source = overrides ?? {};
@@ -734,8 +706,15 @@ function ModelDetail({ row, tab, onTabChange }: { row: ModelRow; tab: DetailTab;
       <header className="model-detail__head">
         <ProviderBadge id={row.account.provider} size={28} />
         <div className="model-detail__title">{row.display_name || row.model}</div>
+        <StatusBadge tone={routeEnabled ? "success" : "neutral"}>{routeEnabled ? "Route enabled" : "Route disabled"}</StatusBadge>
         {row.account.is_default ? <span className="model-detail__default"><span>✓</span> Default</span> : null}
       </header>
+
+      {!routeEnabled ? (
+        <div className="model-detail__warning" role="status">
+          {accountEnabled ? "This model binding is disabled and will not be offered as a runtime route." : "This provider account is disabled, so its models are hidden from runtime routing."}
+        </div>
+      ) : null}
 
       <div className="models-lib__tabs" role="tablist" aria-label="Detail tabs">
         <button
@@ -770,6 +749,15 @@ function ModelDetail({ row, tab, onTabChange }: { row: ModelRow; tab: DetailTab;
           <dt>Provider</dt>
           <dd>{meta.name}</dd>
 
+          <dt>Provider account</dt>
+          <dd>{row.account.display_name} ({row.account.scope})</dd>
+
+          <dt>Route status</dt>
+          <dd className="model-detail__status">
+            <StatusBadge tone={accountEnabled ? "success" : "neutral"}>{accountEnabled ? "Account enabled" : `Account ${row.account.status}`}</StatusBadge>
+            <StatusBadge tone={bindingEnabled ? "success" : "neutral"}>{bindingEnabled ? "Model enabled" : "Model disabled"}</StatusBadge>
+          </dd>
+
           <dt>Context length</dt>
           <dd>{ctx ?? "—"}</dd>
 
@@ -784,10 +772,17 @@ function ModelDetail({ row, tab, onTabChange }: { row: ModelRow; tab: DetailTab;
 
           <dt>Pricing /1M tokens</dt>
           <dd className="model-detail__pricing">
-            <PriceChip icon="↓" value={pricing.input} />
-            <PriceChip icon="↑" value={pricing.output} />
-            <PriceChip icon="↻" value={pricing.cacheRead} />
-            <PriceChip icon="⟳" value={pricing.cacheWrite} />
+            {pricingKnown && hasPriceValues ? (
+              <>
+                <PriceChip icon="↓" value={pricing.input} />
+                <PriceChip icon="↑" value={pricing.output} />
+                <PriceChip icon="↻" value={pricing.cacheRead} />
+                <PriceChip icon="⟳" value={pricing.cacheWrite} />
+                <PriceChip icon="S" value={pricing.search} />
+              </>
+            ) : (
+              <span className="muted">Unknown pricing</span>
+            )}
           </dd>
 
           <dt>Features</dt>

@@ -27,7 +27,10 @@ type ProviderModelBinding = {
   provider_account_id: string;
   model: string | null;
   display_name: string | null;
-  enabled: boolean;
+  enabled?: boolean;
+  provider_model_ref?: Record<string, unknown> | null;
+  capability_overrides?: Record<string, unknown> | null;
+  usagePricing?: Record<string, unknown> | null;
 };
 
 type ProvidersResponse = {
@@ -43,6 +46,92 @@ const providers: { id: ProviderId; label: string; hint: string }[] = [
   { id: "perplexity", label: "Perplexity", hint: "Hosted search-aware model provider." },
   { id: "minimax", label: "Minimax", hint: "Minimax model provider account." }
 ];
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function isRuntimeEnabledStatus(status: string) {
+  const normalized = status.toLowerCase();
+  return normalized === "enabled" || normalized === "active" || normalized === "ok";
+}
+
+function isBindingEnabled(binding: ProviderModelBinding) {
+  return binding.enabled ?? true;
+}
+
+function modelLabel(binding: ProviderModelBinding) {
+  return binding.display_name ?? binding.model ?? "Unnamed model";
+}
+
+function pickNumber(source: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = source[key];
+    const next = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+    if (Number.isFinite(next)) return next;
+  }
+  return null;
+}
+
+function pricingRates(binding: ProviderModelBinding) {
+  const usagePricing = asRecord(binding.usagePricing);
+  const rates = asRecord(usagePricing?.rates);
+  const source = rates ?? usagePricing ?? asRecord(binding.capability_overrides) ?? {};
+  return {
+    input: pickNumber(source, ["input", "inputPerMillion", "prompt"]),
+    output: pickNumber(source, ["output", "outputPerMillion", "completion"]),
+    cacheRead: pickNumber(source, ["cacheRead", "cache_read"]),
+    cacheWrite: pickNumber(source, ["cacheWrite", "cache_write"]),
+    search: pickNumber(source, ["searchPerQuery", "search_per_query"])
+  };
+}
+
+function hasKnownPricing(binding: ProviderModelBinding) {
+  const usagePricing = asRecord(binding.usagePricing);
+  if (typeof usagePricing?.known === "boolean") return usagePricing.known;
+  return Object.values(pricingRates(binding)).some((value) => value !== null);
+}
+
+function formatPricingSummary(binding: ProviderModelBinding) {
+  const rates = pricingRates(binding);
+  const parts = [
+    rates.input !== null ? `in $${rates.input}` : null,
+    rates.output !== null ? `out $${rates.output}` : null,
+    rates.search !== null ? `search $${rates.search}` : null
+  ].filter(Boolean);
+  return parts.length ? parts.join(" / ") : null;
+}
+
+function truthyCapability(source: Record<string, unknown>, keys: string[]) {
+  return keys.some((key) => source[key] === true || source[key] === "true");
+}
+
+function readContextLength(binding: ProviderModelBinding) {
+  const source = asRecord(binding.capability_overrides) ?? {};
+  return pickNumber(source, ["contextLength", "context_length", "context"]);
+}
+
+function formatContextLength(value: number | null) {
+  if (value === null || value <= 0) return null;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}M context`;
+  if (value >= 1_000) return `${Math.round(value / 1_000)}K context`;
+  return `${value} context`;
+}
+
+function capabilitySummary(binding: ProviderModelBinding) {
+  const source = asRecord(binding.capability_overrides);
+  if (!source || Object.keys(source).length === 0) return [];
+  const labels = [
+    formatContextLength(readContextLength(binding)),
+    truthyCapability(source, ["vision", "supportsVision", "imageInput", "image_input"]) ? "Vision" : null,
+    truthyCapability(source, ["tools", "toolUse", "tool_use", "functionCalling", "function_calling"]) ? "Tools" : null,
+    truthyCapability(source, ["streaming"]) ? "Streaming" : null,
+    truthyCapability(source, ["jsonMode", "json_mode", "structuredOutputs", "structured_outputs"]) ? "Structured output" : null,
+    truthyCapability(source, ["thinking", "reasoning"]) ? "Reasoning" : null
+  ].filter((label): label is string => Boolean(label));
+  if (labels.length > 0) return labels.slice(0, 3);
+  return Object.keys(source).slice(0, 3);
+}
 
 const initialForm = {
   provider: "openai-compatible" as ProviderId,
@@ -90,7 +179,7 @@ export function ProvidersManager() {
     setLoading(true);
     setError(null);
     try {
-      const data = (await apiFetch("/api/providers")) as ProvidersResponse;
+      const data = (await apiFetch("/api/providers?includeDisabledModelBindings=true")) as ProvidersResponse;
       setAccounts(data.accounts);
       setModelBindings(data.modelBindings ?? []);
       setByokEnabled(data.byokEnabled);
@@ -273,9 +362,15 @@ export function ProvidersManager() {
     acc[model.provider_account_id] = [...(acc[model.provider_account_id] ?? []), model];
     return acc;
   }, {});
-  const enabledAccounts = accounts.filter((account) => account.status === "enabled").length;
-  const globalAccounts = accounts.filter((account) => account.scope === "global").length;
-  const userAccounts = accounts.filter((account) => account.scope === "user").length;
+  const enabledAccounts = accounts.filter((account) => isRuntimeEnabledStatus(account.status)).length;
+  const disabledAccounts = accounts.length - enabledAccounts;
+  const enabledModelBindings = modelBindings.filter(isBindingEnabled).length;
+  const disabledModelBindings = modelBindings.length - enabledModelBindings;
+  const pricedModelBindings = modelBindings.filter(hasKnownPricing).length;
+  const unpricedModelBindings = modelBindings.filter((binding) => binding.model && !hasKnownPricing(binding)).length;
+  const capabilityModels = modelBindings.filter((binding) => capabilitySummary(binding).length > 0).length;
+  const defaultAccount = accounts.find((account) => isRuntimeEnabledStatus(account.status) && account.is_default) ?? accounts.find((account) => account.is_default);
+  const defaultModel = defaultAccount ? (modelsByAccount[defaultAccount.id] ?? []).find(isBindingEnabled) : null;
 
   return (
     <section className="providers-page">
@@ -298,6 +393,21 @@ export function ProvidersManager() {
           you are an admin, or ask an admin to enable BYOK.
         </div>
       ) : null}
+      {accounts.length > 0 && enabledAccounts === 0 ? (
+        <div className="warning" role="status">
+          All provider accounts are disabled. Chat, agents, and model sync will not use these routes until at least one account is enabled.
+        </div>
+      ) : null}
+      {enabledAccounts > 0 && !accounts.some((account) => isRuntimeEnabledStatus(account.status) && account.is_default) ? (
+        <div className="providers-notice" role="status">
+          No enabled default route is set. Runtime screens will fall back to the first enabled provider account.
+        </div>
+      ) : null}
+      {unpricedModelBindings > 0 ? (
+        <div className="providers-notice" role="status">
+          {unpricedModelBindings} synced {unpricedModelBindings === 1 ? "model has" : "models have"} unknown pricing and will be reported as unknown cost in usage views.
+        </div>
+      ) : null}
       {message ? <div className="success-state" role="status">{message}</div> : null}
       {error ? <ErrorState title="Provider request failed" message={error} onRetry={() => void loadProviders()} /> : null}
 
@@ -305,17 +415,22 @@ export function ProvidersManager() {
         <div className="card card--compact providers-summary-card">
           <span className="eyebrow">Enabled routes</span>
           <strong>{enabledAccounts}</strong>
-          <span className="muted">usable provider accounts</span>
+          <span className="muted">{disabledAccounts} disabled provider {disabledAccounts === 1 ? "account" : "accounts"}</span>
         </div>
         <div className="card card--compact providers-summary-card">
-          <span className="eyebrow">Global</span>
-          <strong>{globalAccounts}</strong>
-          <span className="muted">admin-managed accounts</span>
+          <span className="eyebrow">Default route</span>
+          <strong className="providers-summary-route">{defaultAccount ? defaultAccount.display_name : "Unset"}</strong>
+          <span className="muted">{defaultModel ? modelLabel(defaultModel) : defaultAccount ? "No enabled bound model" : "No default account"}</span>
         </div>
         <div className="card card--compact providers-summary-card">
-          <span className="eyebrow">BYOK</span>
-          <strong>{userAccounts}</strong>
-          <span className="muted">user-scoped accounts / {byokEnabled ? "enabled" : "disabled"}</span>
+          <span className="eyebrow">Models</span>
+          <strong>{enabledModelBindings}/{modelBindings.length}</strong>
+          <span className="muted">enabled bindings{disabledModelBindings ? `, ${disabledModelBindings} disabled` : ""}</span>
+        </div>
+        <div className="card card--compact providers-summary-card">
+          <span className="eyebrow">Cost data</span>
+          <strong>{pricedModelBindings}/{modelBindings.length}</strong>
+          <span className="muted">priced models, {capabilityModels} with capability data</span>
         </div>
       </div>
 
@@ -339,6 +454,9 @@ export function ProvidersManager() {
               <option value="user" disabled={userScopeDisabled}>User BYOK</option>
             </select>
           </label>
+          <p className="muted providers-hint">
+            Global provider changes require admin authorization. Disabled accounts are excluded from runtime routing.
+          </p>
 
           <label>
             Display name
@@ -380,8 +498,15 @@ export function ProvidersManager() {
           <h2>Configured accounts</h2>
           {loading ? <LoadingBlock title="Loading provider accounts" description="Checking configured accounts and synced models." /> : null}
           {!loading && accounts.length === 0 ? <EmptyState title="No provider accounts" description="Add a provider account with a valid key to enable chat, agents, and model sync." /> : null}
-          {accounts.map((account) => (
-            <article className={`providers-account ${account.status !== "enabled" ? "providers-account--disabled" : ""}`} key={account.id}>
+          {accounts.map((account) => {
+            const accountEnabled = isRuntimeEnabledStatus(account.status);
+            const accountModels = modelsByAccount[account.id] ?? [];
+            const accountEnabledModels = accountModels.filter(isBindingEnabled).length;
+            const accountPricedModels = accountModels.filter(hasKnownPricing).length;
+            const accountCapabilities = [...new Set(accountModels.flatMap(capabilitySummary))].slice(0, 4);
+            const routeMetadata = [account.base_url, account.api_version, account.region].filter(Boolean).join(" / ");
+            return (
+            <article className={`providers-account ${accountEnabled ? "" : "providers-account--disabled"}`} key={account.id}>
               {editingId === account.id ? (
                 <div className="providers-form">
                   <label>
@@ -405,14 +530,20 @@ export function ProvidersManager() {
                     </label>
                     <label>
                       Status
-                      <select value={editForm.status} onChange={(event) => setEditForm({ ...editForm, status: event.target.value })}>
+                      <select
+                        value={editForm.status}
+                        onChange={(event) => {
+                          const status = event.target.value;
+                          setEditForm({ ...editForm, status, isDefault: status === "disabled" ? false : editForm.isDefault });
+                        }}
+                      >
                         <option value="enabled">Enabled</option>
                         <option value="disabled">Disabled</option>
                       </select>
                     </label>
                   </div>
                   <label className="providers-checkbox">
-                    <input type="checkbox" checked={editForm.isDefault} onChange={(event) => setEditForm({ ...editForm, isDefault: event.target.checked })} />
+                    <input type="checkbox" checked={editForm.isDefault} disabled={editForm.status === "disabled"} onChange={(event) => setEditForm({ ...editForm, isDefault: event.target.checked })} />
                     Set as default
                   </label>
                 </div>
@@ -422,19 +553,44 @@ export function ProvidersManager() {
                   <div className="providers-badge-row">
                     <StatusBadge tone="info">{providerLabel(account.provider)}</StatusBadge>
                     <StatusBadge tone={account.scope === "user" ? "warning" : "success"}>{account.scope === "user" ? "Your BYOK" : "Global"}</StatusBadge>
-                    <StatusBadge>{account.status}</StatusBadge>
+                    <StatusBadge tone={accountEnabled ? "success" : "neutral"}>{accountEnabled ? "Enabled route" : "Disabled route"}</StatusBadge>
                   </div>
                   <p className="muted providers-meta">
-                    {[account.base_url, account.api_version, account.region].filter(Boolean).join(" / ") || "No endpoint metadata"}
+                    {routeMetadata || "No endpoint metadata"}
                   </p>
+                  <div className="providers-governance-row" aria-label={`Governance summary for ${account.display_name}`}>
+                    <span className="providers-pill">{accountEnabledModels}/{accountModels.length} models enabled</span>
+                    <span className={`providers-pill ${accountModels.length > 0 && accountPricedModels < accountModels.length ? "providers-pill--warning" : ""}`}>
+                      {accountPricedModels}/{accountModels.length} priced
+                    </span>
+                    {accountCapabilities.map((capability) => (
+                      <span className="providers-pill" key={capability}>{capability}</span>
+                    ))}
+                    {account.is_default ? <span className="providers-pill providers-pill--success">Default route</span> : null}
+                  </div>
+                  {!accountEnabled ? (
+                    <div className="providers-inline-warning" role="status">
+                      Disabled accounts are excluded from runtime routing, model sync, and connection tests until re-enabled.
+                    </div>
+                  ) : null}
                   <div className="providers-model-strip" aria-label={`Synced models for ${account.display_name}`}>
-                    {(modelsByAccount[account.id] ?? []).length ? (
+                    {accountModels.length ? (
                       <>
-                        <span className="providers-pill">{(modelsByAccount[account.id] ?? []).length} models</span>
-                        {(modelsByAccount[account.id] ?? []).slice(0, 4).map((model) => (
-                          <span className="providers-model-chip" key={model.id}>{model.display_name ?? model.model}</span>
-                        ))}
-                        {(modelsByAccount[account.id] ?? []).length > 4 ? <span className="muted">+{(modelsByAccount[account.id] ?? []).length - 4} more</span> : null}
+                        <span className="providers-pill">{accountModels.length} models</span>
+                        {accountModels.slice(0, 5).map((model) => {
+                          const modelEnabled = isBindingEnabled(model);
+                          const modelMeta = [
+                            modelEnabled ? "Enabled" : "Disabled",
+                            formatPricingSummary(model),
+                            ...capabilitySummary(model)
+                          ].filter(Boolean).join(" / ");
+                          return (
+                            <span className={`providers-model-chip ${modelEnabled ? "" : "providers-model-chip--disabled"}`} key={model.id} title={modelMeta}>
+                              {modelLabel(model)}{modelEnabled ? "" : " (disabled)"}
+                            </span>
+                          );
+                        })}
+                        {accountModels.length > 5 ? <span className="muted">+{accountModels.length - 5} more</span> : null}
                       </>
                     ) : (
                       <span className="muted">No models discovered yet. Use manual model entry in chat or sync models.</span>
@@ -460,10 +616,10 @@ export function ProvidersManager() {
                 ) : (
                   <button className="button" onClick={() => startEdit(account)} type="button">Edit</button>
                 )}
-                <button className="button" onClick={() => void testProvider(account)} disabled={testingId === account.id} type="button">
+                <button className="button" onClick={() => void testProvider(account)} disabled={!accountEnabled || testingId === account.id} title={accountEnabled ? undefined : "Enable this account before testing"} type="button">
                   {testingId === account.id ? "Testing..." : "Test connection"}
                 </button>
-                <button className="button" onClick={() => void syncModels(account)} disabled={syncingId === account.id} type="button">
+                <button className="button" onClick={() => void syncModels(account)} disabled={!accountEnabled || syncingId === account.id} title={accountEnabled ? undefined : "Enable this account before syncing models"} type="button">
                   {syncingId === account.id ? "Syncing..." : "Sync models"}
                 </button>
                 <ConfirmButton message={`Delete ${account.display_name}?`} confirmLabel="Delete" disabled={deletingId === account.id} onConfirm={() => deleteProvider(account)}>
@@ -471,7 +627,8 @@ export function ProvidersManager() {
                 </ConfirmButton>
               </div>
             </article>
-          ))}
+            );
+          })}
         </div>
       </div>
     </section>
