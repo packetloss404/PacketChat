@@ -11,10 +11,12 @@ All notable PacketChat changes are tracked here.
 - Provider governance now surfaces enabled/disabled routes, default route state, synced model bindings, capability metadata, and pricing coverage.
 - Admin release-readiness pages now cover usage governance, audit logs, operations health, pending approval steps, and approval queue monitoring.
 - Agent runs now expose persisted run history with run status, step/event traces, provider/model usage, token counts, estimated cost, and approval decisions.
+- Local cost estimation now covers the Claude Opus 4 and Claude Sonnet 4 model families in the `apps/web/src/lib/usage.ts` pricing table.
 
 ### Changed
 
 - Current docs now treat approvals, agent run history, audit, operations, model governance, and usage governance as wired V1 surfaces while keeping scheduled runs, evaluations, and true multi-step loops outside V1.
+- Default Anthropic model suggestions in the providers and agents UIs now point at `claude-opus-4-8`. Provider health probes intentionally stay on a low-cost model.
 
 ## 0.1.0 - 2026-05-13
 

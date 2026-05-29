@@ -945,7 +945,7 @@ function AddCustomModelDialog({
           <input
             value={modelId}
             onChange={(event) => setModelId(event.target.value)}
-            placeholder="e.g. claude-opus-4-7"
+            placeholder="e.g. claude-opus-4-8"
             required
             style={fieldInputStyle}
           />

@@ -41,6 +41,8 @@ const prices: Array<{ provider: ProviderId | "any"; modelIncludes: string; price
   { provider: "anthropic", modelIncludes: "claude-3-5-haiku", price: { inputPerMillion: 0.8, outputPerMillion: 4 } },
   { provider: "anthropic", modelIncludes: "claude-3-5-sonnet", price: { inputPerMillion: 3, outputPerMillion: 15 } },
   { provider: "anthropic", modelIncludes: "claude-3-7-sonnet", price: { inputPerMillion: 3, outputPerMillion: 15 } },
+  { provider: "anthropic", modelIncludes: "claude-opus-4", price: { inputPerMillion: 15, outputPerMillion: 75 } },
+  { provider: "anthropic", modelIncludes: "claude-sonnet-4", price: { inputPerMillion: 3, outputPerMillion: 15 } },
   { provider: "perplexity", modelIncludes: "sonar", price: { inputPerMillion: 1, outputPerMillion: 1, searchPerQuery: 0.005 } },
   { provider: "minimax", modelIncludes: "abab", price: { inputPerMillion: 0.2, outputPerMillion: 1.1 } },
   { provider: "any", modelIncludes: "gpt-4o-mini", price: { inputPerMillion: 0.15, outputPerMillion: 0.6 } },

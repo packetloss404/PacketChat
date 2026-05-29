@@ -1355,7 +1355,7 @@ export default function AgentsPage() {
                       ))}
                     </select>
                   ) : (
-                    <input className="input" value={draft.spec.model ?? ""} onChange={(event) => updateSpec({ model: event.target.value })} placeholder="gpt-4.1-mini, claude-3-5-sonnet-latest" />
+                    <input className="input" value={draft.spec.model ?? ""} onChange={(event) => updateSpec({ model: event.target.value })} placeholder="gpt-4.1-mini, claude-opus-4-8" />
                   )}
                 </label>
                 <label>
