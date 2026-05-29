@@ -12,8 +12,11 @@ All notable PacketChat changes are tracked here.
 - Admin release-readiness pages now cover usage governance, audit logs, operations health, pending approval steps, and approval queue monitoring.
 - Agent runs now expose persisted run history with run status, step/event traces, provider/model usage, token counts, estimated cost, and approval decisions.
 - Local cost estimation now covers the Claude Opus 4 and Claude Sonnet 4 model families in the `apps/web/src/lib/usage.ts` pricing table.
+- Tested runtime foundations for deferred backlog items: a multi-step agent loop with step/token/time/payload budgets, tool-call/result step modeling, and approval-resume logic (`apps/web/src/lib/agent-runtime/`); artifact parsing, XSS sanitization, persistence mapping, and chat-attachment bounded context (`apps/web/src/lib/artifacts/`, `apps/web/src/lib/chat-files/`); and a worker queue registry with enqueue helpers plus cleanup-retention and provider-sync orchestration (`packages/jobs/src/queues.ts`, `apps/worker/src/`). These are unit-tested modules not yet wired into the live request path.
 
 ### Changed
+
+- Worker now fails loudly on unsupported jobs: each queue handler validates the job name, and the provider-sync, agent-run, and cleanup queues reject jobs instead of logging success-like no-ops until their async execution is wired.
 
 - Current docs now treat approvals, agent run history, audit, operations, model governance, and usage governance as wired V1 surfaces while keeping scheduled runs, evaluations, and true multi-step loops outside V1.
 - Default Anthropic model suggestions in the providers and agents UIs now point at `claude-opus-4-8`. Provider health probes intentionally stay on a low-cost model.

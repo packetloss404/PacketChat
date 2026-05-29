@@ -1,4 +1,5 @@
-import { createWorker, queueNames, type FileIngestionJob } from "@packetchat/jobs";
+import { createWorker, jobNames, queueNames, type FileIngestionJob } from "@packetchat/jobs";
+import { assertKnownJobName } from "./job-router";
 import { getConfig } from "@packetchat/config";
 import { checkDatabase, getSql } from "@packetchat/db";
 import { checkObjectStorage, createLocalEmbedding, downloadObject, extractSupportedText, LOCAL_EMBEDDING_VERSION, MAX_EXTRACTED_TEXT_CHARS } from "@packetchat/files";
@@ -239,20 +240,36 @@ async function main() {
   startHealthHeartbeat();
 
   attachFailureRecorder(queueNames.providerSync, createWorker(queueNames.providerSync, async (job) => {
+    // Fail loudly on unexpected job names instead of logging a success-like no-op.
+    assertKnownJobName(queueNames.providerSync, job.name, [jobNames.providerSync]);
     logger.info("Provider sync job received", { jobId: job.id, name: job.name });
+    // Async execution is not wired yet. The dependency-injected orchestration in
+    // ./provider-sync is unit-tested and ready to integrate with real model
+    // discovery + persistence; until then, reject rather than silently succeed.
+    throw new Error("provider-sync execution is not enabled in this build");
   }));
 
   attachFailureRecorder(queueNames.fileIngestion, createWorker<FileIngestionJob>(queueNames.fileIngestion, async (job) => {
+    assertKnownJobName(queueNames.fileIngestion, job.name, ["ingest-file"]);
     logger.info("File ingestion job received", { jobId: job.id, name: job.name });
     await ingestFile(job.data);
   }));
 
   attachFailureRecorder(queueNames.agentRun, createWorker(queueNames.agentRun, async (job) => {
+    assertKnownJobName(queueNames.agentRun, job.name, [jobNames.agentRun]);
     logger.info("Agent run job received", { jobId: job.id, name: job.name });
+    // Agent runs still execute synchronously in the web API route. Async run
+    // execution is out of V1 scope; reject queued jobs rather than no-op.
+    throw new Error("agent-run async execution is not enabled in this build");
   }));
 
   attachFailureRecorder(queueNames.cleanup, createWorker(queueNames.cleanup, async (job) => {
+    assertKnownJobName(queueNames.cleanup, job.name, [jobNames.cleanup]);
     logger.info("Cleanup job received", { jobId: job.id, name: job.name });
+    // Retention policy + selection are unit-tested in ./cleanup (runCleanup) and
+    // ready to integrate with real DB delete deps; until then, reject rather
+    // than silently succeed.
+    throw new Error("cleanup execution is not enabled in this build");
   }));
 
   logger.info("PacketChat worker started", { queues: Object.values(queueNames) });
