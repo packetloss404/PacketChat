@@ -1,12 +1,12 @@
-# Initial Baseline / Git Workflow
+# Git Workflow
 
-Use this checklist after `git init` and before creating the first repository checkpoint.
+Use this checklist for day-to-day changes and before opening a pull request.
 
 ## Repository State
 
-- Current branch: `main`
+- Default branch: `main`
 - Remote origin: `git@github.com:packetloss404/PacketChat.git`
-- Commit state: no baseline commit has been created yet.
+- Feature work lands on short-lived branches (for example `codex/<topic>`) and merges into `main` via pull request.
 
 ## Ignored Secrets And Generated Files
 
@@ -20,6 +20,16 @@ Do not commit local secrets or generated state:
 - logs such as `*.log` and `npm-debug.log*`
 
 Keep `.env.example` tracked so operators can create their own `.env` without exposing credentials.
+
+## Start A Change
+
+Branch off an up-to-date `main`:
+
+```shell
+git checkout main
+git pull --ff-only origin main
+git checkout -b codex/<short-topic>
+```
 
 ## Pre-Commit Verification
 
@@ -60,7 +70,7 @@ npm run compose:migrate
 npm run smoke
 ```
 
-## Create The First Commit Manually
+## Commit And Push
 
 Review what will be committed:
 
@@ -69,16 +79,18 @@ git status --short
 git diff -- . ':!package-lock.json'
 ```
 
-Stage and commit the baseline when ready:
+Stage and commit with a conventional-style message:
 
 ```shell
 git add .
 git status --short
-git commit -m "chore: establish initial PacketChat baseline"
+git commit -m "feat: short description of the change"
 ```
 
-Push only when the baseline is reviewed locally:
+Push the branch and open a pull request against `main`:
 
 ```shell
-git push -u origin main
+git push -u origin codex/<short-topic>
 ```
+
+Keep `main` releasable: merge only after `npm run verify` passes and the relevant smoke/readiness checks in `docs/smoke-test.md` and `docs/release-readiness.md` are green for the change.
