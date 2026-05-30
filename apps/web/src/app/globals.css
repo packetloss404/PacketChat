@@ -79,6 +79,11 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   font-feature-settings: "cv11", "ss01";
+  /* Native app feel: no tap flash, no rubber-band on the page itself, stable text size. */
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  overscroll-behavior-y: none;
 }
 
 button {
@@ -133,6 +138,7 @@ select {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   height: 100vh;
+  height: 100dvh; /* track the dynamic viewport so mobile URL bars don't clip the layout */
   overflow: hidden;
 }
 
@@ -4373,4 +4379,54 @@ label {
     grid-template-columns: auto minmax(0, 1fr) auto;
   }
   .rrd { display: none; }
+}
+
+/* ---------------- PWA / native mobile shell ---------------- */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}
+
+/* Momentum scrolling for the main scroll surfaces (legacy iOS; harmless elsewhere). */
+.doc,
+.sheet,
+.stage,
+.lr__list,
+.models-lib__rows {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Clear the notch / status bar. env() is 0 on desktop, so this is a no-op there. */
+.hdr {
+  height: auto;
+  min-height: 48px;
+  padding-top: calc(10px + var(--safe-top));
+  padding-left: calc(14px + var(--safe-left));
+  padding-right: calc(14px + var(--safe-right));
+}
+
+/* Keep the floating composer above the home indicator. */
+.composer--float {
+  bottom: calc(36px + var(--safe-bottom));
+}
+
+@media (max-width: 720px) {
+  /* The overlay nav drawer should respect the notch and home indicator too. */
+  .app[data-mobilenav="open"] .lr {
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+  }
+}
+
+/* Installed (home-screen) app: content paints under the translucent status bar,
+   so guarantee the empty-state and document surfaces clear both insets. */
+@media (display-mode: standalone) {
+  .stage {
+    padding-bottom: calc(140px + var(--safe-bottom));
+  }
+  .doc {
+    padding-bottom: calc(180px + var(--safe-bottom));
+  }
 }
