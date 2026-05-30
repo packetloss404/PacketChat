@@ -4430,3 +4430,38 @@ label {
     padding-bottom: calc(180px + var(--safe-bottom));
   }
 }
+
+/* ---------------- Chat surface · mobile (Claude-inspired reading + composer) ---------------- */
+@media (max-width: 720px) {
+  /* Roomier reading column and prose, closer to the Claude app's chat feel. */
+  .doc {
+    padding: 4px calc(16px + var(--safe-right)) 200px calc(16px + var(--safe-left));
+  }
+  .turn {
+    margin: 22px 0;
+  }
+  .turn__body {
+    font-size: 16px;
+    line-height: 1.72;
+  }
+  .stage {
+    padding: 0 20px 150px;
+  }
+  .greet {
+    font-size: 25px;
+  }
+
+  /* 16px inputs stop iOS Safari from auto-zooming the page on focus. */
+  .composer,
+  .composer textarea {
+    font-size: 16px;
+  }
+
+  /* Composer hugs the bottom edge and clears the home indicator. */
+  .composer--float {
+    width: calc(100% - 20px);
+    bottom: calc(10px + var(--safe-bottom));
+    border-radius: 24px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+  }
+}
