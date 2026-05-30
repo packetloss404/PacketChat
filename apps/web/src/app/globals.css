@@ -4500,3 +4500,41 @@ label {
     height: 40px;
   }
 }
+
+/* ---------------- Touch device polish (press feedback + no callout) ---------------- */
+@media (hover: none) and (pointer: coarse) {
+  /* Subtle press-shrink, like tapping a native control. */
+  .ib,
+  .button,
+  .composer__row .send,
+  .lr__nav a,
+  .lr__nav button,
+  .lr__thread,
+  .prompt-card__use,
+  .hdr__model {
+    transition: transform 80ms ease;
+  }
+  .ib:active,
+  .button:active,
+  .composer__row .send:active,
+  .lr__nav a:active,
+  .lr__nav button:active,
+  .lr__thread:active,
+  .prompt-card__use:active,
+  .hdr__model:active {
+    transform: scale(0.96);
+  }
+
+  /* No long-press selection/callout on UI chrome; message text stays selectable. */
+  .hdr,
+  .lr,
+  .rr,
+  .composer__row,
+  .turn__head,
+  .turn__tools,
+  .mobile-topbar {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
