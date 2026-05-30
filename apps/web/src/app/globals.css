@@ -4465,3 +4465,38 @@ label {
     box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
   }
 }
+
+/* ---------------- Navigation drawer · mobile (slide-in + touch targets) ---------------- */
+@keyframes lr-slide-in {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+@keyframes scrim-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (max-width: 720px) {
+  /* Animate the drawer in like a native side panel (slide-out is instant, as
+     the drawer unmounts; the reduced-motion block neutralises this). */
+  .app[data-mobilenav="open"] .lr {
+    animation: lr-slide-in 200ms ease-out;
+    will-change: transform;
+  }
+  .app[data-mobilenav="open"] .mobile-nav-scrim {
+    animation: scrim-fade 200ms ease-out;
+  }
+
+  /* Comfortable iOS-sized tap targets in the drawer and header. */
+  .app[data-mobilenav="open"] .lr__nav a,
+  .app[data-mobilenav="open"] .lr__nav button {
+    min-height: 44px;
+  }
+  .app[data-mobilenav="open"] .lr__thread {
+    min-height: 40px;
+  }
+  .hdr__nav-toggle {
+    width: 40px;
+    height: 40px;
+  }
+}
