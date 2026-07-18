@@ -67,3 +67,27 @@ Acceptance notes:
 - Generated files are attached to the run as artifacts with size limits.
 - Long-running or oversized executions fail clearly and leave audit events.
 - Tests cover sandbox isolation, file artifacts, timeout behavior, and cleanup.
+
+## Portfolio audit backlog — 2026-07-17
+
+_Findings from a 2026-07-17 code audit, preserved for later. Not yet actioned._
+
+### Later / deferred
+
+- **[low/M]** provider-sync worker throws 'not enabled' instead of executing (index.ts:249)
+  - Fix: Implement ProviderSyncDeps (listModels via provider API, persistModels to DB) and call runProviderSync() in the worker handler at apps/worker/src/index.ts:242-250; add a producer via enqueueProviderSyncJob on provider-account create/refresh. Logic module apps/worker/src/provider-sync.ts is DI-ready + unit-tested.
+- **[low/M]** cleanup worker throws 'not enabled' (index.ts:272)
+  - Fix: Wire CleanupDeps (real DB delete fns for job-failures/completed-runs/orphan-attachments) into runCleanup() at apps/worker/src/index.ts:266-272, and add a repeatable/scheduled producer via enqueueCleanupJob. Logic in apps/worker/src/cleanup.ts is DI-ready + unit-tested.
+- **[low/L]** Rollup: wire the three unwired workers to their sibling logic modules
+  - Fix: Covers the provider-sync + cleanup wiring above (agent-run is intentionally sync-only). Net work: implement the two Deps adapters + add producers/scheduler. No dead queue path today since no producers exist, so this is enhancement not bugfix.
+- **[noise/M]** License Key activation UI is a stub, validation service not connected
+  - Fix: Needs an external license-validation backend not yet built (README.md:106). UI accepts+stores input; connect a POST validate endpoint when the service exists. Deliberate.
+- **[low/M]** Plugin marketplace / install is UI-only, persists to localStorage
+  - Fix: apps/web/src/app/plugins/marketplace/page.tsx stores interest/install in localStorage (MARKETPLACE_KEY). Deliberate per README ('no notification backend'); needs a plugins API + notification backend to persist server-side.
+- **[low/L]** MCP runtime is local-draft only; chat/agents do not consume MCP entries
+  - Fix: Explicitly deferred from V1 (BACKLOG 'MCP Tools' section) with a security-first prerequisite list: server-side connection storage, encrypted owner-scoped creds, tool allowlists, timeout/size limits, run-step auditing. Draft toggles in packagechat.mcp.connections localStorage. Substantial design work.
+
+### Known limitations (deliberate — not planned)
+
+- agent-run worker throws 'not enabled' (index.ts:263)
+- Cloud sync UI is a localStorage draft, backend not wired
