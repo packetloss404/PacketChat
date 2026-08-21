@@ -60,7 +60,6 @@ type RequestEntry = { name: string; description: string; at: string };
 
 const WAITLIST_KEY = "packetchat.plugins.waitlist";
 const REQUESTS_KEY = "packetchat.plugins.requests";
-const ACCESS_TOKEN_KEY = "packetchat.accessToken";
 
 function readWaitlist(): WaitlistEntry[] {
   if (typeof window === "undefined") return [];
@@ -264,11 +263,8 @@ export default function PluginsPage() {
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const token = window.localStorage.getItem(ACCESS_TOKEN_KEY);
-    if (!token) return;
     let cancelled = false;
-    fetch("/api/auth/me", { headers: { authorization: `Bearer ${token}` } })
+    fetch("/api/auth/me", { credentials: "include" })
       .then((r) => (r.ok ? r.json() : null))
       .then((body) => {
         if (cancelled || !body) return;

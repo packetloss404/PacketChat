@@ -30,6 +30,22 @@ function formatMetadata(value: Record<string, unknown> | null) {
   return JSON.stringify(metadata);
 }
 
+function humanizeAction(action: string) {
+  const overrides: Record<string, string> = {
+    "provider.models.synced": "Models synced",
+    "provider.key.rotated": "API key replaced",
+    "user.byok.updated": "Personal key updated",
+    "bootstrap.completed": "Setup completed"
+  };
+  const human = overrides[action] ?? action.replace(/[._]/g, " ");
+  return human.charAt(0).toUpperCase() + human.slice(1);
+}
+
+function humanizeTarget(target: string | null | undefined) {
+  if (!target) return "None";
+  return target.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 const emptyAuditData: AuditData = {
   events: []
 };
@@ -113,7 +129,7 @@ export function AuditClient() {
       {loading ? <LoadingBlock title="Loading audit events" /> : null}
 
       <section className="grid">
-        <div className="card audit-page__stat"><span className="muted">Loaded events</span><strong>{formatCount(data.events.length)}</strong></div>
+        <div className="card audit-page__stat"><span className="muted">Events</span><strong>{formatCount(data.events.length)}</strong></div>
         <div className="card audit-page__stat"><span className="muted">Failures</span><strong>{formatCount(loadedFailureCount)}</strong></div>
         <div className="card audit-page__stat"><span className="muted">Actors</span><strong>{formatCount(loadedActorCount)}</strong></div>
         <div className="card audit-page__stat"><span className="muted">Actions</span><strong>{formatCount(actionOptions.length)}</strong></div>
@@ -137,22 +153,22 @@ export function AuditClient() {
           Action
           <select value={actionFilter} onChange={(event) => setActionFilter(event.target.value)}>
             <option value="all">All actions</option>
-            {actionOptions.map((action) => <option value={action} key={action}>{action}</option>)}
+            {actionOptions.map((action) => <option value={action} key={action}>{humanizeAction(action)}</option>)}
           </select>
         </label>
       </section>
 
       <section className="card">
         <div className="eyebrow">Summary</div>
-        <h2>Loaded action summary</h2>
+        <h2>Action summary</h2>
         <div className="admin-users__table-wrap" tabIndex={0} aria-label="Scrollable audit summary table">
           <table className="admin-users__table audit-page__summary-table">
-            <caption className="sr-only">Loaded audit action summary</caption>
+            <caption className="sr-only">Audit action summary</caption>
             <thead><tr><th scope="col">Action</th><th scope="col">Outcome</th><th scope="col">Events</th></tr></thead>
             <tbody>
               {actionSummary.map((row) => (
                 <tr key={`${row.action}-${row.outcome}`}>
-                  <th scope="row">{row.action}</th>
+                  <th scope="row">{humanizeAction(row.action)}</th>
                   <td><StatusBadge tone={row.outcome === "failure" ? "danger" : "success"}>{row.outcome}</StatusBadge></td>
                   <td>{formatCount(row.count)}</td>
                 </tr>
@@ -183,9 +199,9 @@ export function AuditClient() {
                 <tr key={event.id}>
                   <th scope="row">{formatDate(event.created_at)}</th>
                   <td><strong>{formatActor(event)}</strong>{event.actor_user_id ? <div className="muted">{event.actor_user_id}</div> : null}</td>
-                  <td>{event.action}</td>
+                  <td>{humanizeAction(event.action)}</td>
                   <td><StatusBadge tone={event.outcome === "failure" ? "danger" : "success"}>{event.outcome}</StatusBadge></td>
-                  <td><div className="audit-page__target"><span>{event.target_type ?? "none"}</span>{event.target_id ? <span className="muted">{event.target_id}</span> : null}</div></td>
+                  <td><div className="audit-page__target"><span>{humanizeTarget(event.target_type)}</span>{event.target_id ? <span className="muted">{event.target_id}</span> : null}</div></td>
                   <td>{event.ip_address ?? "Unknown"}{event.user_agent ? <div className="muted">{event.user_agent}</div> : null}</td>
                   <td><code className="audit-page__metadata">{formatMetadata(event.metadata)}</code></td>
                 </tr>

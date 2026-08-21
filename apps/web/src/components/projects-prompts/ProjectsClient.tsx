@@ -163,8 +163,8 @@ export function ProjectsClient() {
       <div className="card card--hero projects-prompts-hero">
         <div>
           <div className="eyebrow">Projects</div>
-          <h1>User-owned workspaces</h1>
-          <p className="muted">Keep persistent instructions and context together before they flow into chats, prompts, and agents.</p>
+          <h1>Workspaces</h1>
+          <p className="muted">Project instructions and context are added to your chats automatically.</p>
         </div>
         <button className="button" type="button" onClick={startCreate}>New project</button>
       </div>

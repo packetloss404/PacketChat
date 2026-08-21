@@ -40,11 +40,11 @@ type ProvidersResponse = {
 };
 
 const providers: { id: ProviderId; label: string; hint: string }[] = [
-  { id: "openai-compatible", label: "OpenAI-compatible", hint: "Use the root host for OpenAI-compatible services. PacketChat appends /v1 routes." },
+  { id: "openai-compatible", label: "OpenAI-compatible", hint: "Base host for OpenAI-compatible services." },
   { id: "azure-openai", label: "Azure OpenAI", hint: "Use your Azure resource endpoint; chat model names are deployment names." },
   { id: "anthropic", label: "Anthropic", hint: "Claude API provider account." },
   { id: "perplexity", label: "Perplexity", hint: "Hosted search-aware model provider." },
-  { id: "minimax", label: "Minimax", hint: "Minimax model provider account." }
+  { id: "minimax", label: "MiniMax", hint: "MiniMax model provider account." }
 ];
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -377,9 +377,9 @@ export function ProvidersManager() {
       <div className="card providers-hero">
         <div>
           <div className="eyebrow">Providers</div>
-          <h1>Manage model provider accounts</h1>
+          <h1>Provider accounts</h1>
           <p className="muted">
-            Add global provider keys for the instance or user-scoped BYOK accounts when enabled for your user.
+            Add shared keys for everyone, or personal keys if enabled for your account.
           </p>
         </div>
         <button className="button" onClick={() => void loadProviders()} type="button" disabled={loading}>
@@ -389,18 +389,17 @@ export function ProvidersManager() {
 
       {userScopeDisabled ? (
         <div className="warning" role="status">
-          User-scope BYOK is disabled for your account, so user-scoped provider accounts cannot be created. Use a global account if
-          you are an admin, or ask an admin to enable BYOK.
+          Personal keys are disabled for your account, so you can't add a personal provider account. Use a shared account if you're an admin, or ask an admin to enable personal keys.
         </div>
       ) : null}
       {accounts.length > 0 && enabledAccounts === 0 ? (
         <div className="warning" role="status">
-          All provider accounts are disabled. Chat, agents, and model sync will not use these routes until at least one account is enabled.
+          All provider accounts are disabled. Chat and agents won't work until at least one account is enabled.
         </div>
       ) : null}
       {enabledAccounts > 0 && !accounts.some((account) => isRuntimeEnabledStatus(account.status) && account.is_default) ? (
         <div className="providers-notice" role="status">
-          No enabled default route is set. Runtime screens will fall back to the first enabled provider account.
+          No default account set. Chat and agents will use the first enabled account.
         </div>
       ) : null}
       {unpricedModelBindings > 0 ? (
@@ -413,12 +412,12 @@ export function ProvidersManager() {
 
       <div className="providers-summary-grid">
         <div className="card card--compact providers-summary-card">
-          <span className="eyebrow">Enabled routes</span>
+          <span className="eyebrow">Enabled accounts</span>
           <strong>{enabledAccounts}</strong>
           <span className="muted">{disabledAccounts} disabled provider {disabledAccounts === 1 ? "account" : "accounts"}</span>
         </div>
         <div className="card card--compact providers-summary-card">
-          <span className="eyebrow">Default route</span>
+          <span className="eyebrow">Default account</span>
           <strong className="providers-summary-route">{defaultAccount ? defaultAccount.display_name : "Unset"}</strong>
           <span className="muted">{defaultModel ? modelLabel(defaultModel) : defaultAccount ? "No enabled bound model" : "No default account"}</span>
         </div>
@@ -450,12 +449,12 @@ export function ProvidersManager() {
           <label>
             Scope
             <select aria-label="Provider account scope" value={form.scope} onChange={(event) => setForm({ ...form, scope: event.target.value as ProviderScope })}>
-              <option value="global">Global (admin managed)</option>
-              <option value="user" disabled={userScopeDisabled}>User BYOK</option>
+              <option value="global">Team (shared)</option>
+              <option value="user" disabled={userScopeDisabled}>Personal key</option>
             </select>
           </label>
           <p className="muted providers-hint">
-            Global provider changes require admin authorization. Disabled accounts are excluded from runtime routing.
+            Shared accounts require admin approval. Disabled accounts aren't used in chat or agents.
           </p>
 
           <label>
@@ -552,8 +551,8 @@ export function ProvidersManager() {
                   <h3>{account.display_name}</h3>
                   <div className="providers-badge-row">
                     <StatusBadge tone="info">{providerLabel(account.provider)}</StatusBadge>
-                    <StatusBadge tone={account.scope === "user" ? "warning" : "success"}>{account.scope === "user" ? "Your BYOK" : "Global"}</StatusBadge>
-                    <StatusBadge tone={accountEnabled ? "success" : "neutral"}>{accountEnabled ? "Enabled route" : "Disabled route"}</StatusBadge>
+                    <StatusBadge tone={account.scope === "user" ? "warning" : "success"}>{account.scope === "user" ? "Personal key" : "Shared"}</StatusBadge>
+                    <StatusBadge tone={accountEnabled ? "success" : "neutral"}>{accountEnabled ? "Enabled" : "Disabled"}</StatusBadge>
                   </div>
                   <p className="muted providers-meta">
                     {routeMetadata || "No endpoint metadata"}
@@ -566,11 +565,11 @@ export function ProvidersManager() {
                     {accountCapabilities.map((capability) => (
                       <span className="providers-pill" key={capability}>{capability}</span>
                     ))}
-                    {account.is_default ? <span className="providers-pill providers-pill--success">Default route</span> : null}
+                    {account.is_default ? <span className="providers-pill providers-pill--success">Default</span> : null}
                   </div>
                   {!accountEnabled ? (
                     <div className="providers-inline-warning" role="status">
-                      Disabled accounts are excluded from runtime routing, model sync, and connection tests until re-enabled.
+                      Disabled accounts aren't used in chat, agents, or sync until re-enabled.
                     </div>
                   ) : null}
                   <div className="providers-model-strip" aria-label={`Synced models for ${account.display_name}`}>
@@ -599,7 +598,7 @@ export function ProvidersManager() {
                   <div className="providers-row">
                     <input className="input" aria-label={`New API key for ${account.display_name}`} type="password" value={keyInputs[account.id] ?? ""} onChange={(event) => setKeyInputs({ ...keyInputs, [account.id]: event.target.value })} placeholder="New API key" />
                     <button className="button" onClick={() => void rotateKey(account)} disabled={rotatingId === account.id} type="button">
-                      {rotatingId === account.id ? "Updating..." : "Update key"}
+                      {rotatingId === account.id ? "Updating..." : "Replace key"}
                     </button>
                   </div>
                 </div>

@@ -79,8 +79,8 @@ export function OperationsClient() {
       <section className="card usage-page__hero">
         <div>
           <div className="eyebrow">Admin</div>
-          <h1>Operations health</h1>
-          <p className="muted">Watch provider readiness, connector sync signals, knowledge ingestion, agent runs, and failed background jobs.</p>
+          <h1>Operations</h1>
+          <p className="muted">Provider, model, and job health at a glance.</p>
         </div>
         <button className="button button--ghost" type="button" onClick={() => void load()} disabled={loading}>{loading ? "Loading..." : "Refresh"}</button>
       </section>
@@ -89,11 +89,11 @@ export function OperationsClient() {
       {loading ? <LoadingBlock title="Loading operations data" /> : null}
 
       <section className="grid">
-        <div className="card usage-page__stat"><span className="muted">Enabled routes</span><strong>{formatCount(enabledProviderAccounts)}</strong></div>
+        <div className="card usage-page__stat"><span className="muted">Enabled accounts</span><strong>{formatCount(enabledProviderAccounts)}</strong></div>
         <div className="card usage-page__stat"><span className="muted">Enabled models</span><strong>{formatCount(enabledModels)}</strong></div>
-        <div className="card usage-page__stat"><span className="muted">Ready docs</span><strong>{formatCount(readyDocuments)}</strong></div>
-        <div className="card usage-page__stat"><span className="muted">Run issues</span><strong>{formatCount(failedAgentRuns)}</strong></div>
-        <div className="card usage-page__stat"><span className="muted">Job failures</span><strong>{formatCount(data.jobFailures.length)}</strong></div>
+        <div className="card usage-page__stat"><span className="muted">Ready documents</span><strong>{formatCount(readyDocuments)}</strong></div>
+        <div className="card usage-page__stat"><span className="muted">Failed runs</span><strong>{formatCount(failedAgentRuns)}</strong></div>
+        <div className="card usage-page__stat"><span className="muted">Recent job failures</span><strong>{formatCount(data.jobFailures.length)}</strong></div>
       </section>
 
       <section className="grid">
@@ -106,20 +106,20 @@ export function OperationsClient() {
                 {`${row.provider} / ${row.scope} / ${row.status}: ${formatCount(row.count)}`}
               </StatusBadge>
             ))}
-            {!loading && data.providerAccounts.length === 0 ? <span className="muted">No provider accounts configured.</span> : null}
+            {!loading && data.providerAccounts.length === 0 ? <span className="muted">No provider accounts yet.</span> : null}
           </div>
         </article>
 
         <article className="card">
           <div className="eyebrow">Models</div>
-          <h2>Binding status</h2>
+          <h2>Model bindings</h2>
           <div className="admin-badge-row">
             {data.modelBindings.map((row) => (
               <StatusBadge key={`${row.provider}-${row.enabled}`} tone={row.enabled ? "success" : "warning"}>
                 {`${row.provider} / ${row.enabled ? "enabled" : "disabled"}: ${formatCount(row.count)}`}
               </StatusBadge>
             ))}
-            {!loading && data.modelBindings.length === 0 ? <span className="muted">No synced model bindings.</span> : null}
+            {!loading && data.modelBindings.length === 0 ? <span className="muted">No model bindings yet.</span> : null}
           </div>
         </article>
 
@@ -132,20 +132,20 @@ export function OperationsClient() {
                 {`${row.ingest_status}: ${formatCount(row.count)}`}
               </StatusBadge>
             ))}
-            {!loading && data.knowledge.length === 0 ? <span className="muted">No knowledge documents.</span> : null}
+            {!loading && data.knowledge.length === 0 ? <span className="muted">No documents yet.</span> : null}
           </div>
         </article>
 
         <article className="card">
           <div className="eyebrow">Agents</div>
-          <h2>Seven day run status</h2>
+          <h2>Agent runs (7 days)</h2>
           <div className="admin-badge-row">
             {data.agentRuns.map((row) => (
               <StatusBadge key={row.status} tone={["completed"].includes(row.status) ? "success" : ["failed", "timed_out", "cancelled"].includes(row.status) ? "danger" : "warning"}>
                 {`${row.status}: ${formatCount(row.count)}`}
               </StatusBadge>
             ))}
-            {!loading && sumRows(data.agentRuns) === 0 ? <span className="muted">No agent runs in the last seven days.</span> : null}
+            {!loading && sumRows(data.agentRuns) === 0 ? <span className="muted">No agent runs in the last 7 days.</span> : null}
           </div>
         </article>
       </section>
@@ -173,8 +173,8 @@ export function OperationsClient() {
       </section>
 
       <section className="card">
-        <div className="eyebrow">Connectors</div>
-        <h2>Recent provider audit events</h2>
+        <div className="eyebrow">Providers</div>
+        <h2>Recent provider activity</h2>
         <div className="admin-users__table-wrap" tabIndex={0} aria-label="Scrollable provider audit table">
           <table className="admin-users__table audit-page__summary-table">
             <caption className="sr-only">Recent provider audit events</caption>

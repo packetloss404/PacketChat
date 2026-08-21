@@ -503,8 +503,8 @@ export function KnowledgeManager() {
               <section className="card knowledge-upload">
                 <div>
                   <div className="eyebrow">Upload</div>
-                  <h2>Ingest documents</h2>
-                  <p className="muted">Supports text, markdown, JSON, CSV, embedded-text PDFs, images via English OCR, and modern Office files. Scanned PDFs are not OCR'd directly.</p>
+                  <h2>Upload documents</h2>
+                  <p className="muted">Drop in .txt, .md, .pdf, .docx, images, and more.</p>
                 </div>
                 <form className="knowledge-upload-form" onSubmit={(event) => void uploadFile(event)}>
                   <div

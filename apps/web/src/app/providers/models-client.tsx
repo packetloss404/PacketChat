@@ -31,7 +31,7 @@ type ProviderMeta = {
 };
 
 const PROVIDERS: Record<string, ProviderMeta> = {
-  "openai-compatible": { id: "openai-compatible", name: "OpenAI", tint: "#10a37f", glyph: "O" },
+  "openai-compatible": { id: "openai-compatible", name: "OpenAI-compatible", tint: "#10a37f", glyph: "O" },
   anthropic: { id: "anthropic", name: "Anthropic", tint: "#d97757", glyph: "A" },
   "azure-openai": { id: "azure-openai", name: "Azure OpenAI", tint: "#4b8ad6", glyph: "Az" },
   perplexity: { id: "perplexity", name: "Perplexity", tint: "#1fb8cd", glyph: "P" },
@@ -546,7 +546,7 @@ export function ModelsClient() {
                 const selectedActive = row.id === selectedBindingId;
                 const ctx = formatContext(row);
                 const isDefault = row.account.is_default && enabled;
-                const routeState = enabled ? "Route enabled" : accountEnabled ? "Model disabled" : `Account ${row.account.status}`;
+                const routeState = enabled ? "Enabled" : accountEnabled ? "Model disabled" : `Account ${row.account.status}`;
                 const routeMeta = [
                   routeState,
                   ctx ? `${ctx} context` : null,
@@ -642,7 +642,7 @@ function ModelsHeader({ tab, onTabChange, onAdd }: { tab: ModelTab; onTabChange:
       <header className="models-lib__head">
         <div>
           <h1>Models</h1>
-          <p className="sub">Manage your models and add custom models</p>
+          <p className="sub">Browse your models and add custom ones</p>
         </div>
         <button className="button button--primary" type="button" onClick={onAdd}>
           Add custom model
@@ -665,7 +665,7 @@ function ModelsHeader({ tab, onTabChange, onAdd }: { tab: ModelTab; onTabChange:
           onClick={() => onTabChange("settings")}
           type="button"
         >
-          Global settings
+          Accounts
         </button>
       </div>
     </>
@@ -706,7 +706,7 @@ function ModelDetail({ row, tab, onTabChange }: { row: ModelRow; tab: DetailTab;
       <header className="model-detail__head">
         <ProviderBadge id={row.account.provider} size={28} />
         <div className="model-detail__title">{row.display_name || row.model}</div>
-        <StatusBadge tone={routeEnabled ? "success" : "neutral"}>{routeEnabled ? "Route enabled" : "Route disabled"}</StatusBadge>
+        <StatusBadge tone={routeEnabled ? "success" : "neutral"}>{routeEnabled ? "Enabled" : "Disabled"}</StatusBadge>
         {row.account.is_default ? <span className="model-detail__default"><span>✓</span> Default</span> : null}
       </header>
 
@@ -752,7 +752,7 @@ function ModelDetail({ row, tab, onTabChange }: { row: ModelRow; tab: DetailTab;
           <dt>Provider account</dt>
           <dd>{row.account.display_name} ({row.account.scope})</dd>
 
-          <dt>Route status</dt>
+          <dt>Status</dt>
           <dd className="model-detail__status">
             <StatusBadge tone={accountEnabled ? "success" : "neutral"}>{accountEnabled ? "Account enabled" : `Account ${row.account.status}`}</StatusBadge>
             <StatusBadge tone={bindingEnabled ? "success" : "neutral"}>{bindingEnabled ? "Model enabled" : "Model disabled"}</StatusBadge>

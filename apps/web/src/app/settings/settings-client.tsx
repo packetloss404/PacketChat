@@ -360,12 +360,12 @@ function ApiKeysSection() {
 
       <div className="settings__button-row">
         <Link href="/providers" className="button button--primary">
-          <Icon.key /> Manage model providers
+          <Icon.key /> Manage models
         </Link>
       </div>
 
       <details className="apikeys__troubleshoot">
-        <summary>API Key not working? Click Here.</summary>
+        <summary>API key not working?</summary>
         <p className="muted" style={{ marginTop: 8 }}>
           Use the Models page to test the account. Double-check that the key is enabled, the base URL is correct, billing has headroom, and the selected model or Azure deployment exists.
         </p>
@@ -373,7 +373,7 @@ function ApiKeysSection() {
 
       <p style={{ textAlign: "center", marginTop: 4 }}>
         <a className="settings__link settings__link--inline" href="https://openrouter.ai/docs/quick-start" target="_blank" rel="noreferrer">
-          → Using Open Router? See instructions here
+          → Using OpenRouter? See instructions here
         </a>
       </p>
     </section>

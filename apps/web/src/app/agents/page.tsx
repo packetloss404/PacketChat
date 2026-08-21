@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ConfirmButton, LoadingBlock, StatusBadge, useToast } from "../../components/ui";
 import { Icon } from "../../components/icons";
-import { getAccessToken } from "../../lib/auth-client";
+import { authFetch, getAccessToken } from "../../lib/auth-client";
 
 const PINS_STORAGE_KEY = "packetchat.agents.pins";
 const PENDING_AGENT_STORAGE_KEY = "packetchat.chat.pendingAgent";
@@ -384,12 +384,11 @@ export default function AgentsPage() {
   const selectedRunUsage = runUsage ?? selectedRun?.usage ?? null;
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
-    const headers = new Headers(init?.headers);
-    const token = authHeaders().authorization;
-    if (token) headers.set("authorization", token);
-    if (init?.body) headers.set("content-type", "application/json");
-
-    const response = await fetch(path, { ...init, headers });
+    const response = await authFetch(path, {
+      ...init,
+      headers: new Headers(init?.headers),
+      credentials: "include"
+    });
     const data = await response.json().catch(() => null);
     if (!response.ok) throw new Error(data?.error?.message ?? "Request failed");
     return data as T;
@@ -994,7 +993,7 @@ export default function AgentsPage() {
       <header className="agents-lib__head">
         <div className="agents-lib__heading">
           <h1>Agents</h1>
-          <p className="sub">Single-pass augmented agents add selected context and tools before one model response.</p>
+          <p className="sub">Assistants that use your instructions, context, and tools.</p>
         </div>
         <div className="agents-lib__head-actions">
           <label className="agents-lib__search">
@@ -1143,7 +1142,7 @@ export default function AgentsPage() {
               const favored = favorites.has(agent.id);
               const canRun = canRunAgent(agent);
               const canChat = canRun && Boolean(agent.published_version_id);
-              const chatLabel = agent.published_version_id ? "Runner required" : "Publish first";
+              const chatLabel = agent.published_version_id ? "No run access" : "Not published";
               const canEdit = canEditAgent(agent);
               const canShare = canShareAgent(agent);
               const canDelete = canDeleteAgent(agent);

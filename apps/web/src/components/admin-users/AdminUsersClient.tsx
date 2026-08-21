@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { accessTokenKey, authFetch } from "../../lib/auth-client";
+import { authFetch } from "../../lib/auth-client";
 import { LoadingBlock, StatusBadge } from "../ui";
 
 type AdminUser = {
@@ -163,10 +163,10 @@ export function AdminUsersClient() {
           body: JSON.stringify({ byokEnabled: nextValue })
         })
       );
-      setMessage(`BYOK ${nextValue ? "enabled" : "disabled"} for ${user.email}.`);
+      setMessage(`Personal key ${nextValue ? "enabled" : "disabled"} for ${user.email}.`);
     } catch (err) {
       setUsers((current) => current.map((item) => (item.id === user.id ? user : item)));
-      setError(err instanceof Error ? err.message : "Unable to update BYOK");
+      setError(err instanceof Error ? err.message : "Unable to update personal key");
     }
   }
 
@@ -197,16 +197,15 @@ export function AdminUsersClient() {
     <div className="admin-users">
       <section className="card admin-users__panel">
         <div className="eyebrow">Admin</div>
-        <h1>Users and BYOK</h1>
-        <p className="muted">Create users directly, generate invite links, toggle per-user BYOK, and issue password reset URLs.</p>
-        <p className="muted admin-users__hint">Requests use <code>{accessTokenKey}</code> and automatically try one refresh before failing.</p>
+        <h1>Users</h1>
+        <p className="muted">Create users, send invites, and reset passwords.</p>
       </section>
 
       <section className="admin-console-stats" aria-label="User administration summary">
         <div className="card card--compact admin-console-stat"><span className="eyebrow">Users</span><strong>{stats.total}</strong><span className="muted">total accounts</span></div>
         <div className="card card--compact admin-console-stat"><span className="eyebrow">Admins</span><strong>{stats.admins}</strong><span className="muted">admin role</span></div>
-        <div className="card card--compact admin-console-stat"><span className="eyebrow">BYOK</span><strong>{stats.byok}</strong><span className="muted">enabled users</span></div>
-        <div className="card card--compact admin-console-stat"><span className="eyebrow">Break-glass</span><strong>{stats.breakGlass}</strong><span className="muted">protected account</span></div>
+        <div className="card card--compact admin-console-stat"><span className="eyebrow">Personal key</span><strong>{stats.byok}</strong><span className="muted">with personal key</span></div>
+        <div className="card card--compact admin-console-stat"><span className="eyebrow">Emergency admin</span><strong>{stats.breakGlass}</strong><span className="muted">protected accounts</span></div>
       </section>
 
       <section className="card admin-users__panel">
@@ -227,11 +226,11 @@ export function AdminUsersClient() {
           <label>Role<select value={role} onChange={(event) => setRole(event.target.value as "user" | "admin")}><option value="user">User</option><option value="admin">Admin</option></select></label>
           {mode === "direct" ? (
             <>
-              <label>Temporary password<input className="input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
-              <label className="admin-users__checkbox"><input type="checkbox" checked={forceReset} onChange={(event) => setForceReset(event.target.checked)} />Force password reset on first sign-in</label>
+              <label>Password<input className="input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
+              <label className="admin-users__checkbox"><input type="checkbox" checked={forceReset} onChange={(event) => setForceReset(event.target.checked)} />Require password change on first sign-in</label>
             </>
           ) : null}
-          <label className="admin-users__checkbox"><input type="checkbox" checked={byokEnabled} onChange={(event) => setByokEnabled(event.target.checked)} />Enable per-user BYOK</label>
+          <label className="admin-users__checkbox"><input type="checkbox" checked={byokEnabled} onChange={(event) => setByokEnabled(event.target.checked)} />Allow this user to use their own API key</label>
           <button className="button" type="submit" disabled={saving}>{saving ? "Saving..." : mode === "invite" ? "Generate invite" : "Create user"}</button>
         </form>
       </section>
@@ -274,9 +273,9 @@ export function AdminUsersClient() {
             </select>
           </label>
           <label>
-            BYOK
+            Personal key
             <select value={byokFilter} onChange={(event) => setByokFilter(event.target.value)}>
-              <option value="all">All BYOK states</option>
+              <option value="all">All</option>
               <option value="enabled">Enabled</option>
               <option value="disabled">Disabled</option>
             </select>
@@ -288,13 +287,13 @@ export function AdminUsersClient() {
         <div className="admin-users__table-wrap" tabIndex={0} aria-label="Scrollable users table">
           <table className="admin-users__table">
             <caption className="sr-only">Users directory</caption>
-            <thead><tr><th scope="col">User</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col">BYOK</th><th scope="col">Created</th><th scope="col">Last login</th><th scope="col">Actions</th></tr></thead>
+            <thead><tr><th scope="col">User</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col">Personal key</th><th scope="col">Created</th><th scope="col">Last login</th><th scope="col">Actions</th></tr></thead>
             <tbody>
               {filteredUsers.map((user) => (
                 <tr key={user.id}>
                   <th scope="row"><strong>{user.display_name || user.email}</strong><div className="muted">{user.email}</div></th>
                   <td><StatusBadge tone={user.role === "admin" ? "info" : "neutral"}>{user.role}</StatusBadge></td>
-                  <td><div className="admin-badge-row"><StatusBadge>{user.status}</StatusBadge>{user.is_break_glass ? <StatusBadge tone="warning">break-glass</StatusBadge> : null}</div></td>
+                  <td><div className="admin-badge-row"><StatusBadge>{user.status}</StatusBadge>{user.is_break_glass ? <StatusBadge tone="warning">emergency</StatusBadge> : null}</div></td>
                   <td><label className="admin-users__checkbox admin-users__checkbox--compact"><input type="checkbox" checked={user.byok_enabled} disabled={user.is_break_glass} onChange={(event) => void updateByok(user, event.target.checked)} />{user.byok_enabled ? "Enabled" : "Disabled"}</label></td>
                   <td>{formatDate(user.created_at)}</td>
                   <td>{formatDate(user.last_login_at)}</td>

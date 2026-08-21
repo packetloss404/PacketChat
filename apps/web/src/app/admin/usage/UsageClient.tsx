@@ -21,7 +21,7 @@ function formatDay(value: string) {
 
 function formatCost(value: number | null) {
   if (value === null) return "Unknown";
-  return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 6, maximumFractionDigits: 6 }).format(value);
+  return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(value);
 }
 
 function number(value: number | null) {
@@ -93,8 +93,8 @@ export function UsageClient() {
       <section className="card usage-page__hero">
         <div>
           <div className="eyebrow">Admin</div>
-          <h1>Usage and estimated cost</h1>
-          <p className="muted">Costs are estimated from static in-app pricing and token counts. No provider billing APIs or external billing keys are used.</p>
+          <h1>Usage</h1>
+          <p className="muted">Costs are estimates based on token counts and in-app pricing.</p>
         </div>
         <button className="button button--ghost" type="button" onClick={() => void loadUsage()} disabled={loading} aria-label="Refresh usage data">{loading ? "Loading..." : "Refresh"}</button>
       </section>
@@ -112,7 +112,7 @@ export function UsageClient() {
           <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
             <option value="all">All sources</option>
             <option value="provider">Provider usage</option>
-            <option value="estimated">Estimated tokens</option>
+            <option value="estimated">Estimated</option>
           </select>
         </label>
       </section>
@@ -121,21 +121,21 @@ export function UsageClient() {
         <div className="card usage-page__stat"><span className="muted">Requests</span><strong>{number(totalRequests)}</strong></div>
         <div className="card usage-page__stat"><span className="muted">Input tokens</span><strong>{number(totalInputTokens)}</strong></div>
         <div className="card usage-page__stat"><span className="muted">Output tokens</span><strong>{number(totalOutputTokens)}</strong></div>
-        <div className="card usage-page__stat"><span className="muted">Known cost</span><strong>{formatKnownCost(totalCost, unknownCostCount)}</strong></div>
-        <div className="card usage-page__stat"><span className="muted">Unknown pricing</span><strong>{number(unknownCostCount)}</strong></div>
+        <div className="card usage-page__stat"><span className="muted">Cost</span><strong>{formatKnownCost(totalCost, unknownCostCount)}</strong></div>
+        <div className="card usage-page__stat"><span className="muted">Unknown cost</span><strong>{number(unknownCostCount)}</strong></div>
       </section>
 
       {governance ? (
         <section className="card">
           <div className="eyebrow">Governance</div>
-          <h2>Monthly run rate and chargeback</h2>
+          <h2>Monthly cost</h2>
           <div className="grid">
             <div className="card card--flat usage-page__stat"><span className="muted">Month requests</span><strong>{number(governance.totals.requests)}</strong></div>
             <div className="card card--flat usage-page__stat"><span className="muted">Active users</span><strong>{number(governance.totals.activeUsers)}</strong></div>
-            <div className="card card--flat usage-page__stat"><span className="muted">Known month cost</span><strong>{formatKnownCost(governance.totals.costUsd, governance.totals.unknownCostCount)}</strong></div>
-            <div className="card card--flat usage-page__stat"><span className="muted">Projected known cost</span><strong>{formatKnownCost(governance.totals.projectedMonthCostUsd, governance.totals.unknownCostCount)}</strong></div>
-            <div className="card card--flat usage-page__stat"><span className="muted">Unknown pricing</span><strong>{number(governance.totals.unknownCostCount)}</strong></div>
-            <div className="card card--flat usage-page__stat"><span className="muted">Estimated records</span><strong>{number(governance.totals.estimatedCount)}</strong></div>
+            <div className="card card--flat usage-page__stat"><span className="muted">Month cost</span><strong>{formatKnownCost(governance.totals.costUsd, governance.totals.unknownCostCount)}</strong></div>
+            <div className="card card--flat usage-page__stat"><span className="muted">Projected month cost</span><strong>{formatKnownCost(governance.totals.projectedMonthCostUsd, governance.totals.unknownCostCount)}</strong></div>
+            <div className="card card--flat usage-page__stat"><span className="muted">Unknown cost</span><strong>{number(governance.totals.unknownCostCount)}</strong></div>
+            <div className="card card--flat usage-page__stat"><span className="muted">Estimated</span><strong>{number(governance.totals.estimatedCount)}</strong></div>
           </div>
           {governance.recommendations.length > 0 ? (
             <div className="warning" role="status">
@@ -150,12 +150,12 @@ export function UsageClient() {
       {governance ? (
         <section className="grid" aria-label="Monthly governance breakdowns">
           <div className="card">
-            <div className="eyebrow">Chargeback</div>
+            <div className="eyebrow">By user</div>
             <h2>Top users this month</h2>
-            <div className="admin-users__table-wrap" tabIndex={0} aria-label="Scrollable user chargeback table">
+            <div className="admin-users__table-wrap" tabIndex={0} aria-label="Scrollable user cost table">
               <table className="admin-users__table usage-page__compact-table">
                 <caption className="sr-only">Monthly usage by user</caption>
-                <thead><tr><th scope="col">User</th><th scope="col">Requests</th><th scope="col">Known cost</th><th scope="col">Unknown</th></tr></thead>
+                <thead><tr><th scope="col">User</th><th scope="col">Requests</th><th scope="col">Cost</th><th scope="col">Unknown cost</th></tr></thead>
                 <tbody>
                   {governance.byUser.map((row) => (
                     <tr key={row.user_email}>
@@ -176,7 +176,7 @@ export function UsageClient() {
             <div className="admin-users__table-wrap" tabIndex={0} aria-label="Scrollable provider usage table">
               <table className="admin-users__table usage-page__compact-table">
                 <caption className="sr-only">Monthly usage by provider</caption>
-                <thead><tr><th scope="col">Provider</th><th scope="col">Requests</th><th scope="col">Known cost</th><th scope="col">Unknown</th></tr></thead>
+                <thead><tr><th scope="col">Provider</th><th scope="col">Requests</th><th scope="col">Cost</th><th scope="col">Unknown cost</th></tr></thead>
                 <tbody>
                   {governance.byProvider.map((row) => (
                     <tr key={row.provider}>
@@ -233,11 +233,11 @@ export function UsageClient() {
                 <tr key={row.id}>
                   <th scope="row">{formatDate(row.created_at)}</th>
                   <td>{row.user_email}</td>
-                  <td>{row.provider ?? "unknown"}</td>
-                  <td>{row.model ?? "unknown"}</td>
+                  <td>{row.provider ?? "Unknown"}</td>
+                  <td>{row.model ?? "Unknown"}</td>
                   <td>{formatTokens(row.input_tokens, row.output_tokens, row.reasoning_tokens, row.search_queries)}</td>
                   <td>{formatCost(row.cost_usd)}</td>
-                  <td><div className="admin-badge-row"><StatusBadge tone={row.estimated ? "warning" : "success"}>{row.estimated ? "estimated" : "provider"}</StatusBadge>{row.unknown_pricing ? <StatusBadge tone="danger">unknown price</StatusBadge> : null}</div></td>
+                  <td><div className="admin-badge-row"><StatusBadge tone={row.estimated ? "warning" : "success"}>{row.estimated ? "estimated" : "provider"}</StatusBadge>{row.unknown_pricing ? <StatusBadge tone="danger">unknown cost</StatusBadge> : null}</div></td>
                   <td>{row.conversation_run_id ? "Chat" : row.agent_run_id ? "Agent" : "Other"}</td>
                 </tr>
               ))}

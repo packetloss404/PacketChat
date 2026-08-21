@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiClient } from "../lib/api-client";
 import { changePassword, getAccessToken } from "../lib/auth-client";
@@ -17,40 +17,34 @@ type NavItem = {
   badge?: string;
 };
 
-const primaryNav: NavItem[] = [
+const mainNav: NavItem[] = [
   { id: "chats", label: "Chats", href: "/chat", icon: <Icon.chat /> },
   { id: "agents", label: "Agents", href: "/agents", icon: <Icon.grid /> },
-  { id: "approval-queue", label: "Action Queue", href: "/approvals", icon: <Icon.bell /> },
-  { id: "providers", label: "Models", href: "/providers", icon: <Icon.key /> },
-  { id: "projects", label: "Projects", href: "/projects", icon: <Icon.folder /> },
   { id: "prompts", label: "Prompts", href: "/prompts", icon: <Icon.text /> },
   { id: "knowledge", label: "Knowledge", href: "/knowledge", icon: <Icon.layers /> },
+  { id: "providers", label: "Models", href: "/providers", icon: <Icon.key /> },
+  { id: "projects", label: "Projects", href: "/projects", icon: <Icon.folder /> },
+  { id: "approvals", label: "Approvals", href: "/approvals", icon: <Icon.bell /> }
+];
+
+const adminNav: NavItem[] = [
   { id: "users", label: "Users", href: "/admin/users", icon: <Icon.users /> },
   { id: "usage", label: "Usage", href: "/admin/usage", icon: <Icon.mixer /> },
   { id: "audit", label: "Audit", href: "/admin/audit", icon: <Icon.lock /> },
-  { id: "operations", label: "Ops", href: "/admin/operations", icon: <Icon.database /> },
-  { id: "approvals", label: "Approvals", href: "/admin/approvals", icon: <Icon.bell /> }
-];
-
-const pluginsNav: NavItem[] = [
-  { id: "marketplace", label: "Agent Marketplace", href: "/plugins/marketplace", icon: <Icon.layers /> },
-  { id: "plugins", label: "Plugins", href: "/plugins", icon: <Icon.mcp /> }
+  { id: "operations", label: "Operations", href: "/admin/operations", icon: <Icon.database /> }
 ];
 
 const routeTitles: Array<{ match: (p: string) => boolean; title: string }> = [
-  { match: (p) => p.startsWith("/plugins/marketplace"), title: "Agent Marketplace" },
-  { match: (p) => p === "/plugins" || p.startsWith("/plugins/"), title: "Plugins" },
   { match: (p) => p.startsWith("/approvals"), title: "Approvals" },
   { match: (p) => p.startsWith("/agents"), title: "Agents" },
   { match: (p) => p.startsWith("/providers"), title: "Models" },
   { match: (p) => p.startsWith("/projects"), title: "Projects" },
-  { match: (p) => p.startsWith("/prompts"), title: "Prompt library" },
+  { match: (p) => p.startsWith("/prompts"), title: "Prompts" },
   { match: (p) => p.startsWith("/knowledge"), title: "Knowledge" },
   { match: (p) => p.startsWith("/admin/users"), title: "Users" },
   { match: (p) => p.startsWith("/admin/usage"), title: "Usage" },
   { match: (p) => p.startsWith("/admin/audit"), title: "Audit" },
   { match: (p) => p.startsWith("/admin/operations"), title: "Operations" },
-  { match: (p) => p.startsWith("/admin/approvals"), title: "Approvals" },
   { match: (p) => p.startsWith("/login"), title: "Sign in" },
   { match: (p) => p.startsWith("/settings"), title: "Settings" },
   { match: (p) => p.startsWith("/chat"), title: "Chat" }
@@ -84,8 +78,8 @@ function LeftRail({ onMobileClose, onNavigate }: LeftRailProps) {
   const displayName = user?.displayName || user?.email?.split("@")[0] || "Guest";
   const initials = useMemo(() => userInitials(displayName), [displayName]);
   const [counts, setCounts] = useState<Record<string, string>>({});
-  const toast = useToast();
-  const visiblePrimaryNav = useMemo(() => primaryNav.filter((item) => !item.href.startsWith("/admin") || user?.role === "admin"), [user?.role]);
+  const [recent, setRecent] = useState<Array<{ id: string; title: string }>>([]);
+  const isAdmin = user?.role === "admin";
 
   useEffect(() => {
     if (!user) return;
@@ -101,7 +95,11 @@ function LeftRail({ onMobileClose, onNavigate }: LeftRailProps) {
 
     apiClient.conversations
       .list()
-      .then((res) => apply("chats", String((res.conversations ?? []).length)))
+      .then((res) => {
+        const list = res.conversations ?? [];
+        apply("chats", String(list.length));
+        setRecent(list.slice(0, 8).map((c) => ({ id: c.id, title: c.title || "Untitled chat" })));
+      })
       .catch(() => undefined);
 
     apiClient.agents
@@ -111,7 +109,7 @@ function LeftRail({ onMobileClose, onNavigate }: LeftRailProps) {
 
     apiClient.approvals
       .list()
-      .then((res) => apply("approval-queue", res.stats.pending > 0 ? String(res.stats.pending) : ""))
+      .then((res) => apply("approvals", res.stats.pending > 0 ? String(res.stats.pending) : ""))
       .catch(() => undefined);
 
     apiClient.providers
@@ -157,29 +155,9 @@ function LeftRail({ onMobileClose, onNavigate }: LeftRailProps) {
       aria-label="Primary navigation"
     >
       <div className="lr__top">
-        <button
-          className="ib ib--preview"
-          type="button"
-          title="Collapse sidebar (preview)"
-          aria-label="Collapse sidebar (preview)"
-          onClick={() => toast({ message: "Sidebar collapse is coming soon.", variant: "info" })}
-        >
-          <Icon.sidebar />
-          <span className="preview-dot" aria-hidden="true">Preview</span>
-        </button>
         <div className="brand">
-          packet<span>chat</span>
+          Packet<span>Chat</span>
         </div>
-        <button
-          className="ib ib--preview"
-          type="button"
-          title="Bookmarks panel (preview)"
-          aria-label="Bookmarks panel (preview)"
-          onClick={() => toast({ message: "Use the right Bookmarks panel for saved assistant messages. Full shortcut is coming soon.", variant: "info" })}
-        >
-          <Icon.bookmark />
-          <span className="preview-dot" aria-hidden="true">Preview</span>
-        </button>
         <Link className="ib" href="/chat" title="New chat" aria-label="New chat" onClick={onNavigate}>
           <Icon.edit />
         </Link>
@@ -197,19 +175,9 @@ function LeftRail({ onMobileClose, onNavigate }: LeftRailProps) {
         ) : null}
       </div>
 
-      <label className="lr__search lr__search--preview" aria-label="Search messages (preview)">
-        <Icon.search />
-        <input
-          placeholder="Search messages"
-          aria-label="Search messages (preview)"
-          onFocus={() => toast({ message: "Message search is coming soon.", variant: "info" })}
-        />
-        <span className="inline-preview" aria-hidden="true">Preview</span>
-      </label>
-
       <div className="lr__list">
         <nav className="lr__nav" aria-label="Primary sections">
-          {visiblePrimaryNav.map((item) => {
+          {mainNav.map((item) => {
             const active = isActivePath(pathname, item.href);
             const badge = counts[item.id] ?? item.badge;
             const link = (
@@ -227,10 +195,24 @@ function LeftRail({ onMobileClose, onNavigate }: LeftRailProps) {
                 {link}
                 <div className="lr__nav-children" aria-label="Recent chats">
                   <div className="lr__group">
-                    <h4>Recent chats</h4>
-                    <p className="muted" style={{ margin: "4px 12px 8px", fontSize: 12 }}>
-                      Chats appear here after you start them.
-                    </p>
+                    {recent.length === 0 ? (
+                      <p className="muted" style={{ margin: "4px 12px 8px", fontSize: 12 }}>
+                        Chats appear here after you start them.
+                      </p>
+                    ) : (
+                      recent.map((conversation) => (
+                        <Link
+                          key={conversation.id}
+                          className="lr__thread"
+                          href={`/chat?conversation=${encodeURIComponent(conversation.id)}`}
+                          title={conversation.title}
+                          onClick={onNavigate}
+                        >
+                          <span className="ico" aria-hidden="true"><Icon.chat /></span>
+                          <span className="t">{conversation.title}</span>
+                        </Link>
+                      ))
+                    )}
                   </div>
                 </div>
               </div>
@@ -238,20 +220,24 @@ function LeftRail({ onMobileClose, onNavigate }: LeftRailProps) {
           })}
         </nav>
 
-        <div className="lr__section">
-          packetchat+ <span className="ch"><Icon.chev /></span>
-        </div>
-        <nav className="lr__nav" aria-label="packetchat+">
-          {pluginsNav.map((item) => {
-            const active = isActivePath(pathname, item.href);
-            return (
-              <Link key={item.id} href={item.href} aria-current={active ? "page" : undefined} className={active ? "on" : undefined} onClick={onNavigate}>
-                {item.icon}
-                <span>{item.label}</span>
-              </Link>
-            );
-          })}
-        </nav>
+        {isAdmin ? (
+          <>
+            <div className="lr__section">Admin</div>
+            <nav className="lr__nav" aria-label="Admin sections">
+              {adminNav.map((item) => {
+                const active = isActivePath(pathname, item.href);
+                const badge = counts[item.id] ?? item.badge;
+                return (
+                  <Link key={item.id} href={item.href} aria-current={active ? "page" : undefined} className={active ? "on" : undefined} onClick={onNavigate}>
+                    {item.icon}
+                    <span>{item.label}</span>
+                    {badge ? <span className="badge">{badge}</span> : null}
+                  </Link>
+                );
+              })}
+            </nav>
+          </>
+        ) : null}
       </div>
 
 
@@ -264,7 +250,6 @@ function UserFooter({ displayName, initials, onNavigate }: { displayName: string
   const [menuOpen, setMenuOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const { user, logout } = useAuth();
-  const toast = useToast();
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const email = user?.email ?? "";
 
@@ -308,7 +293,10 @@ function UserFooter({ displayName, initials, onNavigate }: { displayName: string
         title="Account menu"
       >
         <span className="av" aria-hidden="true">{initials}</span>
-        <span className="nm">{displayName}</span>
+        <span className="who">
+          <span className="nm">{displayName}</span>
+          {email ? <span className="nm-sub">{email}</span> : null}
+        </span>
         <Icon.chev />
       </button>
       <Link className="ib" href="/settings" title="Settings" aria-label="Settings" onClick={onNavigate}>
@@ -343,51 +331,25 @@ function UserFooter({ displayName, initials, onNavigate }: { displayName: string
               type="button"
               className="user-pop__btn"
               onClick={() => {
-                toast({ message: "Cloud sync is coming soon.", variant: "info" });
+                setMenuOpen(false);
+                setDialogOpen(true);
               }}
             >
-              <span className="user-pop__icon user-pop__icon--cloud"><Icon.cloud /></span>
-              Manage sync status
-              <span className="user-pop__dot" aria-hidden="true" />
+              <span className="user-pop__icon user-pop__icon--lock"><Icon.lock /></span>
+              Change password
             </button>
-
-            <div className="user-pop__row">
-              <button
-                role="menuitem"
-                type="button"
-                className="user-pop__btn"
-                onClick={() => {
-                  setMenuOpen(false);
-                  setDialogOpen(true);
-                }}
-              >
-                <span className="user-pop__icon user-pop__icon--lock"><Icon.lock /></span>
-                Change password
-              </button>
-              <Link
-                role="menuitem"
-                href="/settings"
-                className="user-pop__btn"
-                onClick={() => {
-                  setMenuOpen(false);
-                  onNavigate?.();
-                }}
-              >
-                <span className="user-pop__icon user-pop__icon--key"><Icon.key /></span>
-                API Keys <span className="inline-preview">Preview</span>
-              </Link>
-            </div>
-
-            <button
+            <Link
               role="menuitem"
-              type="button"
+              href="/settings"
               className="user-pop__btn"
-              onClick={() => toast({ message: "Help & Information is coming soon.", variant: "info" })}
+              onClick={() => {
+                setMenuOpen(false);
+                onNavigate?.();
+              }}
             >
-              <span className="user-pop__icon user-pop__icon--info"><Icon.info /></span>
-              Help &amp; Information
-            </button>
-
+              <span className="user-pop__icon user-pop__icon--key"><Icon.key /></span>
+              API Keys
+            </Link>
             <a
               role="menuitem"
               href="https://github.com/packetloss404"
@@ -400,21 +362,19 @@ function UserFooter({ displayName, initials, onNavigate }: { displayName: string
               }}
             >
               <span className="user-pop__icon user-pop__icon--gh"><Icon.github /></span>
-              packetloss404 GitHub
+              GitHub
             </a>
           </div>
 
           <footer className="user-pop__foot">
             <div className="user-pop__links">
-              Fifty Eleven LLC © 2026 | <span>Contact <span className="inline-preview">Soon</span></span>
-              <br />
-              <span>Privacy <span className="inline-preview">Soon</span></span> | <span>Terms <span className="inline-preview">Soon</span></span> | <span>FAQs <span className="inline-preview">Soon</span></span> | <span>Docs <span className="inline-preview">Soon</span></span>
+              Fifty Eleven LLC © 2026
             </div>
             <div className="user-pop__toggles">
-              <button className="user-pop__chip" type="button" aria-label="Region">US</button>
-              <button className="user-pop__chip" type="button" onClick={toggleTheme} aria-label="Toggle theme" title="Toggle theme">
-                <Icon.moon />
-              </button>
+<button className="user-pop__chip" type="button" onClick={toggleTheme} aria-label="Toggle theme" title="Toggle theme">
+            <Icon.moon />
+            <span>Theme</span>
+          </button>
             </div>
           </footer>
         </div>
@@ -521,7 +481,6 @@ function HeaderBar({ mobileNavOpen = false, mobileNavButtonRef, onMobileNavOpen 
   const pathname = usePathname() ?? "/";
   const title = resolveTitle(pathname);
   const { user, logout } = useAuth();
-  const toast = useToast();
   const [busy, setBusy] = useState(false);
 
   async function handleLogout() {
@@ -550,27 +509,10 @@ function HeaderBar({ mobileNavOpen = false, mobileNavButtonRef, onMobileNavOpen 
           <Icon.sidebar />
         </button>
       ) : null}
-      <button
-        className="hdr__model hdr__model--preview"
-        type="button"
-        title="Workspace switcher (preview)"
-        onClick={() => toast({ message: "Workspace switching is coming soon.", variant: "info" })}
-      >
+      <div className="hdr__model">
         <span className="dot" aria-hidden="true" />
         {title}
-        <span className="inline-preview">Preview</span>
-        <span style={{ color: "var(--ink-3)" }}><Icon.chev /></span>
-      </button>
-      <button
-        className="ib ib--preview"
-        type="button"
-        title="Copy link (preview)"
-        aria-label="Copy link (preview)"
-        onClick={() => toast({ message: "Shareable chat links are coming soon.", variant: "info" })}
-      >
-        <Icon.copy />
-        <span className="preview-dot" aria-hidden="true">Preview</span>
-      </button>
+      </div>
       <Link className="ib" href="/chat" title="New chat" aria-label="New chat">
         <Icon.plus />
       </Link>
@@ -591,16 +533,6 @@ function HeaderBar({ mobileNavOpen = false, mobileNavButtonRef, onMobileNavOpen 
           <Icon.logout />
         </Link>
       )}
-      <button
-        className="ib ib--preview"
-        type="button"
-        title="More actions (preview)"
-        aria-label="More actions (preview)"
-        onClick={() => toast({ message: "More chat actions are coming soon.", variant: "info" })}
-      >
-        <Icon.dots />
-        <span className="preview-dot" aria-hidden="true">Preview</span>
-      </button>
     </header>
   );
 }
@@ -614,7 +546,6 @@ type RightRailProps = {
 };
 
 function RightRail({ expanded, onToggle, activePanel, onPanelChange, ariaHidden = false }: RightRailProps) {
-  const router = useRouter();
   const item = (id: string, icon: React.ReactNode, label: string) => {
     const on = activePanel === id;
     return (
@@ -634,21 +565,9 @@ function RightRail({ expanded, onToggle, activePanel, onPanelChange, ariaHidden 
 
   return (
     <aside className="rr" aria-label="Panels" aria-hidden={ariaHidden ? true : undefined}>
-      <button
-        className="ib"
-        type="button"
-        title="Prompts"
-        aria-label="Prompts"
-        onClick={() => router.push("/prompts")}
-      >
-        <Icon.text />
-        <span className="rr__label">Prompts</span>
-      </button>
       {item("memories", <Icon.memories />, "Memories")}
       {item("parameters", <Icon.params />, "Parameters")}
-      {item("attach", <Icon.attach />, "Attach Files")}
       {item("bookmarks", <Icon.bookmark />, "Bookmarks")}
-      {item("mcp", <Icon.mcp />, "MCP Drafts")}
       <div style={{ flex: 1 }} />
       <button
         className="ib"
@@ -668,22 +587,12 @@ function RightRail({ expanded, onToggle, activePanel, onPanelChange, ariaHidden 
 const PANEL_TITLES: Record<string, string> = {
   memories: "Memories",
   parameters: "Parameters",
-  attach: "Attach Files",
-  bookmarks: "Bookmarks",
-  mcp: "MCP Drafts"
+  bookmarks: "Bookmarks"
 };
 
 const CloseGlyph = () => (
   <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
     <path d="M3 3l8 8M11 3l-8 8" />
-  </svg>
-);
-
-const UploadGlyph = () => (
-  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M12 16V4" />
-    <path d="M7 9l5-5 5 5" />
-    <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
   </svg>
 );
 
@@ -863,90 +772,6 @@ function ParametersPanel() {
   );
 }
 
-type AttachedFile = { name: string; size: number };
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function AttachFilesPanel() {
-  const [files, setFiles] = useState<AttachedFile[]>([]);
-  const [dragging, setDragging] = useState(false);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const toast = useToast();
-
-  function addFiles(list: FileList | null) {
-    if (!list || list.length === 0) return;
-    const next = [...files];
-    for (const file of Array.from(list)) {
-      next.push({ name: file.name, size: file.size });
-    }
-    setFiles(next);
-    toast({ message: "File attachments are coming soon when you hit Send with files.", variant: "info" });
-  }
-
-  function remove(index: number) {
-    setFiles(files.filter((_, i) => i !== index));
-  }
-
-  return (
-    <div className="rrd__body">
-      <div
-        className={`rrd__drop ${dragging ? "rrd__drop--on" : ""}`}
-        onDragOver={(event) => {
-          event.preventDefault();
-          setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={(event) => {
-          event.preventDefault();
-          setDragging(false);
-          addFiles(event.dataTransfer.files);
-        }}
-        onClick={() => inputRef.current?.click()}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            inputRef.current?.click();
-          }
-        }}
-      >
-        <UploadGlyph />
-        <div className="rrd__drop-title">Drop files or click to browse</div>
-        <div className="rrd__drop-sub">Files stay local until upload ships.</div>
-        <input
-          ref={inputRef}
-          type="file"
-          multiple
-          hidden
-          onChange={(event) => {
-            addFiles(event.target.files);
-            event.target.value = "";
-          }}
-        />
-      </div>
-      <ul className="rrd__list">
-        {files.length === 0 ? <li className="rrd__empty">No files picked.</li> : null}
-        {files.map((file, index) => (
-          <li key={`${file.name}-${index}`} className="rrd__row">
-            <span className="rrd__row-text">
-              <strong className="rrd__row-name">{file.name}</strong>
-              <span className="rrd__row-meta">{formatBytes(file.size)}</span>
-            </span>
-            <button className="ib rrd__row-x" type="button" aria-label="Remove file" onClick={() => remove(index)}>
-              <CloseGlyph />
-            </button>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
 function BookmarksPanel() {
   const [ids, setIds] = useState<string[]>([]);
 
@@ -989,64 +814,14 @@ function BookmarksPanel() {
   );
 }
 
-type McpServer = { id: string; name: string; description: string };
-const MCP_SERVERS: McpServer[] = [
-  { id: "postgres", name: "Postgres MCP", description: "Local draft only; runtime MCP connections are not wired yet." },
-  { id: "grafana", name: "Grafana MCP", description: "Local draft only; runtime MCP connections are not wired yet." }
-];
-
-function McpPanel() {
-  const [connected, setConnected] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    const stored = readJSON<Record<string, boolean> | null>("packetchat.mcp.connections", null);
-    if (stored && typeof stored === "object") setConnected(stored);
-  }, []);
-
-  function toggle(id: string) {
-    const next = { ...connected, [id]: !connected[id] };
-    setConnected(next);
-    writeJSON("packetchat.mcp.connections", next);
-  }
-
-  return (
-    <div className="rrd__body">
-      <ul className="rrd__list">
-        {MCP_SERVERS.map((server) => {
-          const on = !!connected[server.id];
-          return (
-            <li key={server.id} className="rrd__mcp">
-              <div className="rrd__mcp-info">
-                <div className="rrd__row-name">{server.name}</div>
-                <div className="rrd__row-meta">{server.description}</div>
-              </div>
-              <button
-                className={`button ${on ? "button--ghost" : "button--primary"}`}
-                type="button"
-                onClick={() => toggle(server.id)}
-              >
-                {on ? "Draft saved" : "Save draft"}
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
-}
-
 function PanelContent({ panel }: { panel: string }) {
   switch (panel) {
     case "memories":
       return <MemoriesPanel />;
     case "parameters":
       return <ParametersPanel />;
-    case "attach":
-      return <AttachFilesPanel />;
     case "bookmarks":
       return <BookmarksPanel />;
-    case "mcp":
-      return <McpPanel />;
     default:
       return null;
   }
@@ -1074,6 +849,7 @@ function RightDrawer({ panel, onClose }: RightDrawerProps) {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() ?? "/";
+  const { status } = useAuth();
   const [rrExpanded, setRrExpanded] = useState(false);
   const [rrPanel, setRrPanel] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -1181,6 +957,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setRrPanel(null);
   }
 
+  // Signed-out visitors (i.e. the login page) get a bare frame. Rendering the
+  // rails here would hand them a nav they cannot use: clicking a link would
+  // mount a protected page for a moment before the auth guard bounced them
+  // back to /login.
+  if (status !== "authenticated") {
+    return (
+      <div className="app app--auth">
+        <main className="main" id="main-content" tabIndex={-1}>
+          {children}
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div
       className="app"
@@ -1191,7 +981,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       data-mobilenav={mobileNavOpen ? "open" : "closed"}
     >
       <a className="skip-link" href="#main-content">Skip to main content</a>
-      <LeftRail onMobileClose={closeMobileNav} onNavigate={closeMobileNav} />
+      <LeftRail onMobileClose={mobileNavOpen ? closeMobileNav : undefined} onNavigate={closeMobileNav} />
       {mobileNavOpen ? (
         <button className="mobile-nav-scrim" type="button" aria-label="Close navigation" onClick={closeMobileNav} tabIndex={-1} />
       ) : null}

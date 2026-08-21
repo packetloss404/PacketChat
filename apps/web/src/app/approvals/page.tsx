@@ -102,7 +102,7 @@ export default function ApprovalsPage() {
         <div className="approval-page">
           <section className="card approval-page__hero">
             <div>
-              <div className="eyebrow">Runtime safety</div>
+              <div className="eyebrow">Approvals</div>
               <h1>Approval queue</h1>
               <p className="muted">Review pending agent action approvals and recent tool activity.</p>
             </div>
@@ -116,7 +116,7 @@ export default function ApprovalsPage() {
 
           <section className="grid approval-page__stats" aria-label="Approval queue stats">
             <div className="card approval-page__stat"><span className="muted">Pending</span><strong>{data.stats.pending}</strong></div>
-            <div className="card approval-page__stat"><span className="muted">Approval steps</span><strong>{data.stats.approvals}</strong></div>
+            <div className="card approval-page__stat"><span className="muted">Approvals</span><strong>{data.stats.approvals}</strong></div>
             <div className="card approval-page__stat"><span className="muted">Recent actions</span><strong>{data.stats.recentActions}</strong></div>
           </section>
 
@@ -124,7 +124,7 @@ export default function ApprovalsPage() {
             <div className="approval-page__section-head">
               <div>
                 <div className="eyebrow">Queue</div>
-                <h2>Human approvals</h2>
+                <h2>Pending approvals</h2>
               </div>
               <div className="admin-users__toggle" role="group" aria-label="Approval filter">
                 {(["all", "pending", "closed"] as const).map((value) => (
@@ -155,7 +155,7 @@ export default function ApprovalsPage() {
                       <h3>{item.name}</h3>
                       <div className="approval-card__meta">
                         <span>{item.agentName}</span>
-                        <span>Run {item.runId.slice(0, 8)}</span>
+                        <span>Run #{item.runId.slice(0, 8)}</span>
                         {item.requesterEmail ? <span>{item.requesterEmail}</span> : null}
                       </div>
                     </div>
@@ -171,7 +171,7 @@ export default function ApprovalsPage() {
                         <button className="button button--primary" type="button" disabled={busyId === item.id} onClick={() => void decide(item, "approved")}>Approve</button>
                       </div>
                     ) : null}
-                    {item.state === "pending" && !item.canDecide ? <span className="muted">Waiting for an admin or agent editor.</span> : null}
+                    {item.state === "pending" && !item.canDecide ? <span className="muted">Waiting for an admin.</span> : null}
                   </footer>
                 </article>
               ))}

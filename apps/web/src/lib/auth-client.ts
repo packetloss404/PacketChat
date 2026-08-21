@@ -16,8 +16,6 @@ type MeResponse = {
   user: AuthUser;
 };
 
-export const accessTokenKey = "packetchat.accessToken";
-const legacyAccessTokenKey = "packetchat_access_token";
 const csrfCookieName = "packetchat_csrf";
 let memoryAccessToken: string | null = null;
 
@@ -36,7 +34,7 @@ function emitAuthClient(event: AuthClientEvent) {
 }
 
 async function readJson<T>(response: Response): Promise<T> {
-  const data = await response.json().catch(() => null) as T | { error?: { message?: string } } | null;
+  const data = (await response.json().catch(() => null)) as T | { error?: { message?: string } } | null;
   if (!response.ok) {
     const message = data && typeof data === "object" && "error" in data ? data.error?.message : null;
     throw new Error(message || `Request failed with ${response.status}`);
@@ -45,29 +43,17 @@ async function readJson<T>(response: Response): Promise<T> {
 }
 
 export function getAccessToken() {
-  if (memoryAccessToken) return memoryAccessToken;
-  if (typeof window === "undefined") return null;
-  memoryAccessToken = window.localStorage.getItem(accessTokenKey) ?? window.localStorage.getItem(legacyAccessTokenKey);
   return memoryAccessToken;
 }
 
 export function storeAccessToken(accessToken: string) {
   memoryAccessToken = accessToken;
-  console.warn("PacketChat stores access tokens in localStorage for V1 compatibility; avoid third-party scripts and migrate to an HTTP-only access-token strategy before production hardening is complete.");
-  if (typeof window !== "undefined") {
-    window.localStorage.setItem(accessTokenKey, accessToken);
-    window.localStorage.setItem(legacyAccessTokenKey, accessToken);
-  }
   emitAuthClient({ type: "token", accessToken });
 }
 
 export function clearAccessToken() {
-  const hadToken = Boolean(memoryAccessToken) || (typeof window !== "undefined" && Boolean(window.localStorage.getItem(accessTokenKey) ?? window.localStorage.getItem(legacyAccessTokenKey)));
+  const hadToken = Boolean(memoryAccessToken);
   memoryAccessToken = null;
-  if (typeof window !== "undefined") {
-    window.localStorage.removeItem(accessTokenKey);
-    window.localStorage.removeItem(legacyAccessTokenKey);
-  }
   if (hadToken) emitAuthClient({ type: "token", accessToken: null });
 }
 
@@ -96,10 +82,24 @@ export async function breakGlassLogin(email: string, password: string) {
   return result;
 }
 
+let refreshInFlight: Promise<string> | null = null;
+
 export async function refreshAccessToken() {
-  const result = await postAuth<{ accessToken: string }>("/api/auth/refresh", {});
-  storeAccessToken(result.accessToken);
-  return result.accessToken;
+  if (memoryAccessToken) return memoryAccessToken;
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    try {
+      const result = await postAuth<{ accessToken: string }>("/api/auth/refresh", {});
+      storeAccessToken(result.accessToken);
+      return result.accessToken;
+    } catch (error) {
+      clearAccessToken();
+      throw error;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
 }
 
 export async function getMe() {
@@ -108,7 +108,7 @@ export async function getMe() {
 }
 
 export async function authFetch(input: RequestInfo | URL, init: RequestInit = {}) {
-  const response = await fetchWithAccessToken(input, init);
+  let response = await fetchWithAccessToken(input, init);
   if (response.status !== 401) return response;
 
   try {
@@ -119,12 +119,12 @@ export async function authFetch(input: RequestInfo | URL, init: RequestInit = {}
     return response;
   }
 
-  const retry = await fetchWithAccessToken(input, init);
-  if (retry.status === 401) {
+  response = await fetchWithAccessToken(input, init);
+  if (response.status === 401) {
     clearAccessToken();
     emitAuthClient({ type: "expired" });
   }
-  return retry;
+  return response;
 }
 
 export async function acceptInvite(token: string, displayName: string, password: string) {
@@ -166,7 +166,10 @@ function authHeaders(accessToken: string | null, base?: Record<string, string>) 
 
 function readCsrfToken() {
   if (typeof document === "undefined") return null;
-  const value = document.cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${csrfCookieName}=`))?.slice(csrfCookieName.length + 1);
+  const value = document.cookie.split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${csrfCookieName}=`))
+    ?.slice(csrfCookieName.length + 1);
   return value ? decodeURIComponent(value) : null;
 }
 
@@ -181,3 +184,4 @@ function fetchWithAccessToken(input: RequestInfo | URL, init: RequestInit) {
     credentials: init.credentials ?? "include"
   });
 }
+

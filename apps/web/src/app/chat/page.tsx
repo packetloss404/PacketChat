@@ -7,8 +7,8 @@ import { getAccessToken } from "../../lib/auth-client";
 import { apiClient, type Conversation, type ConversationMessage, type ProviderAccount, type ProviderModelBinding } from "../../lib/api-client";
 import { Icon } from "../../components/icons";
 import { useToast } from "../../components/ui";
+import { renderMarkdown } from "../../lib/markdown";
 
-const APP_VERSION = "v0.8.2-rc1";
 const BOOKMARKS_KEY = "packetchat.chat.bookmarks";
 const PENDING_AGENT_STORAGE_KEY = "packetchat.chat.pendingAgent";
 const PENDING_PROMPT_STORAGE_KEY = "packetchat.chat.pendingPrompt";
@@ -91,23 +91,13 @@ function isErrorStatus(status: string) {
 function publicChatError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   if (/provider account|provider mismatch|model.*required|unauthenticated|no access/i.test(message)) return message;
-  return "Chat failed. Check the selected model/provider settings and try again.";
+  return "Chat failed. Check your model selection and try again.";
 }
 
 function greeting(hour: number) {
   if (hour < 12) return "morning";
   if (hour < 18) return "afternoon";
   return "evening";
-}
-
-function renderBody(body: string) {
-  const parts = body.split(/(`[^`]+`)/g);
-  return parts.map((part, index) => {
-    if (part.startsWith("`") && part.endsWith("`") && part.length > 1) {
-      return <code key={index}>{part.slice(1, -1)}</code>;
-    }
-    return <span key={index}>{part}</span>;
-  });
 }
 
 function formatTimestamp(iso?: string) {
@@ -165,7 +155,6 @@ export default function ChatPage() {
   const [status, setStatus] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [displayName, setDisplayName] = useState("there");
-  const [attachmentName, setAttachmentName] = useState<string | null>(null);
   const [bookmarks, setBookmarks] = useState<Set<string>>(() => new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingDraft, setEditingDraft] = useState("");
@@ -176,7 +165,6 @@ export default function ChatPage() {
 
   const abortRef = useRef<AbortController | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
 
   const selectedAccount = useMemo(() => accounts.find((account) => account.id === accountId), [accountId, accounts]);
@@ -190,7 +178,7 @@ export default function ChatPage() {
   const headerTitle = useMemo(() => {
     const active = conversations.find((c) => c.id === conversationId);
     if (activeAgent) return `${activeAgent.name} · agent`;
-    if (active?.title) return `${active.title} · ${model || "no model"}`;
+    if (active?.title) return model ? `${active.title} · ${model}` : active.title;
     return model ? `New chat · ${model}` : "New chat";
   }, [activeAgent, conversations, conversationId, model]);
 
@@ -309,7 +297,7 @@ export default function ChatPage() {
   useEffect(() => {
     const accessToken = token();
     if (!accessToken) {
-      setStatus("No access token found. Sign in before chatting.");
+      setStatus("You're signed out. Please sign in.");
       setLoadingAccounts(false);
       return;
     }
@@ -356,7 +344,7 @@ export default function ChatPage() {
           setModel(defaultBinding?.model ?? "");
         } else {
           setShowSettings(true);
-          setStatus("No provider accounts are accessible for this user.");
+          setStatus("No models configured yet.");
         }
       } catch (error) {
         if (!cancelled) setStatus(error instanceof Error ? error.message : String(error));
@@ -399,37 +387,33 @@ export default function ChatPage() {
     setModel(binding?.model ?? "");
   }
 
-  async function sendMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const content = input.trim();
+  async function sendContent(content: string, baseMessages: ChatMessage[]) {
     const accessToken = token();
     if (!content || isStreaming) return;
     if (!accessToken) {
-      setStatus("No access token found. Sign in before chatting.");
+      setStatus("You're signed out. Please sign in.");
       return;
     }
     if (!activeAgent && !accountId) {
-      setStatus("Choose a provider account before sending a message.");
+      setStatus("Select an account before sending a message.");
       setShowSettings(true);
       return;
     }
     if (!activeAgent && !model.trim()) {
-      setStatus("Enter the provider model or Azure deployment name before sending a message.");
+      setStatus("Pick a model first.");
       setShowSettings(true);
       return;
     }
     if (!activeAgent && providerMismatch) {
-      setStatus("Selected provider id must match the selected provider account.");
+      setStatus("This account can't use that model.");
       return;
     }
 
     const now = new Date().toISOString();
     const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content, createdAt: now };
     const assistantMessage: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: "", createdAt: now };
-    const requestMessages = [...messages, userMessage];
+    const requestMessages = [...baseMessages, userMessage];
     setMessages((current) => [...current, userMessage, assistantMessage]);
-    setInput("");
-    setStatus(activeAgent ? "Running agent..." : "Streaming response...");
     setIsStreaming(true);
 
     const abortController = new AbortController();
@@ -449,7 +433,6 @@ export default function ChatPage() {
           replaceConversationUrl(payload.conversationId);
         }
         updateAssistantMessage(assistantMessage.id, () => payload.outputText ?? "");
-        setStatus(`Agent run ${payload.status ?? "completed"}.`);
         await loadConversations().catch(() => undefined);
         return;
       }
@@ -499,7 +482,7 @@ export default function ChatPage() {
               updateAssistantMessage(assistantMessage.id, (current) => current + streamEvent.text);
             }
             if (streamEvent.type === "message_end") {
-              setStatus(`Finished: ${streamEvent.finishReason}`);
+              setStatus("");
             }
             if (streamEvent.type === "error") {
               throw new Error(streamEvent.error.message ?? streamEvent.error.code ?? "Provider stream failed");
@@ -508,20 +491,43 @@ export default function ChatPage() {
         }
       }
 
-      setStatus((current) => (current.startsWith("Finished:") ? current : "Response complete."));
       await loadConversations().catch(() => undefined);
     } catch (error) {
       if (abortController.signal.aborted) {
         setStatus("Response stopped.");
       } else {
         const message = publicChatError(error);
-        updateAssistantMessage(assistantMessage.id, (current) => current || `Error: ${message}`);
+        updateAssistantMessage(assistantMessage.id, (current) => current || message);
         setStatus(message);
       }
     } finally {
       setIsStreaming(false);
       abortRef.current = null;
     }
+  }
+
+  function sendMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const content = input.trim();
+    if (!content || isStreaming) return;
+    setInput("");
+    void sendContent(content, messages);
+  }
+
+  function regenerate() {
+    if (isStreaming) return;
+    let lastUserIndex = -1;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].role === "user") {
+        lastUserIndex = index;
+        break;
+      }
+    }
+    if (lastUserIndex === -1) return;
+    const lastUser = messages[lastUserIndex];
+    const truncated = messages.slice(0, lastUserIndex);
+    setMessages(truncated);
+    void sendContent(lastUser.content, truncated);
   }
 
   function stopStreaming() {
@@ -533,22 +539,6 @@ export default function ChatPage() {
       event.preventDefault();
       event.currentTarget.form?.requestSubmit();
     }
-  }
-
-  function handleAttachClick() {
-    fileInputRef.current?.click();
-  }
-
-  function handleAttachChange(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setAttachmentName(file.name);
-    toast({ message: "File attachments are coming soon", variant: "info" });
-    event.target.value = "";
-  }
-
-  function clearAttachment() {
-    setAttachmentName(null);
   }
 
   function toggleListening() {
@@ -647,31 +637,40 @@ export default function ChatPage() {
     <form className={`composer ${hasMessages ? "composer--float" : ""}`} onSubmit={sendMessage}>
       <textarea
         rows={1}
-        placeholder={activeAgent ? `Message ${activeAgent.name}` : `Message assistant · ${model || "select a model"}`}
-        aria-label="Message"
+        placeholder={activeAgent ? `Message ${activeAgent.name}` : model ? `Message ${model}` : "Ask anything"}
+        aria-label="Message input"
         value={input}
         onChange={(event) => setInput(event.target.value)}
         onKeyDown={onTextareaKey}
         disabled={isStreaming}
       />
-      <input
-        ref={fileInputRef}
-        type="file"
-        style={{ display: "none" }}
-        onChange={handleAttachChange}
-        aria-hidden="true"
-        tabIndex={-1}
-      />
       <div className="composer__row">
-        <button className="ib ib--preview" type="button" title="Attach files (preview)" aria-label="Attach files (preview)" onClick={handleAttachClick} disabled={isStreaming}>
-          <Icon.attach />
-          <span className="preview-dot" aria-hidden="true">Preview</span>
-        </button>
+        {!activeAgent && selectedModelBindings.length > 0 ? (
+          <span className="composer__model">
+            <select
+              aria-label="Model"
+              title="Model"
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              disabled={isStreaming}
+            >
+              {!selectedModelBindings.some((binding) => binding.model === model) && model ? (
+                <option value={model}>{model}</option>
+              ) : null}
+              {selectedModelBindings.map((binding) => (
+                <option key={binding.id} value={binding.model ?? ""}>
+                  {binding.display_name ?? binding.model}
+                </option>
+              ))}
+            </select>
+            <Icon.chev />
+          </span>
+        ) : null}
         <button
           className="ib"
           type="button"
-          title="Settings"
-          aria-label="Settings"
+          title="Model settings"
+          aria-label="Model settings"
           aria-pressed={showSettings}
           onClick={() => setShowSettings((v) => !v)}
           disabled={Boolean(activeAgent)}
@@ -680,7 +679,7 @@ export default function ChatPage() {
         </button>
         <div className="spacer" />
         {isStreaming ? (
-          <button className="ib" type="button" title="Stop" aria-label="Stop" onClick={stopStreaming}>
+            <button className="ib composer__stop" type="button" title="Stop" aria-label="Stop" onClick={stopStreaming}>
             <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
               <line x1="6" y1="6" x2="18" y2="18" />
               <line x1="18" y1="6" x2="6" y2="18" />
@@ -718,85 +717,45 @@ export default function ChatPage() {
           <Icon.up />
         </button>
       </div>
-      {attachmentName ? (
-        <div className="composer__attachment" role="status">
-          <Icon.attach />
-          <span className="composer__attachment-name">{attachmentName}</span>
-          <button type="button" className="composer__attachment-remove" onClick={clearAttachment} aria-label="Remove attached file">
-            Remove
-          </button>
-        </div>
-      ) : null}
-      <style jsx>{`
-        .composer__attachment {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          margin-top: 8px;
-          padding: 6px 10px;
-          font-size: 12px;
-          color: var(--muted, #888);
-          background: rgba(127, 127, 127, 0.08);
-          border-radius: 8px;
-        }
-        .composer__attachment-name {
-          flex: 1;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-        .composer__attachment-remove {
-          background: transparent;
-          border: none;
-          color: inherit;
-          cursor: pointer;
-          font-size: 12px;
-          padding: 2px 6px;
-          border-radius: 6px;
-        }
-        .composer__attachment-remove:hover {
-          background: rgba(127, 127, 127, 0.15);
-        }
-      `}</style>
     </form>
   );
 
   const settingsNode = showSettings ? (
     <div className="chat-settings" role="region" aria-label="Chat settings">
       <div>
-        <div className="eyebrow">Route</div>
+        <div className="eyebrow">Model</div>
         <h2>Model settings</h2>
-        <p className="muted">Provider id is derived from the selected account to avoid invalid routes.</p>
+        <p className="muted">Pick the account and model to use for this chat.</p>
       </div>
 
       {!loadingAccounts && accounts.length === 0 ? (
         <div className="warning" role="status">
-          Chat requires at least one configured provider account. Add one in <Link className="link-button" href="/providers">Providers</Link> before sending messages.
+          No models configured yet. Add one in <Link className="link-button" href="/providers">Models</Link> first.
         </div>
       ) : null}
 
       <div className="chat-settings__fields">
         <label>
-          Provider account
-          <select aria-label="Provider account" value={accountId} onChange={(event) => handleAccountChange(event.target.value)} disabled={loadingAccounts || isStreaming}>
-            <option value="">{loadingAccounts ? "Loading accounts..." : "Choose an account"}</option>
+          Account
+          <select aria-label="Account" value={accountId} onChange={(event) => handleAccountChange(event.target.value)} disabled={loadingAccounts || isStreaming}>
+            <option value="">{loadingAccounts ? "Loading models..." : "Select an account"}</option>
             {accounts.map((account) => (
               <option key={account.id} value={account.id} disabled={account.status !== "enabled"}>
-                {account.display_name} ({account.provider}, {account.scope}, {account.status})
+                {account.display_name}
               </option>
             ))}
           </select>
         </label>
         <div className="route-card">
-          <span className="route-card__label">Provider route</span>
+          <span className="route-card__label">Provider</span>
           <strong>{selectedAccount?.provider ?? provider}</strong>
-          <span>{selectedAccount ? `${selectedAccount.scope} / ${selectedAccount.status}` : "Select an account"}</span>
+          <span>{selectedAccount ? selectedAccount.scope : "Select an account"}</span>
         </div>
         <label>
           {selectedAccount?.provider === "azure-openai" ? "Azure deployment" : "Model"}
           {selectedModelBindings.length ? (
-            <select aria-label="Model binding" value={model} onChange={(event) => setModel(event.target.value)} disabled={isStreaming}>
-              <option value="">Choose a bound model</option>
+            <select aria-label="Model" value={model} onChange={(event) => setModel(event.target.value)} disabled={isStreaming}>
+              <option value="">Choose a model</option>
               {selectedModelBindings.map((binding) => (
                 <option key={binding.id} value={binding.model ?? ""}>
                   {binding.display_name ?? binding.model}
@@ -805,10 +764,10 @@ export default function ChatPage() {
             </select>
           ) : (
             <input
-              aria-label="Model or Azure deployment name"
+              aria-label="Model name"
               value={model}
               onChange={(event) => setModel(event.target.value)}
-              placeholder="model-name or deployment-name"
+              placeholder="Model name"
               disabled={isStreaming}
             />
           )}
@@ -816,7 +775,7 @@ export default function ChatPage() {
       </div>
 
       {providerMismatch ? (
-        <p className="warning chat-warning" role="alert">Selected provider id must match the account provider, or the API will reject the request.</p>
+        <p className="warning chat-warning" role="alert">This account can't use that model.</p>
       ) : null}
 
       {status ? (
@@ -833,17 +792,26 @@ export default function ChatPage() {
         <div className="stage">
           <div className="greet">
             <span className="logo" aria-hidden="true" />
-            {hour === null ? `Hello, ${displayName}` : `Good ${greeting(hour)}, ${displayName}`}
+            <h1 className="greet__title">
+              {hour === null ? `Hello, ${displayName}` : `Good ${greeting(hour)}, ${displayName}`}
+            </h1>
           </div>
           {composerNode}
           {settingsNode}
         </div>
         <div className="footer">
-          <Link href="/">PacketChat {APP_VERSION}</Link> · private storage · provider requests use the selected account
+          <Link href="/">PacketChat</Link> · your chats stay on this server
         </div>
       </>
     );
   }
+
+  const lastAssistantId = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].role === "assistant") return messages[index].id;
+    }
+    return null;
+  }, [messages]);
 
   return (
     <>
@@ -854,9 +822,11 @@ export default function ChatPage() {
             <Turn
               key={message.id}
               message={message}
+              assistantLabel={activeAgent?.name || model || "Assistant"}
               isStreaming={isStreaming}
               isBookmarked={bookmarks.has(message.id)}
               isEditing={editingId === message.id}
+              canRegenerate={!isStreaming && message.role === "assistant" && message.id === lastAssistantId}
               editingDraft={editingDraft}
               onEditingDraftChange={setEditingDraft}
               onCopy={handleCopy}
@@ -864,6 +834,7 @@ export default function ChatPage() {
               onCancelEdit={handleCancelEdit}
               onSaveEdit={handleSaveEdit}
               onToggleBookmark={handleToggleBookmark}
+              onRegenerate={regenerate}
             />
           ))}
           {status && !isStreaming ? (
@@ -880,9 +851,11 @@ export default function ChatPage() {
 
 type TurnProps = {
   message: ChatMessage;
+  assistantLabel: string;
   isStreaming: boolean;
   isBookmarked: boolean;
   isEditing: boolean;
+  canRegenerate: boolean;
   editingDraft: string;
   onEditingDraftChange: (value: string) => void;
   onCopy: (content: string) => void;
@@ -890,31 +863,36 @@ type TurnProps = {
   onCancelEdit: () => void;
   onSaveEdit: () => void;
   onToggleBookmark: (id: string) => void;
+  onRegenerate: () => void;
 };
 
 function Turn({
   message,
+  assistantLabel,
   isStreaming,
   isBookmarked,
   isEditing,
+  canRegenerate,
   editingDraft,
   onEditingDraftChange,
   onCopy,
   onStartEdit,
   onCancelEdit,
   onSaveEdit,
-  onToggleBookmark
+  onToggleBookmark,
+  onRegenerate
 }: TurnProps) {
   const isUser = message.role === "user";
   const placeholder = isStreaming && !isUser && !message.content ? "…" : "";
   const timestamp = formatTimestamp(message.createdAt);
   const showTools = !isUser && !!message.content && !isStreaming;
+  const showRegenerate = canRegenerate && !isEditing && !isUser;
 
   return (
     <article className="turn">
       <div className="turn__head">
         <div className={`av ${isUser ? "u" : "a"}`} aria-hidden="true">{isUser ? "You" : "AI"}</div>
-        <b>{isUser ? "You" : "Assistant"}</b>
+        <b>{isUser ? "You" : assistantLabel}</b>
         {timestamp ? (
           <>
             <span>·</span>
@@ -937,9 +915,9 @@ function Turn({
           </div>
         </div>
       ) : (
-        <div className="turn__body">{renderBody(message.content || placeholder)}</div>
+        <div className="turn__body">{message.content ? renderMarkdown(message.content) : placeholder}</div>
       )}
-      {showTools && !isEditing ? (
+      {!isEditing && (showTools || showRegenerate) ? (
         <div className="turn__tools" role="group" aria-label="Assistant message actions">
           <button className="ib" type="button" title="Copy" aria-label="Copy" onClick={() => onCopy(message.content)}>
             <Icon.copy />
@@ -963,6 +941,15 @@ function Turn({
               <Icon.bookmark />
             )}
           </button>
+          {showRegenerate ? (
+            <button className="turn__tool--regenerate" type="button" title="Regenerate response" aria-label="Regenerate response" onClick={onRegenerate}>
+              <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                <polyline points="21 3 21 9 15 9" />
+              </svg>
+              <span>Regenerate</span>
+            </button>
+          ) : null}
         </div>
       ) : null}
       <style jsx>{`

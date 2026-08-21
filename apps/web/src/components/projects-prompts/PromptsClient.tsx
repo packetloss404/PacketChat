@@ -369,7 +369,7 @@ export function PromptsClient() {
       <header className="prompt-lib__head">
         <div className="prompt-lib__heading">
           <h1>Prompt Library</h1>
-          <p className="sub">Prompts are message templates that open in chat for review, editing, and sending.</p>
+          <p className="sub">Save messages you reuse and open them in chat when you need them.</p>
         </div>
         <div className="prompt-lib__head-actions">
           <button className="button button--primary" type="button" onClick={openCreate}>Add prompt</button>
@@ -391,8 +391,8 @@ export function PromptsClient() {
         </label>
         <label className="prompt-lib__select">
           <Icon.tag />
-          <select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)} aria-label="Filter by tags">
-            <option value="">Filter by Tags</option>
+          <select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)} aria-label="Filter by variables">
+            <option value="">Filter by variables</option>
             {tagOptions.map((tag) => <option key={tag} value={tag}>{tag}</option>)}
           </select>
           <Icon.chev />
