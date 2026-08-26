@@ -57,10 +57,17 @@ rsh 'command -v docker >/dev/null || { echo "docker missing"; exit 1; }
      sudo -n docker info >/dev/null 2>&1 || { echo "cannot reach docker daemon via sudo -n"; exit 1; }
      echo "docker ok: $(docker --version)"' || die "remote prerequisites not met"
 
+# On a redeploy our own web container legitimately holds the port, so only
+# refuse when something else does.
 if rsh "ss -ltn 2>/dev/null | grep -q ':${WEB_PORT} '"; then
-  die "port ${WEB_PORT} already in use on ${HOST}. Re-run with --port <free-port>"
+  if rsh "sudo -n docker ps --filter 'name=packetchat-web' --format '{{.Names}}' | grep -q ."; then
+    echo "port ${WEB_PORT} held by the existing packetchat stack (redeploy)"
+  else
+    die "port ${WEB_PORT} already in use on ${HOST} by something else. Re-run with --port <free-port>"
+  fi
+else
+  echo "port ${WEB_PORT} is free"
 fi
-echo "port ${WEB_PORT} is free"
 
 # ------------------------------------------------------------------ payload
 log "Packaging committed HEAD ($(git rev-parse --short HEAD))"
