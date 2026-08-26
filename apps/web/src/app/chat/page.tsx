@@ -343,7 +343,6 @@ export default function ChatPage() {
           );
           setModel(defaultBinding?.model ?? "");
         } else {
-          setShowSettings(true);
           setStatus("No models configured yet.");
         }
       } catch (error) {
@@ -396,12 +395,10 @@ export default function ChatPage() {
     }
     if (!activeAgent && !accountId) {
       setStatus("Select an account before sending a message.");
-      setShowSettings(true);
       return;
     }
     if (!activeAgent && !model.trim()) {
       setStatus("Pick a model first.");
-      setShowSettings(true);
       return;
     }
     if (!activeAgent && providerMismatch) {
@@ -720,6 +717,24 @@ export default function ChatPage() {
     </form>
   );
 
+  // Shown under the composer when the chat can't run yet. Clicking it opens
+  // model settings, rather than the panel springing open on its own.
+  const needsSetup = !activeAgent && !loadingAccounts && (accounts.length === 0 || !accountId || !model.trim());
+  const setupNotice = needsSetup && !showSettings ? (
+    <button
+      className="composer-notice"
+      type="button"
+      onClick={() => setShowSettings(true)}
+    >
+      <span className="composer-notice__text">
+        {accounts.length === 0
+          ? "No models configured yet - set one up to start chatting."
+          : "Choose an account and model to start chatting."}
+      </span>
+      <span className="composer-notice__cta">Model settings</span>
+    </button>
+  ) : null;
+
   const settingsNode = showSettings ? (
     <div className="chat-settings" role="region" aria-label="Chat settings">
       <div>
@@ -749,7 +764,7 @@ export default function ChatPage() {
         <div className="route-card">
           <span className="route-card__label">Provider</span>
           <strong>{selectedAccount?.provider ?? provider}</strong>
-          <span>{selectedAccount ? selectedAccount.scope : "Select an account"}</span>
+          <span>{selectedAccount ? selectedAccount.display_name : "Select an account"}</span>
         </div>
         <label>
           {selectedAccount?.provider === "azure-openai" ? "Azure deployment" : "Model"}
@@ -797,6 +812,7 @@ export default function ChatPage() {
             </h1>
           </div>
           {composerNode}
+          {setupNotice}
           {settingsNode}
         </div>
         <div className="footer">
@@ -845,6 +861,7 @@ export default function ChatPage() {
         </div>
       </div>
       {composerNode}
+      {setupNotice}
     </>
   );
 }

@@ -4358,6 +4358,39 @@ label {
   .mobile-topbar { display: none; }
 }
 
+/* ---------------- Composer setup notice ---------------- */
+.composer-notice {
+  align-items: center;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--ink-2);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  gap: 12px;
+  justify-content: space-between;
+  margin: 10px auto 0;
+  max-width: 760px;
+  padding: 11px 14px;
+  text-align: left;
+  transition: background 120ms ease, border-color 120ms ease;
+  width: 100%;
+}
+.composer-notice:hover {
+  background: var(--hover);
+  border-color: var(--line-2);
+}
+.composer-notice__text {
+  font-size: 13px;
+}
+.composer-notice__cta {
+  color: var(--accent-strong);
+  flex: 0 0 auto;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
 /* ---------------- Accessibility: focus-visible for clickables ---------------- */
 .ib:focus-visible,
 .button:focus-visible,
@@ -4368,7 +4401,8 @@ label {
 .model-row__select:focus-visible,
 .settings__rail-item:focus-visible,
 .user-pop__btn:focus-visible,
-.plugin-card:focus-visible {
+.plugin-card:focus-visible,
+.composer-notice:focus-visible {
   outline: 2px solid var(--ink-2);
   outline-offset: 2px;
   border-radius: inherit;
