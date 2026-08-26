@@ -38,7 +38,7 @@ log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m!! %s\033[0m\n' "$*"; }
 die()  { printf '\033[1;31mxx %s\033[0m\n' "$*" >&2; exit 1; }
 
-cleanup() { ssh -O exit -o "ControlPath=${CTL}" "$TARGET" 2>/dev/null || true; }
+cleanup() { [ -e "${CTL}" ] && ssh -O exit -o "ControlPath=${CTL}" "$TARGET" 2>/dev/null; true; }
 trap cleanup EXIT
 
 rsh()  { ssh "${SSH_OPTS[@]}" "$TARGET" "$@"; }
@@ -48,8 +48,15 @@ dc()   { rsh "cd '$REMOTE_DIR' && PACKETCHAT_WEB_PORT='${WEB_PORT}' sudo -n dock
 [[ -d .git ]] || die "run this from the repository root"
 git diff --quiet HEAD 2>/dev/null || warn "working tree has uncommitted changes; deploying committed HEAD only"
 
-log "Connecting to ${TARGET} (you will be prompted for the password once)"
-rsh 'echo "connected as $(whoami) on $(hostname)"' || die "ssh failed"
+# Connection multiplexing keeps password auth to a single prompt, but Windows
+# OpenSSH has no ControlMaster support. Fall back to plain ssh when it fails -
+# with key auth there is nothing to prompt for anyway.
+log "Connecting to ${TARGET}"
+if ! rsh 'echo "connected as $(whoami) on $(hostname)"' 2>/dev/null; then
+  warn "connection multiplexing unavailable; using one connection per step"
+  SSH_OPTS=(-o StrictHostKeyChecking=accept-new)
+  rsh 'echo "connected as $(whoami) on $(hostname)"' || die "ssh failed"
+fi
 
 log "Checking remote prerequisites"
 rsh 'command -v docker >/dev/null || { echo "docker missing"; exit 1; }
@@ -90,8 +97,15 @@ rsh "cd '$REMOTE_DIR'
        echo 'no existing release to snapshot (first deploy)'
      fi"
 
+# Replace the tree rather than overlaying it: tar leaves files that were
+# deleted in this release behind, and a stale source file that references
+# removed APIs breaks the build in a way that looks nothing like its cause.
 log "Extracting release ${STAMP}"
-rsh "cd '$REMOTE_DIR' && tar xzf '.releases/${STAMP}.tar.gz' && touch docker-compose-deployed && echo extracted"
+rsh "cd '$REMOTE_DIR' &&
+     find . -mindepth 1 -maxdepth 1 ! -name .env ! -name .releases -exec rm -rf {} + &&
+     tar xzf '.releases/${STAMP}.tar.gz' &&
+     touch docker-compose-deployed &&
+     echo extracted"
 
 # --------------------------------------------------------------------- env
 log "Verifying .env"
@@ -128,8 +142,11 @@ echo ".env looks populated"
 
 # ------------------------------------------------------------------ deploy
 if [[ $DO_BUILD -eq 1 ]]; then
+  # --profile tools is required: the migrate service sits behind that profile,
+  # so a plain build skips it and `run migrate` silently reuses a stale image
+  # that is missing the newest migrations.
   log "Building images on ${HOST} (this can take several minutes)"
-  dc "build" || die "image build failed"
+  dc "--profile tools build" || die "image build failed"
 fi
 
 log "Starting datastores"
@@ -147,6 +164,7 @@ dc "up minio-init" || warn "bucket init reported errors; continuing"
 
 log "Running database migrations"
 dc "--profile tools run --rm migrate" || die "migrations failed - stack not started"
+rsh "cd '$REMOTE_DIR' && sudo -n docker exec packetchat-postgres-1 psql -U \"\${POSTGRES_USER:-packetchat}\" -d \"\${POSTGRES_DB:-packetchat}\" -tAc 'select count(*) from _migrations'"   | tr -d '' | sed 's/^/  migrations recorded: /' || true
 
 log "Starting application services"
 dc "up -d web worker" || die "failed to start app services"
