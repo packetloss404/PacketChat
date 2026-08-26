@@ -3082,6 +3082,19 @@ label {
   min-width: 0;
   flex: 1;
 }
+/* LoadingBlock leads with the spinner, not the text block. Without this
+   exemption the :first-child stretch above wins on specificity and the
+   16px spinner becomes a page-wide rotating bar - visible as a diagonal
+   line sweeping the page during every data load. The flex stretch moves
+   to the text block that follows it. */
+.ui-state > .loading-spinner:first-child {
+  flex: 0 0 auto;
+  min-width: 16px;
+}
+.ui-state > .loading-spinner + div {
+  min-width: 0;
+  flex: 1;
+}
 .ui-state strong {
   color: inherit;
   font-weight: 600;
