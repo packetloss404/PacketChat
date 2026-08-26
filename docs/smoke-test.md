@@ -67,18 +67,16 @@ After authenticated smoke passes, use `docs/release-readiness.md` for the concis
 - Login with the admin account.
 - `GET /api/auth/me` succeeds with the returned bearer token.
 - Create a test user from the admin users flow or `POST /api/admin/users`.
-- Toggle BYOK on for the test user and verify the API response includes `byokEnabled: true`.
-- Toggle BYOK off again if the user should not retain personal provider keys.
 
 ## Providers
 
-- Add at least one global provider account as admin.
+- Add at least one app-wide provider account as admin from `/admin/providers`.
 - `GET /api/providers` lists the new provider account.
 - `GET /api/providers` includes `usagePricing` on model bindings so operators can see whether local cost estimates are matched, fallback, or unknown.
-- The `/providers` page shows enabled/disabled provider routes, default route state, synced model binding counts, pricing coverage, and capability metadata.
-- `POST /api/providers/{providerId}/test` succeeds or returns a sanitized provider failure. The server decides whether the account requires admin access based on account scope.
-- With BYOK enabled, a regular user can add a `scope: "user"` provider account.
-- With BYOK disabled, the same user receives `403` when adding a `scope: "user"` provider account.
+- The `/admin/providers` page shows enabled/disabled provider routes, default route state, synced model binding counts, pricing coverage, and capability metadata.
+- A non-admin user opening `/admin/providers` sees the admin-access notice instead of the provider form, and `POST /api/providers` returns `403` for that user.
+- A non-admin user sees every enabled provider account in `/providers` and in the chat model picker without any per-user setup.
+- `POST /api/providers/{providerId}/test` succeeds or returns a sanitized provider failure. Admin access is required.
 - To test live provider keys without storing credentials, run `node scripts/provider-health.mjs`. See `docs/provider-testing.md` for all five provider environment variables. The script fails if every provider is skipped unless you pass `--allow-empty`.
 - V1 provider IDs are `openai-compatible`, `azure-openai`, `anthropic`, `perplexity`, and `minimax`; `google` is not accepted by the backend provider APIs.
 

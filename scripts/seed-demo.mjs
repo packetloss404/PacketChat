@@ -83,7 +83,7 @@ async function getAdminUser(sql) {
   const email = process.env.PACKETCHAT_DEMO_ADMIN_EMAIL || process.env.DEMO_ADMIN_EMAIL || "";
   const rows = email
     ? await sql`select id, email, display_name from users where lower(email) = lower(${email}) and role = 'admin' and status = 'active' limit 1`
-    : await sql`select id, email, display_name from users where role = 'admin' and status = 'active' order by is_break_glass asc, created_at asc limit 1`;
+    : await sql`select id, email, display_name from users where role = 'admin' and status = 'active' order by created_at asc limit 1`;
 
   if (!rows[0]) {
     const hint = email ? `No active admin user found for ${email}.` : "No active admin user found.";

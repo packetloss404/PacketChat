@@ -532,12 +532,11 @@ async function runChildAgent(input: { parentRunId: string; resourceOwnerUserId: 
   const providerAccountId = textOrNull(child.spec.providerAccountId);
   const model = textOrNull(child.spec.model);
   if (!providerAccountId || !model) return { agentId: input.childAgentId, name: child.name, error: "missing_provider_or_model" };
-  const account = await getProviderAccountForRuntime(providerAccountId, input.resourceOwnerUserId);
+  const account = await getProviderAccountForRuntime(providerAccountId);
   if (!account) return { agentId: input.childAgentId, name: child.name, error: "provider_account_unavailable" };
   if (child.spec.provider && account.provider !== child.spec.provider) return { agentId: input.childAgentId, name: child.name, error: "provider_mismatch" };
   const modelBinding = await getEnabledModelBindingForRuntime({
     accountId: providerAccountId,
-    userId: input.resourceOwnerUserId,
     provider: account.provider,
     model
   });
@@ -697,12 +696,11 @@ async function executeRun(input: {
 
     stepId = await addRunStep({ runId: input.runId, sequenceNo: nextStep++, stepType: "llm", status: "running", name: "Model response", input: { inputText: input.inputText, contextBlockCount: contextBlocks.length } });
 
-    const account = await getProviderAccountForRuntime(input.spec.providerAccountId!, input.resourceOwnerUserId);
+    const account = await getProviderAccountForRuntime(input.spec.providerAccountId!);
     if (!account) throw new Error("Provider account not found or is not available to this user.");
     if (input.spec.provider && account.provider !== input.spec.provider) throw new Error("Agent provider does not match the selected provider account.");
     const modelBinding = await getEnabledModelBindingForRuntime({
       accountId: input.spec.providerAccountId!,
-      userId: input.resourceOwnerUserId,
       provider: account.provider,
       model: input.spec.model!
     });

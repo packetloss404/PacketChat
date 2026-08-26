@@ -15,16 +15,12 @@ export type AuthUser = {
   displayName?: string | null;
   role?: "admin" | "user" | string;
   status?: string;
-  byokEnabled?: boolean;
 };
 
-export type ProviderScope = "global" | "user";
 
 export type ProviderAccount = {
   id: string;
   provider: ProviderId;
-  scope: ProviderScope;
-  owner_user_id: string | null;
   display_name: string;
   base_url: string | null;
   api_version: string | null;
@@ -49,7 +45,6 @@ export type ProviderModelBinding = {
 export type ProvidersResponse = {
   accounts: ProviderAccount[];
   modelBindings: ProviderModelBinding[];
-  byokEnabled: boolean;
 };
 
 export type Conversation = {
@@ -356,8 +351,6 @@ export type AdminUser = {
   display_name: string | null;
   role: "admin" | "user" | string;
   status: string;
-  byok_enabled: boolean;
-  is_break_glass: boolean;
   created_at: string;
   last_login_at: string | null;
 };
@@ -433,7 +426,7 @@ export type AdminAuditEvent = {
 };
 
 export type AdminOperationsResponse = {
-  providerAccounts: Array<{ provider: string; scope: string; status: string; count: number }>;
+  providerAccounts: Array<{ provider: string; status: string; count: number }>;
   modelBindings: Array<{ provider: string; enabled: boolean; count: number }>;
   knowledge: Array<{ ingest_status: string; count: number }>;
   agentRuns: Array<{ status: string; count: number }>;
@@ -490,7 +483,7 @@ export const apiClient = {
       const path = includeDisabledModelBindings ? "/api/providers?includeDisabledModelBindings=true" : "/api/providers";
       return apiFetch<ProvidersResponse>(path, requestInit);
     },
-    create: (body: { provider: ProviderId; scope?: ProviderScope; displayName?: string; apiKey: string; baseUrl?: string; apiVersion?: string; region?: string; isDefault?: boolean }) =>
+    create: (body: { provider: ProviderId; displayName?: string; apiKey: string; baseUrl?: string; apiVersion?: string; region?: string; isDefault?: boolean }) =>
       apiFetch<{ providerAccountId: string }>("/api/providers", jsonInit("POST", body)),
     updateAccount: (accountId: string, body: { displayName?: string; baseUrl?: string | null; apiVersion?: string | null; region?: string | null; status?: "enabled" | "disabled" | string; isDefault?: boolean }) =>
       apiFetch<{ providerAccountId: string }>(`/api/providers/accounts/${encodePath(accountId)}`, jsonInit("PATCH", body)),
@@ -572,10 +565,8 @@ export const apiClient = {
   admin: {
     users: {
       list: (init?: RequestInit) => apiFetch<{ users: AdminUser[] }>("/api/admin/users", init),
-      create: (body: { email: string; displayName?: string; role?: "admin" | "user"; byokEnabled?: boolean; password?: string; forceReset?: boolean }) =>
+      create: (body: { email: string; displayName?: string; role?: "admin" | "user"; password?: string; forceReset?: boolean }) =>
         apiFetch<{ userId?: string; inviteId?: string; inviteUrl?: string; emailDelivery?: EmailDelivery }>("/api/admin/users", jsonInit("POST", body)),
-      updateByok: (userId: string, byokEnabled: boolean) =>
-        apiFetch<{ userId: string; byokEnabled: boolean }>(`/api/admin/users/${encodePath(userId)}/byok`, jsonInit("PATCH", { byokEnabled })),
       createPasswordReset: (userId: string) =>
         apiFetch<{ resetId: string; resetUrl: string; emailDelivery?: EmailDelivery; email: string }>(`/api/admin/users/${encodePath(userId)}/password-reset`, { method: "POST" })
     },

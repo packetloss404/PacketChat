@@ -9,10 +9,10 @@ export async function GET(request: Request) {
   const sql = getSql();
   const [providerAccounts, modelBindings, knowledge, agentRuns, jobFailures, recentProviderAudits] = await Promise.all([
     sql`
-      select provider, scope, status, count(*)::integer as count
+      select provider, status, count(*)::integer as count
       from provider_accounts
-      group by provider, scope, status
-      order by provider asc, scope asc, status asc
+      group by provider, status
+      order by provider asc, status asc
     `,
     sql`
       select pa.provider, mab.enabled, count(*)::integer as count

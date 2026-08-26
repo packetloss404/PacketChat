@@ -69,7 +69,7 @@ These commands do not remove containers, volumes, buckets, or database objects.
 12. Verify a knowledge document can be retrieved.
 13. Run `npm run smoke` with `PACKETCHAT_SMOKE_EMAIL` and `PACKETCHAT_SMOKE_PASSWORD` set for a restored user.
 
-If the restore was used during a real incident, rotate the break-glass credential and provider credentials after recovery.
+If the restore was used during a real incident, rotate admin and provider credentials after recovery.
 
 ## Non-Destructive Restore Verification
 

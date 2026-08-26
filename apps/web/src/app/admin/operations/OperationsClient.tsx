@@ -102,8 +102,8 @@ export function OperationsClient() {
           <h2>Account status</h2>
           <div className="admin-badge-row">
             {data.providerAccounts.map((row) => (
-              <StatusBadge key={`${row.provider}-${row.scope}-${row.status}`} tone={row.status === "enabled" ? "success" : "warning"}>
-                {`${row.provider} / ${row.scope} / ${row.status}: ${formatCount(row.count)}`}
+              <StatusBadge key={`${row.provider}-${row.status}`} tone={row.status === "enabled" ? "success" : "warning"}>
+                {`${row.provider} / ${row.status}: ${formatCount(row.count)}`}
               </StatusBadge>
             ))}
             {!loading && data.providerAccounts.length === 0 ? <span className="muted">No provider accounts yet.</span> : null}

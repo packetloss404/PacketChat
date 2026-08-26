@@ -1,36 +1,30 @@
-import { authenticateRequest } from "@packetchat/auth";
 import { getSql, recordAuditEvent } from "@packetchat/db";
 import { validateProviderBaseUrl } from "@packetchat/providers";
+import { requireAdminOrJson } from "../../../../../lib/admin-auth";
 import { jsonError, jsonOk } from "../../../../../lib/http";
 
 type AccountRow = {
   id: string;
   provider: "openai-compatible" | "azure-openai" | "anthropic" | "perplexity" | "minimax";
-  scope: "global" | "user";
-  owner_user_id: string | null;
 };
 
-async function getManagedAccount(accountId: string, user: { id: string; role: "admin" | "user"; byokEnabled: boolean }) {
+async function getManagedAccount(accountId: string) {
   const sql = getSql();
   const rows = await sql<AccountRow[]>`
-    select id, provider, scope, owner_user_id
+    select id, provider
     from provider_accounts
     where id = ${accountId}
-      and (
-        (${user.role === "admin"} and scope = 'global')
-        or (scope = 'user' and owner_user_id = ${user.id} and ${user.byokEnabled})
-      )
     limit 1
   `;
   return rows[0] ?? null;
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ accountId: string }> }) {
-  const user = await authenticateRequest(request.headers);
-  if (!user) return jsonError("Unauthenticated", 401);
+  const admin = await requireAdminOrJson(request.headers);
+  if (admin instanceof Response) return admin;
 
   const { accountId } = await context.params;
-  const account = await getManagedAccount(accountId, user);
+  const account = await getManagedAccount(accountId);
   if (!account) return jsonError("Provider account not found", 404);
 
   const body = await request.json().catch(() => null);
@@ -50,11 +44,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ accou
         update provider_accounts
         set is_default = false, updated_at = now()
         where id <> ${accountId}
-          and scope = ${account.scope}
-          and (
-            (${account.scope === "global"} and owner_user_id is null)
-            or (${account.scope === "user"} and owner_user_id = ${account.owner_user_id})
-          )
+          and is_default = true
       `;
     }
 
@@ -74,20 +64,20 @@ export async function PATCH(request: Request, context: { params: Promise<{ accou
   });
 
   if (!rows[0]) return jsonError("Provider account not found", 404);
-  await recordAuditEvent({ actorUserId: user.id, action: "provider.updated", targetType: "provider_account", targetId: accountId, metadata: { provider: account.provider, scope: account.scope } });
+  await recordAuditEvent({ actorUserId: admin.id, action: "provider.updated", targetType: "provider_account", targetId: accountId, metadata: { provider: account.provider } });
   return jsonOk({ providerAccountId: accountId });
 }
 
 export async function DELETE(request: Request, context: { params: Promise<{ accountId: string }> }) {
-  const user = await authenticateRequest(request.headers);
-  if (!user) return jsonError("Unauthenticated", 401);
+  const admin = await requireAdminOrJson(request.headers);
+  if (admin instanceof Response) return admin;
 
   const { accountId } = await context.params;
-  const account = await getManagedAccount(accountId, user);
+  const account = await getManagedAccount(accountId);
   if (!account) return jsonError("Provider account not found", 404);
 
   const sql = getSql();
   await sql`delete from provider_accounts where id = ${accountId}`;
-  await recordAuditEvent({ actorUserId: user.id, action: "provider.deleted", targetType: "provider_account", targetId: accountId, metadata: { provider: account.provider, scope: account.scope } });
+  await recordAuditEvent({ actorUserId: admin.id, action: "provider.deleted", targetType: "provider_account", targetId: accountId, metadata: { provider: account.provider } });
   return jsonOk({ providerAccountId: accountId });
 }

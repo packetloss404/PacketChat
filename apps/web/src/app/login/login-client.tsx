@@ -24,8 +24,6 @@ export function LoginClient() {
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [breakGlass, setBreakGlass] = useState(false);
-  const [breakGlassAck, setBreakGlassAck] = useState(false);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<Status | null>(null);
 
@@ -37,21 +35,13 @@ export function LoginClient() {
     if (auth.status === "authenticated") router.replace(destination);
   }, [auth.status, destination, mode, router]);
 
-  useEffect(() => {
-    if (!breakGlass) setBreakGlassAck(false);
-  }, [breakGlass]);
-
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (breakGlass && !breakGlassAck) {
-      setStatus({ tone: "error", message: "Acknowledge the audit notice before using break-glass." });
-      return;
-    }
     setLoading(true);
     setStatus(null);
 
     try {
-      const result = breakGlass ? await auth.breakGlassLogin(email, password) : await auth.login(email, password);
+      const result = await auth.login(email, password);
       const name = result.user?.displayName || result.user?.email || "your account";
       setStatus({ tone: "success", message: result.warning ? `${result.warning} Signed in as ${name}.` : `Signed in as ${name}.` });
       try {
@@ -149,7 +139,7 @@ export function LoginClient() {
     });
   }
 
-  const submitDisabled = loading || (breakGlass && !breakGlassAck);
+  const submitDisabled = loading;
 
   return (
     <section className="card auth-card">
@@ -187,26 +177,8 @@ export function LoginClient() {
           <input id="email" className="input" type="email" name="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required />
           <label htmlFor="password">Password</label>
           <input id="password" className="input" type="password" name="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
-          {breakGlass ? (
-            <label
-              htmlFor="breakGlassAck"
-              style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}
-            >
-              <input
-                id="breakGlassAck"
-                type="checkbox"
-                checked={breakGlassAck}
-                onChange={(event) => setBreakGlassAck(event.target.checked)}
-              />
-              I understand this is audited
-            </label>
-          ) : null}
           <button className="button" type="submit" disabled={submitDisabled}>
-            {loading ? "Signing in..." : breakGlass ? "Break-glass sign in" : "Sign in"}
-          </button>
-          {breakGlass ? <p className="auth-status error">Break-glass access is for emergencies only. Sessions are audited, time-limited, and should not be used for routine administration.</p> : null}
-          <button className="link-button" type="button" onClick={() => setBreakGlass((value) => !value)}>
-            {breakGlass ? "Use standard login" : "Use break-glass login"}
+            {loading ? "Signing in..." : "Sign in"}
           </button>
           <button className="link-button" type="button" onClick={handleForgotPassword}>
             Forgot password?

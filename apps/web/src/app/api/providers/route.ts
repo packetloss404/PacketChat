@@ -2,6 +2,7 @@ import { authenticateRequest, encryptJsonSecret } from "@packetchat/auth";
 import { providerIdSchema } from "@packetchat/contracts";
 import { getSql, recordAuditEvent } from "@packetchat/db";
 import { validateProviderBaseUrl } from "@packetchat/providers";
+import { requireAdminOrJson } from "../../../lib/admin-auth";
 import { jsonError, jsonOk } from "../../../lib/http";
 import { getUsagePricingStatus } from "../../../lib/usage";
 
@@ -12,10 +13,9 @@ export async function GET(request: Request) {
   const includeDisabledModelBindings = new URL(request.url).searchParams.get("includeDisabledModelBindings") === "true";
   const sql = getSql();
   const accounts = await sql`
-    select id, provider, scope, owner_user_id, display_name, base_url, api_version, region, status, is_default, created_at, updated_at
+    select id, provider, display_name, base_url, api_version, region, status, is_default, created_at, updated_at
     from provider_accounts
-    where scope = 'global' or (owner_user_id = ${user.id} and ${user.byokEnabled})
-    order by scope asc, display_name asc
+    order by display_name asc
   `;
   const accountIds = accounts.map((account) => account.id);
   const providerByAccountId = new Map(accounts.map((account) => [account.id, account.provider]));
@@ -43,45 +43,31 @@ export async function GET(request: Request) {
       usagePricing: binding.model
         ? getUsagePricingStatus(providerByAccountId.get(binding.provider_account_id), binding.model)
         : { known: false, source: "unknown" }
-    })),
-    byokEnabled: user.byokEnabled
+    }))
   });
 }
 
 export async function POST(request: Request) {
-  const user = await authenticateRequest(request.headers);
-  if (!user) return jsonError("Unauthenticated", 401);
+  const admin = await requireAdminOrJson(request.headers);
+  if (admin instanceof Response) return admin;
 
   const body = await request.json().catch(() => null);
   const provider = providerIdSchema.safeParse(body?.provider);
   if (!provider.success) return jsonError("Unsupported provider", 400);
   if (!body?.apiKey) return jsonError("apiKey is required", 400);
 
-  const scope = body.scope === "user" ? "user" : "global";
-  if (scope === "global" && user.role !== "admin") return jsonError("Admin authorization required", 403);
-  if (scope === "user" && !user.byokEnabled) return jsonError("BYOK is disabled for this user", 403);
   const baseUrlValidation = validateProviderBaseUrl(provider.data, body.baseUrl ? String(body.baseUrl) : null);
   if (!baseUrlValidation.ok) return jsonError(baseUrlValidation.message, 400, { code: baseUrlValidation.code });
 
   const sql = getSql();
   const accountRows = await sql.begin(async (tx) => {
     if (Boolean(body.isDefault)) {
-      await tx`
-        update provider_accounts
-        set is_default = false, updated_at = now()
-        where scope = ${scope}
-          and (
-            (${scope === "global"} and owner_user_id is null)
-            or (${scope === "user"} and owner_user_id = ${user.id})
-          )
-      `;
+      await tx`update provider_accounts set is_default = false, updated_at = now() where is_default = true`;
     }
 
     const accounts = await tx<{ id: string }[]>`
       insert into provider_accounts (
         provider,
-        scope,
-        owner_user_id,
         display_name,
         base_url,
         api_version,
@@ -91,15 +77,13 @@ export async function POST(request: Request) {
         created_by
       ) values (
         ${provider.data},
-        ${scope},
-        ${scope === "user" ? user.id : null},
         ${String(body.displayName ?? provider.data)},
         ${baseUrlValidation.value},
         ${body.apiVersion ? String(body.apiVersion) : null},
         ${body.region ? String(body.region) : null},
         'enabled',
         ${Boolean(body.isDefault)},
-        ${user.id}
+        ${admin.id}
       )
       returning id
     `;
@@ -111,11 +95,11 @@ export async function POST(request: Request) {
   });
 
   await recordAuditEvent({
-    actorUserId: user.id,
+    actorUserId: admin.id,
     action: "provider.created",
     targetType: "provider_account",
     targetId: accountRows[0]!.id,
-    metadata: { provider: provider.data, scope }
+    metadata: { provider: provider.data }
   });
 
   return jsonOk({ providerAccountId: accountRows[0]!.id });

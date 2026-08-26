@@ -1,13 +1,12 @@
 import { decryptJsonSecret } from "@packetchat/auth";
 import { getSql } from "@packetchat/db";
 
-export async function getProviderAccountForRuntime(accountId: string, userId: string, requireOwnership = false) {
+export async function getProviderAccountForRuntime(accountId: string, options: { includeDisabled?: boolean } = {}) {
   const sql = getSql();
+  const includeDisabled = options.includeDisabled === true;
   const rows = await sql<{
     id: string;
     provider: "openai-compatible" | "azure-openai" | "anthropic" | "perplexity" | "minimax";
-    scope: "global" | "user";
-    owner_user_id: string | null;
     display_name: string;
     base_url: string | null;
     api_version: string | null;
@@ -17,19 +16,13 @@ export async function getProviderAccountForRuntime(accountId: string, userId: st
     select pa.*, pc.encrypted_payload
     from provider_accounts pa
     join provider_credentials pc on pc.provider_account_id = pa.id
-    left join users u on u.id = pa.owner_user_id
     where pa.id = ${accountId}
-      and pa.status = 'enabled'
-      and (
-        pa.scope = 'global'
-        or (pa.owner_user_id = ${userId} and u.byok_enabled = true)
-      )
+      and (${includeDisabled} or pa.status = 'enabled')
     limit 1
   `;
 
   const account = rows[0];
   if (!account) return null;
-  if (requireOwnership && account.owner_user_id !== userId) return null;
   const secret = decryptJsonSecret<{ apiKey: string }>(account.encrypted_payload);
   return {
     provider: account.provider,
@@ -43,10 +36,8 @@ export async function getProviderAccountForRuntime(accountId: string, userId: st
 
 export async function getEnabledModelBindingForRuntime(input: {
   accountId: string;
-  userId: string;
   provider: "openai-compatible" | "azure-openai" | "anthropic" | "perplexity" | "minimax";
   model: string;
-  requireOwnership?: boolean;
 }) {
   const sql = getSql();
   const rows = await sql<{ id: string; model: string; display_name: string }[]>`
@@ -57,16 +48,10 @@ export async function getEnabledModelBindingForRuntime(input: {
     from model_account_bindings mab
     join provider_accounts pa on pa.id = mab.provider_account_id
     left join model_catalog mc on mc.id = mab.model_catalog_id
-    left join users u on u.id = pa.owner_user_id
     where pa.id = ${input.accountId}
       and pa.provider = ${input.provider}
       and pa.status = 'enabled'
       and mab.enabled = true
-      and (
-        pa.scope = 'global'
-        or (pa.owner_user_id = ${input.userId} and u.byok_enabled = true)
-      )
-      and (${!input.requireOwnership} or pa.owner_user_id = ${input.userId})
       and coalesce(mc.vendor_model_id, mab.provider_model_ref->>'id', mab.provider_model_ref->>'model', mab.provider_model_ref->>'deployment') = ${input.model}
     limit 1
   `;

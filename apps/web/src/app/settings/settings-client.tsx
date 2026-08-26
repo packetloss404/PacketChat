@@ -355,7 +355,7 @@ function ApiKeysSection() {
     <section className="settings__section apikeys">
       <h1>API Keys</h1>
       <p className="muted" style={{ margin: 0 }}>
-        Provider credentials are encrypted server-side as provider accounts. Admins can create shared accounts, and BYOK-enabled users can create personal accounts.
+        Provider credentials are encrypted server-side as provider accounts. Provider keys are app-wide and managed by administrators.
       </p>
 
       <div className="settings__button-row">

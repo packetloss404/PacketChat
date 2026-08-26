@@ -5,13 +5,10 @@ import { authFetch } from "../../lib/auth-client";
 import { ConfirmButton, EmptyState, ErrorState, LoadingBlock, StatusBadge, useToast } from "../ui";
 
 type ProviderId = "openai-compatible" | "azure-openai" | "anthropic" | "perplexity" | "minimax";
-type ProviderScope = "global" | "user";
 
 type ProviderAccount = {
   id: string;
   provider: ProviderId;
-  scope: ProviderScope;
-  owner_user_id: string | null;
   display_name: string;
   base_url: string | null;
   api_version: string | null;
@@ -36,7 +33,6 @@ type ProviderModelBinding = {
 type ProvidersResponse = {
   accounts: ProviderAccount[];
   modelBindings: ProviderModelBinding[];
-  byokEnabled: boolean;
 };
 
 const providers: { id: ProviderId; label: string; hint: string }[] = [
@@ -135,7 +131,6 @@ function capabilitySummary(binding: ProviderModelBinding) {
 
 const initialForm = {
   provider: "openai-compatible" as ProviderId,
-  scope: "user" as ProviderScope,
   displayName: "",
   apiKey: "",
   baseUrl: "",
@@ -148,7 +143,6 @@ export function ProvidersManager() {
   const toast = useToast();
   const [accounts, setAccounts] = useState<ProviderAccount[]>([]);
   const [modelBindings, setModelBindings] = useState<ProviderModelBinding[]>([]);
-  const [byokEnabled, setByokEnabled] = useState<boolean | null>(null);
   const [form, setForm] = useState(initialForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ displayName: "", baseUrl: "", apiVersion: "", region: "", status: "enabled", isDefault: false });
@@ -182,8 +176,6 @@ export function ProvidersManager() {
       const data = (await apiFetch("/api/providers?includeDisabledModelBindings=true")) as ProvidersResponse;
       setAccounts(data.accounts);
       setModelBindings(data.modelBindings ?? []);
-      setByokEnabled(data.byokEnabled);
-      if (!data.byokEnabled) setForm((current) => ({ ...current, scope: "global" }));
     } catch (err) {
       const nextError = err instanceof Error ? err.message : "Unable to load providers";
       setError(nextError);
@@ -207,7 +199,6 @@ export function ProvidersManager() {
         method: "POST",
         body: JSON.stringify({
           provider: form.provider,
-          scope: form.scope,
           displayName: form.displayName.trim() || providers.find((provider) => provider.id === form.provider)?.label,
           apiKey: form.apiKey,
           baseUrl: form.baseUrl.trim() || undefined,
@@ -216,7 +207,7 @@ export function ProvidersManager() {
           isDefault: form.isDefault
         })
       });
-      setForm((current) => ({ ...initialForm, scope: byokEnabled === false ? "global" : current.scope }));
+      setForm(initialForm);
       setMessage("Provider account created.");
       toast({ message: "Provider account created.", variant: "success" });
       await loadProviders();
@@ -357,7 +348,6 @@ export function ProvidersManager() {
   }
 
   const selectedProvider = providers.find((provider) => provider.id === form.provider);
-  const userScopeDisabled = byokEnabled === false;
   const modelsByAccount = modelBindings.reduce<Record<string, ProviderModelBinding[]>>((acc, model) => {
     acc[model.provider_account_id] = [...(acc[model.provider_account_id] ?? []), model];
     return acc;
@@ -379,7 +369,7 @@ export function ProvidersManager() {
           <div className="eyebrow">Providers</div>
           <h1>Provider accounts</h1>
           <p className="muted">
-            Add shared keys for everyone, or personal keys if enabled for your account.
+            Provider keys are app-wide. Every account added here is available to all users.
           </p>
         </div>
         <button className="button" onClick={() => void loadProviders()} type="button" disabled={loading}>
@@ -387,11 +377,6 @@ export function ProvidersManager() {
         </button>
       </div>
 
-      {userScopeDisabled ? (
-        <div className="warning" role="status">
-          Personal keys are disabled for your account, so you can't add a personal provider account. Use a shared account if you're an admin, or ask an admin to enable personal keys.
-        </div>
-      ) : null}
       {accounts.length > 0 && enabledAccounts === 0 ? (
         <div className="warning" role="status">
           All provider accounts are disabled. Chat and agents won't work until at least one account is enabled.
@@ -446,15 +431,8 @@ export function ProvidersManager() {
           </label>
           <p className="muted providers-hint">{selectedProvider?.hint}</p>
 
-          <label>
-            Scope
-            <select aria-label="Provider account scope" value={form.scope} onChange={(event) => setForm({ ...form, scope: event.target.value as ProviderScope })}>
-              <option value="global">Team (shared)</option>
-              <option value="user" disabled={userScopeDisabled}>Personal key</option>
-            </select>
-          </label>
           <p className="muted providers-hint">
-            Shared accounts require admin approval. Disabled accounts aren't used in chat or agents.
+            This key applies to the whole app. Disabled accounts aren't used in chat or agents.
           </p>
 
           <label>
@@ -488,7 +466,7 @@ export function ProvidersManager() {
             Set as default
           </label>
 
-          <button className="button" disabled={saving || (form.scope === "user" && userScopeDisabled)} type="submit">
+          <button className="button" disabled={saving} type="submit">
             {saving ? "Saving..." : "Save provider"}
           </button>
         </form>
@@ -551,7 +529,7 @@ export function ProvidersManager() {
                   <h3>{account.display_name}</h3>
                   <div className="providers-badge-row">
                     <StatusBadge tone="info">{providerLabel(account.provider)}</StatusBadge>
-                    <StatusBadge tone={account.scope === "user" ? "warning" : "success"}>{account.scope === "user" ? "Personal key" : "Shared"}</StatusBadge>
+                    <StatusBadge tone="success">App-wide</StatusBadge>
                     <StatusBadge tone={accountEnabled ? "success" : "neutral"}>{accountEnabled ? "Enabled" : "Disabled"}</StatusBadge>
                   </div>
                   <p className="muted providers-meta">

@@ -76,12 +76,6 @@ export async function login(email: string, password: string) {
   return result;
 }
 
-export async function breakGlassLogin(email: string, password: string) {
-  const result = await postAuth<AuthResponse>("/api/auth/break-glass/login", { email, password });
-  storeAccessToken(result.accessToken);
-  return result;
-}
-
 let refreshInFlight: Promise<string> | null = null;
 
 export async function refreshAccessToken() {

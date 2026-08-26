@@ -34,7 +34,6 @@ function humanizeAction(action: string) {
   const overrides: Record<string, string> = {
     "provider.models.synced": "Models synced",
     "provider.key.rotated": "API key replaced",
-    "user.byok.updated": "Personal key updated",
     "bootstrap.completed": "Setup completed"
   };
   const human = overrides[action] ?? action.replace(/[._]/g, " ");

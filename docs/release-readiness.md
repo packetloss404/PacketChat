@@ -14,7 +14,7 @@ Use this checklist after `npm run smoke` passes and before a pilot or production
 
 ## Model Governance
 
-- `/providers` shows global/admin and user BYOK provider accounts, enabled/disabled route state, default route state, synced model binding counts, pricing coverage, and capability metadata.
+- `/admin/providers` shows the app-wide provider accounts, enabled/disabled route state, default route state, synced model binding counts, pricing coverage, and capability metadata, and is admin-only.
 - Disabled provider accounts are excluded from runtime routing, connection tests, and model sync until re-enabled.
 - `/admin/operations` summarizes provider account status, model binding status, and recent provider audit events.
 

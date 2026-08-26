@@ -1,12 +1,12 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
-import { ProvidersManager } from "../../components/providers/providers-manager";
+import Link from "next/link";
 import { apiClient, type ProviderAccount, type ProviderModelBinding } from "../../lib/api-client";
 import { LoadingBlock, StatusBadge, useToast } from "../../components/ui";
 import { Icon } from "../../components/icons";
+import { useAuth } from "../../components/auth-provider";
 
-type ModelTab = "models" | "settings";
 type DetailTab = "overview" | "parameters";
 
 type ModelRow = ProviderModelBinding & {
@@ -183,7 +183,6 @@ function ProviderBadge({ id, size = 22 }: { id: string; size?: number }) {
 }
 
 export function ModelsClient() {
-  const [tab, setTab] = useState<ModelTab>("models");
   const [accounts, setAccounts] = useState<ProviderAccount[]>([]);
   const [bindings, setBindings] = useState<ProviderModelBinding[]>([]);
   const [loading, setLoading] = useState(true);
@@ -388,21 +387,9 @@ export function ModelsClient() {
     writeCustomModels(next);
   }
 
-  if (tab === "settings") {
-    return (
-      <section className="models-lib">
-        <ModelsHeader tab={tab} onTabChange={setTab} onAdd={() => setAddOpen(true)} />
-        <div className="sheet__inner" style={{ paddingTop: 12 }}>
-          <ProvidersManager />
-        </div>
-        {addOpen ? <AddCustomModelDialog onClose={() => setAddOpen(false)} onSubmit={handleAddCustomModel} /> : null}
-      </section>
-    );
-  }
-
   return (
     <section className="models-lib">
-      <ModelsHeader tab={tab} onTabChange={setTab} onAdd={() => setAddOpen(true)} />
+      <ModelsHeader onAdd={() => setAddOpen(true)} />
 
       {error ? <p className="error-state" role="alert" style={{ marginTop: 12 }}>{error}</p> : null}
       {loading ? <LoadingBlock title="Loading models" /> : null}
@@ -636,39 +623,26 @@ const popoverItemStyle: CSSProperties = {
   cursor: "pointer"
 };
 
-function ModelsHeader({ tab, onTabChange, onAdd }: { tab: ModelTab; onTabChange: (tab: ModelTab) => void; onAdd: () => void }) {
+function ModelsHeader({ onAdd }: { onAdd: () => void }) {
+  const { user } = useAuth();
+
   return (
-    <>
-      <header className="models-lib__head">
-        <div>
-          <h1>Models</h1>
-          <p className="sub">Browse your models and add custom ones</p>
-        </div>
+    <header className="models-lib__head">
+      <div>
+        <h1>Models</h1>
+        <p className="sub">Browse the models available across the app</p>
+      </div>
+      <div className="models-lib__head-actions">
+        {user?.role === "admin" ? (
+          <Link className="button" href="/admin/providers">
+            Providers &amp; keys
+          </Link>
+        ) : null}
         <button className="button button--primary" type="button" onClick={onAdd}>
           Add custom model
         </button>
-      </header>
-      <div className="models-lib__tabs" role="tablist" aria-label="Model panel tabs">
-        <button
-          role="tab"
-          aria-selected={tab === "models"}
-          className={`models-lib__tab ${tab === "models" ? "on" : ""}`}
-          onClick={() => onTabChange("models")}
-          type="button"
-        >
-          Models
-        </button>
-        <button
-          role="tab"
-          aria-selected={tab === "settings"}
-          className={`models-lib__tab ${tab === "settings" ? "on" : ""}`}
-          onClick={() => onTabChange("settings")}
-          type="button"
-        >
-          Accounts
-        </button>
       </div>
-    </>
+    </header>
   );
 }
 
@@ -750,7 +724,7 @@ function ModelDetail({ row, tab, onTabChange }: { row: ModelRow; tab: DetailTab;
           <dd>{meta.name}</dd>
 
           <dt>Provider account</dt>
-          <dd>{row.account.display_name} ({row.account.scope})</dd>
+          <dd>{row.account.display_name}</dd>
 
           <dt>Status</dt>
           <dd className="model-detail__status">

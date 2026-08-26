@@ -5,7 +5,6 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   type AuthResponse,
   type AuthUser,
-  breakGlassLogin as clientBreakGlassLogin,
   clearAccessToken,
   getAccessToken,
   getMe,
@@ -22,7 +21,6 @@ type AuthContextValue = {
   user: AuthUser | null;
   accessToken: string | null;
   login: (email: string, password: string) => Promise<AuthResponse>;
-  breakGlassLogin: (email: string, password: string) => Promise<AuthResponse>;
   logout: () => Promise<void>;
   refresh: () => Promise<AuthUser | null>;
 };
@@ -120,14 +118,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     accessToken,
     async login(email, password) {
       const result = await clientLogin(email, password);
-      setAccessToken(result.accessToken);
-      setUser(result.user ?? null);
-      setStatus(result.user ? "authenticated" : "loading");
-      if (!result.user) await loadCurrentUser();
-      return result;
-    },
-    async breakGlassLogin(email, password) {
-      const result = await clientBreakGlassLogin(email, password);
       setAccessToken(result.accessToken);
       setUser(result.user ?? null);
       setStatus(result.user ? "authenticated" : "loading");

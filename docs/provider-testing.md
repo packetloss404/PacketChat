@@ -29,7 +29,7 @@ Set only the providers you want to test.
 - Whether provider-reported stream usage was received.
 - Graceful skip behavior when individual keys are not set, plus a non-zero exit when no provider was checked.
 
-This script is credential-only coverage. It does not create PacketChat provider accounts, write credentials to the database, or prove that a deployment's admin/BYOK policy is configured correctly. Use `docs/smoke-test.md` for the app-level provider checklist.
+This script is credential-only coverage. It does not create PacketChat provider accounts, write credentials to the database, or prove that a deployment's admin provider policy is configured correctly. Use `docs/smoke-test.md` for the app-level provider checklist.
 
 ## Cost And Usage Notes
 
@@ -40,7 +40,7 @@ This script is credential-only coverage. It does not create PacketChat provider 
 
 ## Model Governance Notes
 
-- `/providers` shows global and user BYOK accounts, enabled/disabled route state, default route state, synced model bindings, pricing coverage, and available capability metadata.
+- `/admin/providers` shows the app-wide provider accounts, enabled/disabled route state, default route state, synced model bindings, pricing coverage, and available capability metadata.
 - Disabled provider accounts are excluded from runtime routing, model sync, and connection tests until re-enabled.
 - `GET /api/providers` returns enabled model bindings by default; `?includeDisabledModelBindings=true` includes disabled bindings for governance views.
 - `/admin/operations` summarizes provider account status, model binding status, and recent provider audit events for release checks.

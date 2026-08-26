@@ -9,7 +9,6 @@ export async function POST(request: Request) {
 
   const user = await authenticateRequest(request.headers);
   if (!user) return jsonError("Unauthenticated", 401);
-  if (user.isBreakGlass) return jsonError("Break-glass sessions cannot change passwords", 403);
 
   const body = await request.json().catch(() => null);
   const currentPassword = typeof body?.currentPassword === "string" ? body.currentPassword : "";

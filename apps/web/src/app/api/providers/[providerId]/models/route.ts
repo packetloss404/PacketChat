@@ -1,8 +1,7 @@
-import { authenticateRequest } from "@packetchat/auth";
 import { getSql, recordAuditEvent } from "@packetchat/db";
 import { getProviderAdapter, isUnsupportedModelDiscovery, normalizeFetchError, type ProviderModelSnapshot } from "@packetchat/providers";
+import { requireAdminOrJson } from "../../../../../lib/admin-auth";
 import { jsonError, jsonOk } from "../../../../../lib/http";
-import { canSyncProviderModels } from "../../../../../lib/provider-model-sync";
 import { getProviderAccountForRuntime } from "../../../../../lib/providers";
 import { providerRateLimit } from "../../../../../lib/rate-limit";
 
@@ -17,9 +16,9 @@ function providerListStatus(code: string) {
 }
 
 export async function POST(request: Request, context: { params: Promise<{ providerId: string }> }) {
-  const user = await authenticateRequest(request.headers);
-  if (!user) return jsonError("Unauthenticated", 401);
-  const rateLimited = await providerRateLimit(request, user.id);
+  const admin = await requireAdminOrJson(request.headers);
+  if (admin instanceof Response) return admin;
+  const rateLimited = await providerRateLimit(request, admin.id);
   if (rateLimited) return rateLimited;
 
   const { providerId } = await context.params;
@@ -27,27 +26,9 @@ export async function POST(request: Request, context: { params: Promise<{ provid
   if (!body?.providerAccountId) return jsonError("providerAccountId is required", 400);
 
   const sql = getSql();
-  const visibleAccounts = await sql<{ id: string; provider: string; scope: "global" | "user"; owner_user_id: string | null }[]>`
-    select id, provider, scope, owner_user_id
-    from provider_accounts
-    where id = ${String(body.providerAccountId)}
-      and (
-        scope = 'global'
-        or (owner_user_id = ${user.id} and ${user.byokEnabled})
-      )
-    limit 1
-  `;
-  const visibleAccount = visibleAccounts[0];
-  if (!visibleAccount) return jsonError("Provider account not found", 404);
-  if (visibleAccount.provider !== providerId) return jsonError("Provider mismatch", 400);
-  if (!canSyncProviderModels(user, visibleAccount)) {
-    return visibleAccount.scope === "global"
-      ? jsonError("Admin authorization required", 403)
-      : jsonError("Provider account not found", 404);
-  }
-
-  const runtimeAccount = await getProviderAccountForRuntime(String(body.providerAccountId), user.id, visibleAccount.scope === "user");
+  const runtimeAccount = await getProviderAccountForRuntime(String(body.providerAccountId), { includeDisabled: true });
   if (!runtimeAccount) return jsonError("Provider account not found", 404);
+  if (runtimeAccount.provider !== providerId) return jsonError("Provider mismatch", 400);
 
   const adapter = getProviderAdapter(runtimeAccount.provider);
   let models: ProviderModelSnapshot[];
@@ -56,7 +37,7 @@ export async function POST(request: Request, context: { params: Promise<{ provid
   } catch (error) {
     const normalized = normalizeFetchError(error, runtimeAccount.provider);
     await recordAuditEvent({
-      actorUserId: user.id,
+      actorUserId: admin.id,
       action: "provider.models.synced",
       outcome: "failure",
       targetType: "provider_account",
@@ -148,6 +129,6 @@ export async function POST(request: Request, context: { params: Promise<{ provid
     }
   });
 
-  await recordAuditEvent({ actorUserId: user.id, action: "provider.models.synced", targetType: "provider_account", targetId: String(body.providerAccountId), metadata: { provider: runtimeAccount.provider, count: models.length } });
+  await recordAuditEvent({ actorUserId: admin.id, action: "provider.models.synced", targetType: "provider_account", targetId: String(body.providerAccountId), metadata: { provider: runtimeAccount.provider, count: models.length } });
   return jsonOk({ models });
 }

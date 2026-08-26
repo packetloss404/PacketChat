@@ -8,8 +8,6 @@ export const jobNames = {
 
 export type ProviderSyncJob = {
   providerAccountId: string;
-  ownerUserId: string;
-  scope: "global" | "user";
 };
 
 export type AgentRunJob = {

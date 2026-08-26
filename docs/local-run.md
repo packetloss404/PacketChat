@@ -85,14 +85,6 @@ curl -i -X POST http://localhost:3000/api/admin/bootstrap \
   -d '{"bootstrapToken":"replace-with-a-long-random-bootstrap-token","email":"admin@example.com","displayName":"Admin","password":"replace-with-admin-password"}'
 ```
 
-Optional break-glass admin creation can be included during bootstrap:
-
-```shell
-curl -i -X POST http://localhost:3000/api/admin/bootstrap \
-  -H "Content-Type: application/json" \
-  -d '{"bootstrapToken":"replace-with-a-long-random-bootstrap-token","email":"admin@example.com","displayName":"Admin","password":"replace-with-admin-password","breakGlassEmail":"breakglass@example.com","breakGlassPassword":"replace-with-break-glass-password"}'
-```
-
 Bootstrap can only complete while the users table is empty. A second bootstrap attempt returns `409`.
 
 ## Seed Demo Data
@@ -124,7 +116,7 @@ curl -i http://localhost:3000/api/auth/me \
 
 ## Add Provider Keys
 
-Admins can add global provider accounts. Users can add user-scoped provider accounts only when BYOK is enabled for that user.
+Only admins can add provider accounts, and every account is app-wide. Manage them at `/admin/providers`.
 
 Supported provider IDs are:
 
@@ -136,32 +128,32 @@ Supported provider IDs are:
 
 Google/Gemini is not accepted by the V1 backend provider contract. If Google appears in the Models UI, treat it as custom-model/forward-looking metadata, not as a runtime provider account type.
 
-Add a global OpenAI-compatible provider key:
+Add an app-wide OpenAI-compatible provider key (admin token required):
 
 ```shell
 curl -i -X POST http://localhost:3000/api/providers \
   -H "Authorization: Bearer ACCESS_TOKEN_HERE" \
   -H "Content-Type: application/json" \
-  -d '{"provider":"openai-compatible","scope":"global","displayName":"OpenAI Compatible","apiKey":"PROVIDER_API_KEY_HERE","baseUrl":"https://api.openai.com","isDefault":true}'
+  -d '{"provider":"openai-compatible","displayName":"OpenAI Compatible","apiKey":"PROVIDER_API_KEY_HERE","baseUrl":"https://api.openai.com","isDefault":true}'
 ```
 
-Add an Azure OpenAI provider key:
+Add an app-wide Azure OpenAI provider key (admin token required):
 
 ```shell
 curl -i -X POST http://localhost:3000/api/providers \
   -H "Authorization: Bearer ACCESS_TOKEN_HERE" \
   -H "Content-Type: application/json" \
-  -d '{"provider":"azure-openai","scope":"global","displayName":"Azure OpenAI","apiKey":"AZURE_OPENAI_API_KEY_HERE","baseUrl":"https://RESOURCE_NAME.openai.azure.com","apiVersion":"2024-10-21","region":"eastus","isDefault":false}'
+  -d '{"provider":"azure-openai","displayName":"Azure OpenAI","apiKey":"AZURE_OPENAI_API_KEY_HERE","baseUrl":"https://RESOURCE_NAME.openai.azure.com","apiVersion":"2024-10-21","region":"eastus","isDefault":false}'
 ```
 
-List visible provider accounts:
+List provider accounts:
 
 ```shell
 curl -i http://localhost:3000/api/providers \
   -H "Authorization: Bearer ACCESS_TOKEN_HERE"
 ```
 
-Test a provider account:
+Test a provider account (admin token required):
 
 ```shell
 curl -i -X POST http://localhost:3000/api/providers/openai-compatible/test \
@@ -170,29 +162,19 @@ curl -i -X POST http://localhost:3000/api/providers/openai-compatible/test \
   -d '{"providerAccountId":"PROVIDER_ACCOUNT_ID_HERE"}'
 ```
 
-## Toggle BYOK
+## Create A User
 
-An admin can enable or disable BYOK per non-break-glass user.
-
-Create a test user with BYOK enabled:
+An admin can create a user directly with a password:
 
 ```shell
 curl -i -X POST http://localhost:3000/api/admin/users \
   -H "Authorization: Bearer ADMIN_ACCESS_TOKEN_HERE" \
   -H "Content-Type: application/json" \
-  -d '{"email":"user@example.com","displayName":"Test User","role":"user","password":"replace-with-user-password","byokEnabled":true}'
+  -d '{"email":"user@example.com","displayName":"Test User","role":"user","password":"replace-with-user-password"}'
 ```
 
-Toggle BYOK for an existing user:
-
-```shell
-curl -i -X PATCH http://localhost:3000/api/admin/users/USER_ID_HERE/byok \
-  -H "Authorization: Bearer ADMIN_ACCESS_TOKEN_HERE" \
-  -H "Content-Type: application/json" \
-  -d '{"byokEnabled":true}'
-```
-
-Disable BYOK by sending `{"byokEnabled":false}` to the same endpoint. When BYOK is disabled, a user-scoped provider create request returns `403`.
+Omit `password` to generate an invite URL instead. Provider keys are app-wide, so a new user
+immediately sees every enabled provider account without any per-user setup.
 
 ## Health Checks
 

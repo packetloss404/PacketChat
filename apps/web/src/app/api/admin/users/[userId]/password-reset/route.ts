@@ -18,7 +18,6 @@ export async function POST(request: Request, context: { params: Promise<{ userId
     select id, email
     from users
     where id = ${userId}
-      and is_break_glass = false
       and status in ('active', 'locked')
     limit 1
   `;

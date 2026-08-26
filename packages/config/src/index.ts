@@ -28,7 +28,6 @@ const configSchema = z.object({
   ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(600),
   REFRESH_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(1_209_600),
   SESSION_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(86_400),
-  BREAK_GLASS_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(1_800),
   PASSWORD_RESET_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(3_600),
   INVITE_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(604_800),
   PASSWORD_MIN_LENGTH: z.coerce.number().int().min(8).default(12),

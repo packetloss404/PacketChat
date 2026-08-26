@@ -1,24 +1,21 @@
-import { authenticateRequest, encryptJsonSecret } from "@packetchat/auth";
+import { encryptJsonSecret } from "@packetchat/auth";
 import { getSql, recordAuditEvent } from "@packetchat/db";
+import { requireAdminOrJson } from "../../../../../../lib/admin-auth";
 import { jsonError, jsonOk } from "../../../../../../lib/http";
 
 export async function PATCH(request: Request, context: { params: Promise<{ accountId: string }> }) {
-  const user = await authenticateRequest(request.headers);
-  if (!user) return jsonError("Unauthenticated", 401);
+  const admin = await requireAdminOrJson(request.headers);
+  if (admin instanceof Response) return admin;
 
   const { accountId } = await context.params;
   const body = await request.json().catch(() => null);
   if (!body?.apiKey) return jsonError("apiKey is required", 400);
 
   const sql = getSql();
-  const accounts = await sql<{ id: string; provider: string; scope: "global" | "user" }[]>`
-    select id, provider, scope
+  const accounts = await sql<{ id: string; provider: string }[]>`
+    select id, provider
     from provider_accounts
     where id = ${accountId}
-      and (
-        (${user.role === "admin"} and scope = 'global')
-        or (scope = 'user' and owner_user_id = ${user.id} and ${user.byokEnabled})
-      )
     limit 1
   `;
   const account = accounts[0];
@@ -32,6 +29,6 @@ export async function PATCH(request: Request, context: { params: Promise<{ accou
     where provider_account_id = ${accountId}
   `;
   await sql`update provider_accounts set updated_at = now() where id = ${accountId}`;
-  await recordAuditEvent({ actorUserId: user.id, action: "provider.key.rotated", targetType: "provider_account", targetId: accountId, metadata: { provider: account.provider, scope: account.scope } });
+  await recordAuditEvent({ actorUserId: admin.id, action: "provider.key.rotated", targetType: "provider_account", targetId: accountId, metadata: { provider: account.provider } });
   return jsonOk({ providerAccountId: accountId });
 }

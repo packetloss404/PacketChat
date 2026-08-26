@@ -1,6 +1,6 @@
 # PacketChat
 
-PacketChat is a privately deployed, multi-user AI workspace. V1 targets local JWT auth, admin-managed provider keys, optional per-user BYOK, private user-owned chats / projects / prompts / knowledge / agents, and a Docker Compose deployment.
+PacketChat is a privately deployed, multi-user AI workspace. V1 targets local JWT auth, app-wide admin-managed provider keys, private user-owned chats / projects / prompts / knowledge / agents, and a Docker Compose deployment.
 
 The frontend is a v3 LibreChat-style shell — three columns (left rail, main, collapsible right rail), monochrome dark theme with a light-mode toggle, route-aware header pill, and an account popover.
 
@@ -10,8 +10,7 @@ The frontend is a v3 LibreChat-style shell — three columns (left rail, main, c
 - Local users with admin-created accounts, invite links, and admin-triggered reset links.
 - Self-service password change for the signed-in user (POST `/api/auth/change-password`), accessible from the account popover.
 - Forced password-reset accounts cannot mint normal sessions until the password is changed.
-- Break-glass admin path for emergency access, gated by an audit-acknowledgement checkbox on the login form.
-- Admin-managed global provider accounts plus optional per-user BYOK, surfaced through `/providers`. Settings → API Keys links there instead of storing local provider keys.
+- App-wide provider accounts, managed by admins at `/admin/providers` and browsed by everyone at `/providers`. Settings → API Keys links there instead of storing local provider keys.
 - Admin release-readiness surfaces for usage governance, audit events, operations health, pending approvals, and persisted agent run history.
 - Runtime provider adapters for OpenAI-compatible, Azure OpenAI, Anthropic, Perplexity, and MiniMax. Google is not a V1 runtime provider yet; any Google labels in the Models UI are forward-looking/custom-model metadata only.
 - Custom provider base URLs are validated before save and again before runtime use. Local OpenAI-compatible endpoints are allowed for tools such as Ollama / LM Studio / vLLM; hosted providers must not target loopback, private, link-local, or reserved network addresses.
@@ -26,7 +25,7 @@ The frontend is a v3 LibreChat-style shell — three columns (left rail, main, c
 5. Open `http://localhost:3000` and complete bootstrap.
 6. Run `npm run smoke` to verify readiness; set `PACKETCHAT_SMOKE_EMAIL` and `PACKETCHAT_SMOKE_PASSWORD` to include authenticated checks. Set `PACKETCHAT_SMOKE_REQUIRE_AUTH=1` for release smoke runs.
 
-See `docs/local-run.md` for local operator commands, API examples, health checks, BYOK toggles, migrations, and stack shutdown.
+See `docs/local-run.md` for local operator commands, API examples, health checks, migrations, and stack shutdown.
 
 ## Git Workflow
 
@@ -43,17 +42,18 @@ See `docs/git-workflow.md` for the branch, commit, and pull-request workflow.
 | Route | What it does | Wired? |
 | --- | --- | --- |
 | `/` | Welcome dashboard with quick actions, system status (`/api/healthz`), Resume-last-chat | ✅ |
-| `/login` | Local password login, invite acceptance, password-reset completion, break-glass with audit ack | ✅ |
+| `/login` | Local password login, invite acceptance, password-reset completion | ✅ |
 | `/chat` | Empty-state greet + pill composer; transcript with turn copy / inline edit / bookmark; SSE streaming for normal chat; `?conversation=<id>` restores transcripts; `?prompt=<id>` opens a prompt in the composer; `?agent=<id>` runs published single-pass augmented agents with chat persistence; per-message timestamps; speech-recognition mic when supported | ✅ |
 | `/agents` | Library grid with deterministic avatars + Create / Browse / Search / Sort / Pin; Create modal (scratch or template); builder with provider/model/parameters, file search, file context, artifact instructions, OpenAPI actions, pre-run agent context, supported tools, ACL sharing, manual runs, and persisted run history with steps/events/usage for published single-pass augmented agents | ✅ |
-| `/providers` | Provider account governance — global/admin and user BYOK accounts, enable/disable/default route controls, connection test, model sync, synced binding counts, pricing/capability status, and disabled-route guardrails. Runtime provider IDs are limited to OpenAI-compatible, Azure OpenAI, Anthropic, Perplexity, and MiniMax. | ✅ |
+| `/providers` | Read-only model library — synced model bindings, pricing coverage, and capability metadata for every app-wide provider account. Runtime provider IDs are limited to OpenAI-compatible, Azure OpenAI, Anthropic, Perplexity, and MiniMax. | ✅ |
+| `/admin/providers` | Admin-only provider and key governance — add/edit/delete app-wide provider accounts, rotate keys, enable/disable, set the default route, connection test, and model sync. | ✅ |
 | `/projects` | User-owned project workspaces with reusable instructions, default-model readiness, linked chat counts, create/edit/delete, and workspace search | ✅ |
 | `/prompts` | Prompt Library — Add prompt modal, Browse-templates modal that creates real prompts, search + tag filter + Title / Recently-updated sort, list/grid views, star favorites (localStorage), Use in chat opens the body in the chat composer | ✅ |
 | `/knowledge` | Knowledge bases — create, edit, archive, delete; drag-drop file upload with type-filtered accept; documents list with rename / delete; reembed with detailed counts; Enter-to-search retrieval plus per-result debug details for score, matched terms, source, freshness, and embedding metadata | ✅ |
 | `/plugins` | Pending integrations — `Perplexity Search`, `Deep Research`, `GPT Image Editor`, `PDF Summarizer`, `Voice Mode` — each with a Join-waitlist email modal (prefilled from `/api/auth/me`), plus a Request-a-plugin form. All persisted to localStorage. | ✅ (UX) |
 | `/plugins/marketplace` | Coming-soon splash with orbital SVG art and three teaser agent cards (`Save interest`) | ✅ (UX, local only) |
 | `/approvals` | User approval queue for pending agent action checkpoints, approve/reject decisions, and recent safe action activity | ✅ |
-| `/admin/users` | Admin-only user management, invite links, password reset links, BYOK toggles | ✅ |
+| `/admin/users` | Admin-only user management, invite links, password reset links | ✅ |
 | `/admin/usage` | Usage governance with daily/user/provider/model totals, recent records, estimated/unknown-cost flags, monthly run-rate projection, and chargeback warnings | ✅ |
 | `/admin/audit` | Admin audit log with actor/action/outcome/target/IP/user-agent/metadata filters and action summaries | ✅ |
 | `/admin/operations` | Operations health for provider accounts, model bindings, knowledge ingestion, seven-day agent runs, job failures, and recent provider audit signals | ✅ |

@@ -10,7 +10,7 @@ export async function GET(request: Request) {
 
   const sql = getSql();
   const users = await sql`
-    select id, email, display_name, role, status, byok_enabled, is_break_glass, created_at, last_login_at
+    select id, email, display_name, role, status, created_at, last_login_at
     from users
     order by created_at desc
   `;
@@ -28,7 +28,6 @@ export async function POST(request: Request) {
   const email = String(body.email).toLowerCase();
   const displayName = String(body.displayName ?? email);
   const role = body.role === "admin" ? "admin" : "user";
-  const byokEnabled = Boolean(body.byokEnabled);
 
   if (body.password) {
     const passwordFailures = validatePasswordPolicy(String(body.password));
@@ -37,8 +36,8 @@ export async function POST(request: Request) {
     const passwordHash = await hashPassword(String(body.password));
     const rows = await sql.begin(async (tx) => {
       const created = await tx<{ id: string }[]>`
-        insert into users (email, display_name, role, status, byok_enabled)
-        values (${email}, ${displayName}, ${role}, 'active', ${byokEnabled})
+        insert into users (email, display_name, role, status)
+        values (${email}, ${displayName}, ${role}, 'active')
         returning id
       `;
       await tx`insert into password_credentials (user_id, password_hash, force_reset) values (${created[0]!.id}, ${passwordHash}, ${Boolean(body.forceReset)})`;

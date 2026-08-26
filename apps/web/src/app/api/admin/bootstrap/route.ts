@@ -12,15 +12,8 @@ export async function POST(request: Request) {
   const passwordFailures = validatePasswordPolicy(String(body.password));
   if (passwordFailures.length > 0) return jsonError("Password does not meet policy", 400, passwordFailures);
 
-  if (body.breakGlassEmail || body.breakGlassPassword) {
-    if (!body.breakGlassEmail || !body.breakGlassPassword) return jsonError("Break-glass email and password are both required", 400);
-    const breakGlassPasswordFailures = validatePasswordPolicy(String(body.breakGlassPassword));
-    if (breakGlassPasswordFailures.length > 0) return jsonError("Break-glass password does not meet policy", 400, breakGlassPasswordFailures);
-  }
-
   const sql = getSql();
   const passwordHash = await hashPassword(String(body.password));
-  const breakGlassPasswordHash = body.breakGlassEmail && body.breakGlassPassword ? await hashPassword(String(body.breakGlassPassword)) : null;
   const rows = await sql.begin(async (tx) => {
     await tx`select pg_advisory_xact_lock(hashtext('packetchat.bootstrap'))`;
 
@@ -33,15 +26,6 @@ export async function POST(request: Request) {
       returning id
     `;
     await tx`insert into password_credentials (user_id, password_hash) values (${created[0]!.id}, ${passwordHash})`;
-
-    if (breakGlassPasswordHash) {
-      const breakGlassRows = await tx<{ id: string }[]>`
-        insert into users (email, display_name, role, status, is_break_glass)
-        values (${String(body.breakGlassEmail).toLowerCase()}, ${String(body.breakGlassDisplayName ?? "Break Glass Admin")}, 'admin', 'active', true)
-        returning id
-      `;
-      await tx`insert into password_credentials (user_id, password_hash) values (${breakGlassRows[0]!.id}, ${breakGlassPasswordHash})`;
-    }
 
     return created;
   });

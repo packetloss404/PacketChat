@@ -18,8 +18,6 @@ export type AuthenticatedUser = {
   email: string;
   displayName: string;
   role: "admin" | "user";
-  byokEnabled: boolean;
-  isBreakGlass: boolean;
   sessionId: string;
 };
 
@@ -42,8 +40,6 @@ type UserRow = {
   email: string;
   display_name: string;
   role: "admin" | "user";
-  byok_enabled: boolean;
-  is_break_glass: boolean;
   password_hash: string;
   force_reset: boolean;
 };
@@ -90,10 +86,10 @@ export async function signAccessToken(input: {
   userId: string;
   sessionId: string;
   role: "admin" | "user";
-  authMethod: "local" | "break_glass";
+  authMethod: "local";
 }) {
   const config = getConfig();
-  const ttl = input.authMethod === "break_glass" ? config.BREAK_GLASS_ACCESS_TOKEN_TTL_SECONDS : config.ACCESS_TOKEN_TTL_SECONDS;
+  const ttl = config.ACCESS_TOKEN_TTL_SECONDS;
 
   return new SignJWT({ role: input.role, auth_method: input.authMethod, sid: input.sessionId })
     .setProtectedHeader({ alg: "HS256" })
@@ -141,8 +137,6 @@ export async function authenticateRequest(headers: Headers): Promise<Authenticat
       u.email,
       u.display_name as "displayName",
       u.role,
-      u.byok_enabled as "byokEnabled",
-      u.is_break_glass as "isBreakGlass",
       s.id as "sessionId"
     from users u
     join sessions s on s.user_id = u.id
@@ -170,7 +164,7 @@ export async function requireAdmin(headers: Headers): Promise<AuthenticatedUser>
 export async function createSession(input: {
   userId: string;
   role: "admin" | "user";
-  authMethod: "local" | "break_glass";
+  authMethod: "local";
   ipAddress?: string | null;
   userAgent?: string | null;
 }) {
@@ -179,7 +173,7 @@ export async function createSession(input: {
   const refreshToken = createOpaqueToken(48);
   const refreshTokenHash = hashOpaqueToken(refreshToken);
   const familyId = randomUUID();
-  const sessionLifetimeSeconds = input.authMethod === "break_glass" ? 8 * 60 * 60 : config.REFRESH_TOKEN_TTL_SECONDS;
+  const sessionLifetimeSeconds = config.REFRESH_TOKEN_TTL_SECONDS;
 
   const sessionRows = await sql<{ id: string }[]>`
     insert into sessions (user_id, auth_method, ip_address, user_agent, expires_at)
@@ -208,7 +202,6 @@ export async function createSession(input: {
 export async function loginWithPassword(input: {
   email: string;
   password: string;
-  breakGlassOnly?: boolean;
   ipAddress?: string | null;
   userAgent?: string | null;
 }) {
@@ -219,21 +212,18 @@ export async function loginWithPassword(input: {
       u.email,
       u.display_name,
       u.role,
-      u.byok_enabled,
-      u.is_break_glass,
       pc.password_hash,
       pc.force_reset
     from users u
     join password_credentials pc on pc.user_id = u.id
     where lower(u.email) = lower(${input.email})
       and u.status = 'active'
-      ${input.breakGlassOnly ? sql`and u.is_break_glass = true` : sql`and u.is_break_glass = false`}
     limit 1
   `;
 
   const row = rows[0];
   if (!row || !(await verifyPassword(row.password_hash, input.password))) {
-    await recordAuditEvent({ action: "auth.login.failure", outcome: "failure", metadata: { email: input.email, breakGlassOnly: input.breakGlassOnly ?? false } });
+    await recordAuditEvent({ action: "auth.login.failure", outcome: "failure", metadata: { email: input.email } });
     return null;
   }
 
@@ -244,13 +234,13 @@ export async function loginWithPassword(input: {
       outcome: "failure",
       targetType: "user",
       targetId: row.id,
-      metadata: { email: input.email, breakGlassOnly: input.breakGlassOnly ?? false, reason: "force_reset" }
+      metadata: { email: input.email, reason: "force_reset" }
     });
     throw new AuthError("Password reset required", 403);
   }
 
   await sql`update users set last_login_at = now(), updated_at = now() where id = ${row.id}`;
-  const authMethod = row.is_break_glass ? "break_glass" : "local";
+  const authMethod = "local" as const;
   const tokens = await createSession({
     userId: row.id,
     role: row.role,
@@ -272,9 +262,7 @@ export async function loginWithPassword(input: {
       id: row.id,
       email: row.email,
       displayName: row.display_name,
-      role: row.role,
-      byokEnabled: row.byok_enabled,
-      isBreakGlass: row.is_break_glass
+      role: row.role
     },
     ...tokens
   };
@@ -292,7 +280,7 @@ export async function rotateRefreshToken(refreshToken: string) {
       family_id: string;
       user_id: string;
       role: "admin" | "user";
-      auth_method: "local" | "break_glass";
+      auth_method: "local";
       used_at: Date | null;
       revoked_at: Date | null;
     }[]>`
@@ -323,7 +311,7 @@ export async function rotateRefreshToken(refreshToken: string) {
 
     const newRefreshToken = createOpaqueToken(48);
     const newHash = hashOpaqueToken(newRefreshToken);
-    const ttl = existing.auth_method === "break_glass" ? 8 * 60 * 60 : config.REFRESH_TOKEN_TTL_SECONDS;
+    const ttl = config.REFRESH_TOKEN_TTL_SECONDS;
     await tx`update refresh_tokens set used_at = now(), revoked_at = now() where id = ${existing.id}`;
     await tx`
       insert into refresh_tokens (session_id, family_id, token_hash, parent_token_id, expires_at)

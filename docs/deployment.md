@@ -38,11 +38,11 @@ For local operator commands and API examples, see `docs/local-run.md`.
 
 ## Provider Keys
 
-Provider accounts can be configured globally by the admin. Per-user BYOK is gated by `users.byok_enabled`, controlled from the admin users screen or `PATCH /api/admin/users/{userId}/byok`.
+Provider accounts are app-wide. Only admins can create, edit, rotate, test, or delete them, from `/admin/providers`. Every enabled account is available to every user; there is no per-user provider scope.
 
 The V1 runtime provider contract accepts `openai-compatible`, `azure-openai`, `anthropic`, `perplexity`, and `minimax`. Google/Gemini is not wired as a runtime provider in V1; do not document or configure `google` as a provider account type.
 
-Provider key and BYOK API examples are in `docs/local-run.md`.
+Provider key API examples are in `docs/local-run.md`.
 
 ## Rate Limiting
 

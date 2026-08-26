@@ -50,7 +50,6 @@ export type AuditAction =
   | "auth.refresh.reused"
   | "user.created"
   | "user.updated"
-  | "user.byok.updated"
   | "provider.created"
   | "provider.updated"
   | "provider.deleted"

@@ -53,12 +53,11 @@ export async function POST(request: Request) {
   const parsed = normalizedChatRequestSchema.safeParse(body);
   if (!parsed.success) return jsonError("Invalid chat request", 400, parsed.error.flatten());
 
-  const account = await getProviderAccountForRuntime(String(body.providerAccountId), user.id);
+  const account = await getProviderAccountForRuntime(String(body.providerAccountId));
   if (!account) return jsonError("Provider account not found", 404);
   if (account.provider !== parsed.data.provider) return jsonError("Provider mismatch", 400);
   const modelBinding = await getEnabledModelBindingForRuntime({
     accountId: String(body.providerAccountId),
-    userId: user.id,
     provider: account.provider,
     model: parsed.data.model
   });

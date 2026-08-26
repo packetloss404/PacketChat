@@ -29,6 +29,7 @@ const mainNav: NavItem[] = [
 
 const adminNav: NavItem[] = [
   { id: "users", label: "Users", href: "/admin/users", icon: <Icon.users /> },
+  { id: "adminProviders", label: "Providers", href: "/admin/providers", icon: <Icon.key /> },
   { id: "usage", label: "Usage", href: "/admin/usage", icon: <Icon.mixer /> },
   { id: "audit", label: "Audit", href: "/admin/audit", icon: <Icon.lock /> },
   { id: "operations", label: "Operations", href: "/admin/operations", icon: <Icon.database /> }
@@ -41,6 +42,7 @@ const routeTitles: Array<{ match: (p: string) => boolean; title: string }> = [
   { match: (p) => p.startsWith("/projects"), title: "Projects" },
   { match: (p) => p.startsWith("/prompts"), title: "Prompts" },
   { match: (p) => p.startsWith("/knowledge"), title: "Knowledge" },
+  { match: (p) => p.startsWith("/admin/providers"), title: "Providers & keys" },
   { match: (p) => p.startsWith("/admin/users"), title: "Users" },
   { match: (p) => p.startsWith("/admin/usage"), title: "Usage" },
   { match: (p) => p.startsWith("/admin/audit"), title: "Audit" },

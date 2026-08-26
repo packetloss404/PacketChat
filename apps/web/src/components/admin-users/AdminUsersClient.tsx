@@ -10,8 +10,6 @@ type AdminUser = {
   display_name: string | null;
   role: "admin" | "user" | string;
   status: string;
-  byok_enabled: boolean;
-  is_break_glass: boolean;
   created_at: string;
   last_login_at: string | null;
 };
@@ -67,26 +65,21 @@ export function AdminUsersClient() {
   const [role, setRole] = useState<"user" | "admin">("user");
   const [password, setPassword] = useState("");
   const [forceReset, setForceReset] = useState(true);
-  const [byokEnabled, setByokEnabled] = useState(false);
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
-  const [byokFilter, setByokFilter] = useState("all");
 
   const filteredUsers = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return users.filter((user) => {
       const matchesQuery = !needle || [user.email, user.display_name, user.role, user.status].some((value) => value?.toLowerCase().includes(needle));
       const matchesRole = roleFilter === "all" || user.role === roleFilter;
-      const matchesByok = byokFilter === "all" || (byokFilter === "enabled" ? user.byok_enabled : !user.byok_enabled);
-      return matchesQuery && matchesRole && matchesByok;
+      return matchesQuery && matchesRole;
     });
-  }, [byokFilter, query, roleFilter, users]);
+  }, [query, roleFilter, users]);
 
   const stats = useMemo(() => ({
     total: users.length,
-    admins: users.filter((user) => user.role === "admin").length,
-    byok: users.filter((user) => user.byok_enabled).length,
-    breakGlass: users.filter((user) => user.is_break_glass).length
+    admins: users.filter((user) => user.role === "admin").length
   }), [users]);
 
   async function loadUsers() {
@@ -117,8 +110,7 @@ export function AdminUsersClient() {
       const body: Record<string, unknown> = {
         email,
         displayName: displayName || undefined,
-        role,
-        byokEnabled
+        role
       };
       if (mode === "direct") {
         body.password = password;
@@ -143,30 +135,11 @@ export function AdminUsersClient() {
       setEmail("");
       setDisplayName("");
       setPassword("");
-      setByokEnabled(false);
       await loadUsers();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to create user");
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function updateByok(user: AdminUser, nextValue: boolean) {
-    setError(null);
-    setUsers((current) => current.map((item) => (item.id === user.id ? { ...item, byok_enabled: nextValue } : item)));
-    try {
-      await parseResponse<{ userId: string; byokEnabled: boolean }>(
-        await authFetch(`/api/admin/users/${encodeURIComponent(user.id)}/byok`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ byokEnabled: nextValue })
-        })
-      );
-      setMessage(`Personal key ${nextValue ? "enabled" : "disabled"} for ${user.email}.`);
-    } catch (err) {
-      setUsers((current) => current.map((item) => (item.id === user.id ? user : item)));
-      setError(err instanceof Error ? err.message : "Unable to update personal key");
     }
   }
 
@@ -204,8 +177,6 @@ export function AdminUsersClient() {
       <section className="admin-console-stats" aria-label="User administration summary">
         <div className="card card--compact admin-console-stat"><span className="eyebrow">Users</span><strong>{stats.total}</strong><span className="muted">total accounts</span></div>
         <div className="card card--compact admin-console-stat"><span className="eyebrow">Admins</span><strong>{stats.admins}</strong><span className="muted">admin role</span></div>
-        <div className="card card--compact admin-console-stat"><span className="eyebrow">Personal key</span><strong>{stats.byok}</strong><span className="muted">with personal key</span></div>
-        <div className="card card--compact admin-console-stat"><span className="eyebrow">Emergency admin</span><strong>{stats.breakGlass}</strong><span className="muted">protected accounts</span></div>
       </section>
 
       <section className="card admin-users__panel">
@@ -230,7 +201,6 @@ export function AdminUsersClient() {
               <label className="admin-users__checkbox"><input type="checkbox" checked={forceReset} onChange={(event) => setForceReset(event.target.checked)} />Require password change on first sign-in</label>
             </>
           ) : null}
-          <label className="admin-users__checkbox"><input type="checkbox" checked={byokEnabled} onChange={(event) => setByokEnabled(event.target.checked)} />Allow this user to use their own API key</label>
           <button className="button" type="submit" disabled={saving}>{saving ? "Saving..." : mode === "invite" ? "Generate invite" : "Create user"}</button>
         </form>
       </section>
@@ -272,14 +242,6 @@ export function AdminUsersClient() {
               <option value="user">Users</option>
             </select>
           </label>
-          <label>
-            Personal key
-            <select value={byokFilter} onChange={(event) => setByokFilter(event.target.value)}>
-              <option value="all">All</option>
-              <option value="enabled">Enabled</option>
-              <option value="disabled">Disabled</option>
-            </select>
-          </label>
         </div>
 
         {loading ? <LoadingBlock title="Loading users" /> : null}
@@ -287,17 +249,16 @@ export function AdminUsersClient() {
         <div className="admin-users__table-wrap" tabIndex={0} aria-label="Scrollable users table">
           <table className="admin-users__table">
             <caption className="sr-only">Users directory</caption>
-            <thead><tr><th scope="col">User</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col">Personal key</th><th scope="col">Created</th><th scope="col">Last login</th><th scope="col">Actions</th></tr></thead>
+            <thead><tr><th scope="col">User</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col">Created</th><th scope="col">Last login</th><th scope="col">Actions</th></tr></thead>
             <tbody>
               {filteredUsers.map((user) => (
                 <tr key={user.id}>
                   <th scope="row"><strong>{user.display_name || user.email}</strong><div className="muted">{user.email}</div></th>
                   <td><StatusBadge tone={user.role === "admin" ? "info" : "neutral"}>{user.role}</StatusBadge></td>
-                  <td><div className="admin-badge-row"><StatusBadge>{user.status}</StatusBadge>{user.is_break_glass ? <StatusBadge tone="warning">emergency</StatusBadge> : null}</div></td>
-                  <td><label className="admin-users__checkbox admin-users__checkbox--compact"><input type="checkbox" checked={user.byok_enabled} disabled={user.is_break_glass} onChange={(event) => void updateByok(user, event.target.checked)} />{user.byok_enabled ? "Enabled" : "Disabled"}</label></td>
+                  <td><div className="admin-badge-row"><StatusBadge>{user.status}</StatusBadge></div></td>
                   <td>{formatDate(user.created_at)}</td>
                   <td>{formatDate(user.last_login_at)}</td>
-                  <td><button className="button button--ghost" type="button" disabled={user.is_break_glass} onClick={() => void createPasswordReset(user)}>Reset password</button></td>
+                  <td><button className="button button--ghost" type="button" onClick={() => void createPasswordReset(user)}>Reset password</button></td>
                 </tr>
               ))}
               {!loading && filteredUsers.length === 0 ? <tr><td colSpan={7}><span className="empty-state">No users match the current filters.</span></td></tr> : null}
