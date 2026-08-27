@@ -645,21 +645,17 @@ select {
   text-align: center;
   margin-bottom: 40px;
 }
+/* The brand mark itself, so the greeting, the tab icon and the installed
+   app icon are all the same artwork rather than a CSS approximation of it. */
 .greet .logo {
   width: 64px;
   height: 64px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--brand), var(--brand-2));
-  position: relative;
+  background-image: url("/icon.svg");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
   flex-shrink: 0;
-  box-shadow: 0 16px 40px rgba(217, 119, 87, 0.4);
-}
-.greet .logo::after {
-  content: "";
-  position: absolute;
-  inset: 16px;
-  border-radius: 50%;
-  background: var(--bg);
+  filter: drop-shadow(0 14px 32px rgba(217, 119, 87, 0.38));
 }
 .greet__title {
   margin: 0;
