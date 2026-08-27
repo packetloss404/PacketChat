@@ -813,6 +813,13 @@ export default function ChatPage() {
           </div>
           {composerNode}
           {setupNotice}
+          {/* settingsNode renders its own copy of status, so only surface it
+              here when the panel is closed - otherwise it appears twice. */}
+          {!showSettings && status && !isStreaming ? (
+            <p className={isErrorStatus(status) ? "error-state chat-status" : "notice chat-status"} role={isErrorStatus(status) ? "alert" : "status"}>
+              {status}
+            </p>
+          ) : null}
           {settingsNode}
         </div>
         <div className="footer">

@@ -10,7 +10,7 @@ const svgPath = join(root, "apps", "web", "src", "app", "icon.svg");
 const outDir = join(root, "apps", "web", "public");
 
 // Matches --bg in globals.css so the installed app blends with the workspace.
-const BG = { r: 15, g: 15, b: 16, alpha: 1 };
+const BG = { r: 10, g: 11, b: 16, alpha: 1 }; // #0a0b10
 
 async function transparent(size, file) {
   const svg = await readFile(svgPath);

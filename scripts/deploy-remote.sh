@@ -162,9 +162,15 @@ rsh "for i in \$(seq 1 60); do
 log "Initialising object storage buckets"
 dc "up minio-init" || warn "bucket init reported errors; continuing"
 
+# Stop the previous release before migrating. Migrations may drop columns the
+# old code still selects, and leaving it serving through the migration window
+# means it answers requests against a schema it was never written for.
+log "Stopping previous release before migrating"
+dc "stop web worker" || true
+
 log "Running database migrations"
 dc "--profile tools run --rm migrate" || die "migrations failed - stack not started"
-rsh "cd '$REMOTE_DIR' && sudo -n docker exec packetchat-postgres-1 psql -U \"\${POSTGRES_USER:-packetchat}\" -d \"\${POSTGRES_DB:-packetchat}\" -tAc 'select count(*) from _migrations'"   | tr -d '' | sed 's/^/  migrations recorded: /' || true
+rsh "cd '$REMOTE_DIR' && set -a && . ./.env && set +a && sudo -n docker exec packetchat-postgres-1 psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -tAc 'select count(*) from _migrations'"   | tr -d '\r' | sed 's/^/  migrations recorded: /' || warn "could not read migration count"
 
 log "Starting application services"
 dc "up -d web worker" || die "failed to start app services"
