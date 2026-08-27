@@ -170,7 +170,12 @@ dc "stop web worker" || true
 
 log "Running database migrations"
 dc "--profile tools run --rm migrate" || die "migrations failed - stack not started"
-rsh "cd '$REMOTE_DIR' && set -a && . ./.env && set +a && sudo -n docker exec packetchat-postgres-1 psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -tAc 'select count(*) from _migrations'"   | tr -d '\r' | sed 's/^/  migrations recorded: /' || warn "could not read migration count"
+# POSTGRES_USER/DB are not in .env - compose supplies them as interpolation
+# defaults - so read an override if one exists and fall back to the default.
+# .env is parsed rather than sourced: it may carry CRLF endings and sourcing
+# an env file executes it.
+rsh "cd '$REMOTE_DIR' && u=\$(grep -E '^POSTGRES_USER=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r'); d=\$(grep -E '^POSTGRES_DB=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r'); sudo -n docker exec packetchat-postgres-1 psql -U \"\${u:-packetchat}\" -d \"\${d:-packetchat}\" -tAc 'select count(*) from _migrations'" \
+  | tr -d '\r' | sed 's/^/  migrations recorded: /' || warn "could not read migration count"
 
 log "Starting application services"
 dc "up -d web worker" || die "failed to start app services"
