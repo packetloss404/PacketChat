@@ -14,6 +14,22 @@ All notable PacketChat changes are tracked here.
 - Local cost estimation now covers the Claude Opus 4 and Claude Sonnet 4 model families in the `apps/web/src/lib/usage.ts` pricing table.
 - Tested runtime foundations for deferred backlog items: a multi-step agent loop with step/token/time/payload budgets, tool-call/result step modeling, and approval-resume logic (`apps/web/src/lib/agent-runtime/`); artifact parsing, XSS sanitization, persistence mapping, and chat-attachment bounded context (`apps/web/src/lib/artifacts/`, `apps/web/src/lib/chat-files/`); and a worker queue registry with enqueue helpers plus cleanup-retention and provider-sync orchestration (`packages/jobs/src/queues.ts`, `apps/worker/src/`). These are unit-tested modules not yet wired into the live request path.
 
+### Removed
+
+- **Breaking:** per-user BYOK is gone. Provider accounts are now app-wide: `provider_accounts.scope` and `owner_user_id` and `users.byok_enabled` are dropped by `0004_app_wide_provider_accounts.sql`, existing per-user accounts are promoted to shared ones, and only the most recently updated default survives the collapse of the per-user partition. Provider accounts are created and managed by admins from the new admin providers console.
+- **Breaking:** break-glass emergency admin access is gone. `POST /api/auth/break-glass/login`, the login-form break-glass toggle and its audit acknowledgement, the short-lived break-glass sessions and `BREAK_GLASS_ACCESS_TOKEN_TTL_SECONDS` are all removed, and `0003_drop_break_glass.sql` drops `users.is_break_glass`. Existing break-glass accounts are demoted to ordinary admins rather than deleted, so operators do not lose the account they can still reach. Keep a second ordinary admin for recovery.
+
+### Fixed
+
+- Protected pages no longer render before the client-side auth guard redirects. The middleware only checks that a refresh cookie exists, so a stale cookie previously let a page paint before bouncing to `/login`.
+- The chat model settings panel no longer opens on its own when no model is configured. A notice under the composer explains what is missing and opens the panel when clicked, and send-time validation messages are now visible on an empty chat instead of being set but never rendered.
+- The loading spinner no longer stretches to the full content width. `.ui-state > :first-child { flex: 1 }` outranked the spinner's own sizing because `LoadingBlock` leads with the spinner, turning a 16px ring into a page-wide rotating bar that read as a diagonal line during every data load.
+- PWA splash and icon background colours realigned with `--bg` (`#0a0b10`); both had drifted while claiming in comments to match it.
+
+### Security
+
+- `npm run audit:prod` passes again with no production advisories. Next.js moved to 15.5.24 and sharp to 0.35.4, clearing four high-severity libvips CVEs (CVE-2026-33327, CVE-2026-33328, CVE-2026-35590, CVE-2026-35591). PostCSS is held at `^8.5.26` through an override because Next 15 pins `8.4.31` exactly and the only upstream fix is Next 16, a major upgrade deliberately deferred. Verified with `npm run verify`, a production build, and a runtime smoke test of the App Router, middleware redirect, auth cookie handling and API authorisation.
+
 ### Changed
 
 - Worker now fails loudly on unsupported jobs: each queue handler validates the job name, and the provider-sync, agent-run, and cleanup queues reject jobs instead of logging success-like no-ops until their async execution is wired.

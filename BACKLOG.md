@@ -36,13 +36,15 @@ Acceptance notes:
 
 ## Production Dependency Audit
 
-`npm run audit:prod` currently gates high-severity production dependency advisories and still reports a moderate Next.js/PostCSS install-graph advisory. Keep the audit script local and visible, but do not wire stricter moderate-level audit enforcement into `prod:check` or GitHub CI until the dependency upgrade is verified against the App Router, middleware, auth cookie, SSE chat, and agent-run flows.
+`npm run audit:prod` passes with no production advisories as of 2026-08-27. Next.js is on 15.5.24 and sharp on 0.35.4; PostCSS is pinned to `^8.5.26` by a root `overrides` entry because Next 15 depends on `8.4.31` exactly and npm's only offered fix is Next 16.
+
+The Next 16 upgrade remains deferred. It is a major version and the App Router, middleware, auth cookie, SSE chat, and agent-run flows all need verification against it.
 
 Acceptance notes:
 
-- Upgrade Next.js/PostCSS to versions with no moderate-or-higher production audit findings.
+- Upgrade to Next 16 and confirm `npm run audit:prod` stays clean without the PostCSS override, then remove that override.
 - Run `npm run audit:prod`, `npm run verify`, `npm run build`, and authenticated smoke coverage after the upgrade.
-- Reconsider folding stricter audit enforcement into `prod:check` after moderate-or-higher audit output is clean.
+- Revisit folding audit enforcement into `prod:check` once the upgrade lands, since the gate is currently green and regressions would otherwise go unnoticed.
 
 ## MCP Tools
 
