@@ -15,6 +15,9 @@ type NavItem = {
   href: string;
   icon: React.ReactNode;
   badge?: string;
+  // Match this href only, not its children. /plugins would otherwise light up
+  // while the user is on /plugins/marketplace.
+  exact?: boolean;
 };
 
 const mainNav: NavItem[] = [
@@ -25,6 +28,11 @@ const mainNav: NavItem[] = [
   { id: "providers", label: "Models", href: "/providers", icon: <Icon.key /> },
   { id: "projects", label: "Projects", href: "/projects", icon: <Icon.folder /> },
   { id: "approvals", label: "Approvals", href: "/approvals", icon: <Icon.bell /> }
+];
+
+const pluginsNav: NavItem[] = [
+  { id: "marketplace", label: "Agent Marketplace", href: "/plugins/marketplace", icon: <Icon.layers /> },
+  { id: "plugins", label: "Plugins", href: "/plugins", icon: <Icon.mcp />, exact: true }
 ];
 
 const adminNav: NavItem[] = [
@@ -42,6 +50,8 @@ const routeTitles: Array<{ match: (p: string) => boolean; title: string }> = [
   { match: (p) => p.startsWith("/projects"), title: "Projects" },
   { match: (p) => p.startsWith("/prompts"), title: "Prompts" },
   { match: (p) => p.startsWith("/knowledge"), title: "Knowledge" },
+  { match: (p) => p.startsWith("/plugins/marketplace"), title: "Agent Marketplace" },
+  { match: (p) => p.startsWith("/plugins"), title: "Plugins" },
   { match: (p) => p.startsWith("/admin/providers"), title: "Providers & keys" },
   { match: (p) => p.startsWith("/admin/users"), title: "Users" },
   { match: (p) => p.startsWith("/admin/usage"), title: "Usage" },
@@ -52,8 +62,8 @@ const routeTitles: Array<{ match: (p: string) => boolean; title: string }> = [
   { match: (p) => p.startsWith("/chat"), title: "Chat" }
 ];
 
-function isActivePath(pathname: string, href: string) {
-  if (href === "/") return pathname === "/";
+function isActivePath(pathname: string, href: string, exact = false) {
+  if (href === "/" || exact) return pathname === href;
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
@@ -218,6 +228,19 @@ function LeftRail({ onMobileClose, onNavigate }: LeftRailProps) {
                   </div>
                 </div>
               </div>
+            );
+          })}
+        </nav>
+
+        <div className="lr__section">Plugins</div>
+        <nav className="lr__nav" aria-label="Plugins">
+          {pluginsNav.map((item) => {
+            const active = isActivePath(pathname, item.href, item.exact);
+            return (
+              <Link key={item.id} href={item.href} aria-current={active ? "page" : undefined} className={active ? "on" : undefined} onClick={onNavigate}>
+                {item.icon}
+                <span>{item.label}</span>
+              </Link>
             );
           })}
         </nav>
