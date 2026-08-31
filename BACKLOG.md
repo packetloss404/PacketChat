@@ -25,14 +25,23 @@ Acceptance notes:
 
 ## Worker Queues and Runtime Jobs
 
-The worker process is real for ingestion, but provider sync / agent run / cleanup queue behavior should either be fully implemented or made visibly unsupported.
+Provider sync and cleanup were wired on 2026-08-31. Both handlers now drive their DI-ready logic modules through real database adapters, provider sync has producers on provider-account create and admin model sync, and cleanup runs on a worker-registered daily schedule with concrete retention windows. Agent run is unchanged and remains synchronous-only by design.
 
 Acceptance notes:
 
-- Provider sync jobs execute real model discovery or are removed from operator-facing docs.
+- Done: Provider sync jobs execute real model discovery or are removed from operator-facing docs. `apps/worker/src/provider-sync-deps.ts` lists models through the provider adapters and upserts `model_catalog` / `model_account_bindings`; the handler rethrows on failure so the job retries and is recorded in `job_failures`.
 - Agent run jobs either execute asynchronously with persisted status or remain synchronous-only with no dead queue path.
-- Cleanup jobs have concrete retention targets and observable outcomes.
-- Unsupported job names fail loudly instead of logging success-like no-ops.
+- Done: Cleanup jobs have concrete retention targets and observable outcomes. Job failures 30 days, terminal agent runs 90 days, orphan attachments 7 days, swept daily at 03:15; each pass logs the selected targets, per-target deleted counts, and cutoffs. Operator detail is in `docs/runbooks/worker-queues.md`.
+- Done: Unsupported job names fail loudly instead of logging success-like no-ops. Every handler calls `assertKnownJobName`, and an unknown cleanup target or an out-of-range `olderThanDays` fails the job before any delete rather than cleaning nothing quietly.
+
+Follow-ups opened by the wiring:
+
+- `model_account_bindings` has no unique constraint on `(provider_account_id, model_catalog_id)`. Two overlapping provider-sync jobs for one account can both read an empty binding set and both insert, duplicating every binding. Account creation and a manual model sync can now overlap, so this is reachable.
+- Enqueue calls can block instead of failing when Redis is unreachable. The queue connection retries forever with the offline queue enabled, so `POST /api/providers` and the model-sync route can hang past their commit until the proxy times out, and an operator retry creates a duplicate provider account. Bound the enqueue with a timeout, or build the queue connection with `enableOfflineQueue: false`.
+- Orphan-attachment cleanup deletes the `attachments` row but nothing removes the object from MinIO. `CleanupDeps` has no hook for blob deletion, and the daily schedule means the leak now accrues on a timer rather than never.
+- `apps/worker/package.json` does not declare `@packetchat/auth`, which `provider-sync-deps.ts` imports for `decryptJsonSecret`. It resolves only through npm workspace hoisting, and wiring provider sync makes that undeclared dependency load-bearing at runtime for the first time.
+- The model-sync route refreshes models synchronously and also enqueues a background sync, doubling outbound provider list calls per manual refresh. Worth reconsidering whether account creation alone should be the trigger.
+- The Dockerfile rewrites worker `dist` imports with per-file `sed` lines, and this change added five more. Any future relative import in a worker source silently ships a container that dies on `ERR_MODULE_NOT_FOUND`, and `npm run verify` does not catch it. `moduleResolution: NodeNext` for the worker build, or one generic rewrite over `apps/worker/dist`, would remove the class of failure.
 
 ## Production Dependency Audit
 
@@ -72,16 +81,19 @@ Acceptance notes:
 
 ## Portfolio audit backlog — 2026-07-17
 
-_Findings from a 2026-07-17 code audit, preserved for later. Not yet actioned._
+_Findings from a 2026-07-17 code audit. The worker-queue wiring items were actioned on 2026-08-31; the rest are preserved for later._
+
+### Done
+
+- **[low/M]** provider-sync worker throws 'not enabled' instead of executing (index.ts:249)
+  - Done 2026-08-31: `createProviderSyncDeps()` (apps/worker/src/provider-sync-deps.ts) feeds `runProviderSync()`, with producers on `POST /api/providers` and `POST /api/providers/{providerId}/models`. `runProviderSync` reports failure instead of throwing, so the handler rethrows on `!ok` and the job retries and lands in `job_failures`.
+- **[low/M]** cleanup worker throws 'not enabled' (index.ts:272)
+  - Done 2026-08-31: `createCleanupDeps()` (apps/worker/src/cleanup-deps.ts) feeds `runCleanup()` through `runCleanupJob()`, and the worker upserts a daily `run-cleanup` schedule at 03:15 on every boot. Retention: job failures 30 days, terminal agent runs 90 days, orphan attachments 7 days.
+- **[low/L]** Rollup: wire the three unwired workers to their sibling logic modules
+  - Done 2026-08-31 for provider-sync and cleanup. agent-run was not touched and stays synchronous-only by design. `CleanupJob.target` was renamed from `agent-runs` to `completed-runs` so the queue payload matches `CleanupTarget`, and the worker carries a compile-time assertion that the two unions stay the same set. Remaining risks are listed under "Worker Queues and Runtime Jobs" above.
 
 ### Later / deferred
 
-- **[low/M]** provider-sync worker throws 'not enabled' instead of executing (index.ts:249)
-  - Fix: Implement ProviderSyncDeps (listModels via provider API, persistModels to DB) and call runProviderSync() in the worker handler at apps/worker/src/index.ts:242-250; add a producer via enqueueProviderSyncJob on provider-account create/refresh. Logic module apps/worker/src/provider-sync.ts is DI-ready + unit-tested.
-- **[low/M]** cleanup worker throws 'not enabled' (index.ts:272)
-  - Fix: Wire CleanupDeps (real DB delete fns for job-failures/completed-runs/orphan-attachments) into runCleanup() at apps/worker/src/index.ts:266-272, and add a repeatable/scheduled producer via enqueueCleanupJob. Logic in apps/worker/src/cleanup.ts is DI-ready + unit-tested.
-- **[low/L]** Rollup: wire the three unwired workers to their sibling logic modules
-  - Fix: Covers the provider-sync + cleanup wiring above (agent-run is intentionally sync-only). Net work: implement the two Deps adapters + add producers/scheduler. No dead queue path today since no producers exist, so this is enhancement not bugfix.
 - **[noise/M]** License Key activation UI is a stub, validation service not connected
   - Fix: Needs an external license-validation backend not yet built (README.md:106). UI accepts+stores input; connect a POST validate endpoint when the service exists. Deliberate.
 - **[low/M]** Plugin marketplace / install is UI-only, persists to localStorage

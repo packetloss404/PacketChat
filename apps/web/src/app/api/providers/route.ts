@@ -1,6 +1,8 @@
 import { authenticateRequest, encryptJsonSecret } from "@packetchat/auth";
 import { providerIdSchema } from "@packetchat/contracts";
 import { getSql, recordAuditEvent } from "@packetchat/db";
+import { enqueueProviderSyncJob } from "@packetchat/jobs";
+import { logger } from "@packetchat/observability";
 import { validateProviderBaseUrl } from "@packetchat/providers";
 import { requireAdminOrJson } from "../../../lib/admin-auth";
 import { jsonError, jsonOk } from "../../../lib/http";
@@ -101,6 +103,19 @@ export async function POST(request: Request) {
     targetId: accountRows[0]!.id,
     metadata: { provider: provider.data }
   });
+
+  // Discover the account's models in the background. A queue outage must not
+  // fail account creation: the account is already usable and an admin can still
+  // refresh models by hand.
+  try {
+    await enqueueProviderSyncJob({ providerAccountId: accountRows[0]!.id });
+  } catch (error) {
+    logger.warn("Provider sync enqueue failed", {
+      providerAccountId: accountRows[0]!.id,
+      trigger: "provider.created",
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
 
   return jsonOk({ providerAccountId: accountRows[0]!.id });
 }

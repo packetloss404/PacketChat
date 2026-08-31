@@ -1,5 +1,9 @@
-import { createWorker, jobNames, queueNames, type FileIngestionJob } from "@packetchat/jobs";
+import { CLEANUP_SCHEDULE_ID, CLEANUP_SCHEDULE_PATTERN, createWorker, jobNames, queueNames, registerCleanupSchedule, type CleanupJob, type FileIngestionJob, type ProviderSyncJob } from "@packetchat/jobs";
 import { assertKnownJobName } from "./job-router";
+import type { CleanupTarget } from "./cleanup";
+import { runCleanupJob } from "./cleanup-job";
+import { runProviderSync } from "./provider-sync";
+import { createProviderSyncDeps } from "./provider-sync-deps";
 import { getConfig } from "@packetchat/config";
 import { checkDatabase, getSql } from "@packetchat/db";
 import { checkObjectStorage, createLocalEmbedding, downloadObject, extractSupportedText, LOCAL_EMBEDDING_VERSION, MAX_EXTRACTED_TEXT_CHARS } from "@packetchat/files";
@@ -9,6 +13,16 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Worker } from "bullmq";
+
+// Compile-time proof that the cleanup queue payload and the worker's cleanup
+// targets are the same set of strings. Adding or renaming a target on one side
+// without the other stops this file compiling.
+// The false branches must be `false`, not `never`: `never` is assignable to
+// every type, so AssertTrue<never> compiles and the assertion silently passes
+// on exactly the mismatch it exists to catch.
+type SameUnion<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+type AssertTrue<T extends true> = T;
+type CleanupTargetsAgree = AssertTrue<SameUnion<Exclude<CleanupJob["target"], "all">, CleanupTarget>>;
 
 const CHUNK_WORDS = 350;
 const CHUNK_OVERLAP_WORDS = 50;
@@ -239,14 +253,23 @@ async function main() {
   await checkObjectStorage();
   startHealthHeartbeat();
 
-  attachFailureRecorder(queueNames.providerSync, createWorker(queueNames.providerSync, async (job) => {
+  attachFailureRecorder(queueNames.providerSync, createWorker<ProviderSyncJob>(queueNames.providerSync, async (job) => {
     // Fail loudly on unexpected job names instead of logging a success-like no-op.
     assertKnownJobName(queueNames.providerSync, job.name, [jobNames.providerSync]);
     logger.info("Provider sync job received", { jobId: job.id, name: job.name });
-    // Async execution is not wired yet. The dependency-injected orchestration in
-    // ./provider-sync is unit-tested and ready to integrate with real model
-    // discovery + persistence; until then, reject rather than silently succeed.
-    throw new Error("provider-sync execution is not enabled in this build");
+
+    const providerAccountId = typeof job.data.providerAccountId === "string" ? job.data.providerAccountId.trim() : "";
+    if (!providerAccountId) throw new Error("provider-sync job is missing providerAccountId");
+
+    const result = await runProviderSync(providerAccountId, createProviderSyncDeps());
+    // runProviderSync reports failure instead of throwing. Rethrow so the job
+    // lands in job_failures and BullMQ retries it, rather than completing as a
+    // success that synced nothing.
+    if (!result.ok) {
+      throw new Error(`Provider sync failed for ${providerAccountId}: ${result.error ?? "unknown error"}`);
+    }
+
+    logger.info("Provider sync job completed", { jobId: job.id, providerAccountId, modelCount: result.modelCount });
   }));
 
   attachFailureRecorder(queueNames.fileIngestion, createWorker<FileIngestionJob>(queueNames.fileIngestion, async (job) => {
@@ -263,14 +286,31 @@ async function main() {
     throw new Error("agent-run async execution is not enabled in this build");
   }));
 
-  attachFailureRecorder(queueNames.cleanup, createWorker(queueNames.cleanup, async (job) => {
+  attachFailureRecorder(queueNames.cleanup, createWorker<CleanupJob>(queueNames.cleanup, async (job) => {
     assertKnownJobName(queueNames.cleanup, job.name, [jobNames.cleanup]);
-    logger.info("Cleanup job received", { jobId: job.id, name: job.name });
-    // Retention policy + selection are unit-tested in ./cleanup (runCleanup) and
-    // ready to integrate with real DB delete deps; until then, reject rather
-    // than silently succeed.
-    throw new Error("cleanup execution is not enabled in this build");
+    logger.info("Cleanup job received", { jobId: job.id, name: job.name, target: job.data.target });
+
+    const report = await runCleanupJob(job.data);
+    logger.info("Cleanup job completed", {
+      jobId: job.id,
+      targets: report.targets,
+      deleted: report.deleted,
+      cutoffs: report.cutoffs
+    });
   }));
+
+  try {
+    await registerCleanupSchedule();
+    logger.info("Cleanup schedule registered", { id: CLEANUP_SCHEDULE_ID, pattern: CLEANUP_SCHEDULE_PATTERN });
+  } catch (error) {
+    // Retention is not worth crash-looping the worker over: file ingestion and
+    // provider sync still run. The missing schedule is logged at error level so
+    // it surfaces, and the next boot retries the upsert.
+    logger.error("Cleanup schedule registration failed", {
+      id: CLEANUP_SCHEDULE_ID,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
 
   logger.info("PacketChat worker started", { queues: Object.values(queueNames) });
 }

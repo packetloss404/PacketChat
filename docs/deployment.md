@@ -5,7 +5,7 @@ PacketChat V1 is designed for a single private deployment with an external rever
 ## Services
 
 - `web`: Next.js UI and API on port `3000`.
-- `worker`: background jobs for file ingestion. Provider-sync, agent-run, and cleanup queues are reserved for post-V1 worker expansion and currently log received jobs.
+- `worker`: background jobs for file ingestion, provider-sync model discovery, and scheduled retention cleanup. The `agent-run` queue is intentionally not wired: agent runs execute synchronously in `web`, nothing enqueues an `agent-run` job, and the worker rejects any that arrives.
 - `migrate`: one-shot DB migration command.
 - `postgres`: primary database.
 - `redis`: queues and transient coordination.
@@ -50,6 +50,28 @@ API rate limits are Redis-backed and use `REDIS_URL`. Auth endpoints use `RATE_L
 
 Requests over the limit return `429` with `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers plus JSON retry details. Authenticated requests are keyed by user id; anonymous requests fall back to client IP from forwarded headers.
 
+## Background Jobs and Retention
+
+The `worker` service consumes four queues on `REDIS_URL`. `file-ingestion` and `provider-sync` are producer-driven, `cleanup` is scheduled by the worker itself, and `agent-run` is deliberately inert.
+
+A `sync-provider` job is enqueued when an admin creates a provider account and when an admin runs a model sync from `/admin/providers`. A queue error there is logged as a warning and does not fail the request. The worker only syncs accounts whose status is `enabled`, and it never disables a binding on its own — retiring a model that a provider stopped reporting stays an explicit admin action.
+
+Retention cleanup runs daily at 03:15 in the worker container's timezone, which is UTC in the shipped image unless you set `TZ`. Each run sweeps all three targets:
+
+| Target | Table | Default window |
+| --- | --- | --- |
+| `job-failures` | `job_failures` | 30 days |
+| `completed-runs` | `agent_runs`, terminal statuses only | 90 days |
+| `orphan-attachments` | `attachments` with no owning conversation, message, or knowledge document | 7 days |
+
+The windows are compiled into the worker; changing them is a code change and a redeploy. A one-off job may pass `olderThanDays` to override the window for the targets it selects. The worker re-registers the schedule under a fixed key on every boot, so restarts and multiple replicas do not stack duplicate schedules.
+
+Jobs on all three working queues retry 3 times with exponential backoff, then land in `job_failures` and appear in the job-failure rollup on `/admin/operations`.
+
+Two limitations matter operationally: deleting an orphan attachment row does not remove the underlying object from MinIO, and the first scheduled run after this change deploys will delete whatever backlog the deployment has already accumulated. Back up Postgres before that worker restart.
+
+For the manual trigger, log lines to check, and the full limitation list, see `docs/runbooks/worker-queues.md`.
+
 ## Smoke Testing
 
 Run `npm run smoke` and the checklist in `docs/smoke-test.md` after first deploy, upgrades, restore drills, and operator changes. Set `PACKETCHAT_BASE_URL` for non-local targets and `PACKETCHAT_SMOKE_EMAIL` / `PACKETCHAT_SMOKE_PASSWORD` when login should be included.
@@ -84,10 +106,11 @@ Compose is the supported V1 deployment shape. Treat a deployment as pilot/prod-r
 - Do not publish Postgres, Redis, or MinIO ports.
 - Keep `.env` and backup artifacts out of source control.
 - Verify provider keys with `POST /api/providers/{providerId}/test` or `scripts/provider-health.mjs` before relying on chat/agent runs.
-- Back up Postgres and MinIO before upgrades.
+- Back up Postgres and MinIO before upgrades, and specifically before the first worker restart that carries scheduled retention cleanup.
 - Run a restore drill before calling the deployment production-ready.
 - Run the migration job exactly once per release before app rollout.
 - Run `npm run smoke` after first deploy, upgrades, and restore drills. Include `PACKETCHAT_SMOKE_EMAIL` / `PACKETCHAT_SMOKE_PASSWORD` for authenticated coverage.
+- Confirm the worker logged `Cleanup schedule registered` after rollout; without it there is no retention schedule until the next boot.
 - Review the release-readiness surfaces in `docs/release-readiness.md` before pilot/prod handoff.
 - Stop the Compose stack with `npm run compose:down`; do not remove volumes unless intentionally wiping local data.
 

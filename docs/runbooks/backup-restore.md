@@ -15,6 +15,8 @@ Minimum acceptable cadence for pilot use:
 - MinIO: daily sync/snapshot
 - Secrets: after every rotation/change
 
+The worker deletes rows on a daily retention schedule — job failures after 30 days, terminal agent runs after 90, orphan attachments after 7. The daily Postgres dump is what stands between an over-aggressive retention change and permanent loss, so keep the cadence above once cleanup is running. See `docs/runbooks/worker-queues.md`.
+
 For the local Docker Compose stack, write non-destructive backup artifacts to `backups/`:
 
 ```shell

@@ -96,6 +96,7 @@ The 48-px right rail expands a 320-px panel when an icon is selected. Each drawe
 - SSE streaming chat at `POST /api/chat`.
 - Agent publish, ACL sharing, and synchronous single-pass augmented agent runs, including file search, file context injection, artifact-format instructions, calculator, hardened URL fetch, HTTPS OpenAPI actions, bounded same-owner pre-run agent context, provider streaming, run steps/events/usage, approval checkpoints, user/admin approval queues, and chat-launched run transcript persistence. Viewers can inspect shared agents, while runners/editors/owners can run them. Scheduled runs, evaluations, and true multi-step tool loops are outside V1.
 - Runtime model use is checked against enabled model bindings for chat and agent runs.
+- Worker background queues: file ingestion, provider-sync model discovery, and scheduled retention cleanup. A provider-sync job is enqueued when an admin creates a provider account or runs a model sync; the worker registers a daily cleanup schedule on boot. Cadence, retention windows, the manual trigger, and known limitations are in `docs/runbooks/worker-queues.md`.
 - Provider-account toggles persist via the existing `providers.updateAccount` path (account-level granularity; the backend has no per-binding toggle yet).
 - Speech Synthesis voice picker enumerates real `window.speechSynthesis` voices; chat reply playback is not wired yet.
 - Theme toggle, font-size slider, and most preferences in `/settings` write through to `localStorage` under `packetchat.settings.<section>.<key>`.
@@ -112,16 +113,21 @@ The 48-px right rail expands a 320-px panel when an icon is selected. Each drawe
 - Per-binding model toggle — not exposed by the backend; account-level toggle is what fires.
 - Code interpreter and MCP tools — visible in the builder as unavailable until their runtimes are configured.
 
+**Deliberately not wired:**
+
+- Asynchronous agent runs — agent runs execute synchronously in the web API. Nothing enqueues an `agent-run` job, and the worker's `agent-run` handler rejects any job it receives rather than logging a success-like no-op.
+
 ## Deployment Notes
 
 - Only the `web` service should be exposed to your reverse proxy.
 - Postgres, Redis, and MinIO stay private on the Compose network.
 - Use immutable image tags for pilot / prod.
 - Treat Compose as the supported V1 deployment shape. Kubernetes, multi-region HA, external managed databases, SSO, email-delivered invites/password resets, and Google provider runtime support are not included in the V1 promise.
+- The worker runs a daily retention cleanup: job failures 30 days, terminal agent runs 90 days, orphan attachments 7 days. An orphan attachment's object is deleted from MinIO before its row, so a failed object delete leaves the row in place to retry rather than stranding an unidentifiable object. Back up Postgres before the first worker restart that carries this change — the first pass deletes whatever backlog already exists.
 - Run a restore drill before calling a deployment production-ready.
 - Use `npm run backup`, `npm run backup:postgres`, or `npm run backup:minio` for local Compose backup artifacts before upgrades.
 
-See `docs/deployment.md`, `docs/local-run.md`, `docs/smoke-test.md`, and `docs/runbooks/backup-restore.md`.
+See `docs/deployment.md`, `docs/local-run.md`, `docs/smoke-test.md`, `docs/runbooks/worker-queues.md`, and `docs/runbooks/backup-restore.md`.
 
 ## Front-end conventions
 

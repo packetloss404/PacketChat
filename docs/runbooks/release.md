@@ -7,11 +7,13 @@
 5. Back up Postgres and MinIO.
 6. Pull images on the host.
 7. Run the migration job once.
-8. Restart `web` and `worker`.
+8. Restart `web` and `worker`. The worker re-registers the daily retention cleanup schedule on every boot; confirm it logged `Cleanup schedule registered`.
 9. Check `/api/readyz`.
 10. Run the smoke-test checklist in `docs/smoke-test.md`.
 11. Keep the previous image tag available for rollback.
 
 Never run migrations concurrently from both `web` and `worker`.
+
+The first release that carries scheduled retention cleanup deletes whatever backlog the deployment has accumulated on its first 03:15 pass. Do not skip step 5 for that release. See `docs/runbooks/worker-queues.md`.
 
 The CI Compose gate does not start containers, apply migrations, seed an admin, or call `npm run smoke`; keep those deployment-specific readiness checks in the release smoke pass.

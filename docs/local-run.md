@@ -65,6 +65,8 @@ npm run compose:up
 
 This starts `web`, `worker`, `postgres`, `redis`, `minio`, and the MinIO bucket initializer. The `web` service is published at `http://localhost:3000` by default.
 
+The `worker` service runs file ingestion, provider-sync model discovery, and a daily retention cleanup it schedules itself. See `docs/runbooks/worker-queues.md` for retention windows and the manual cleanup trigger.
+
 ## Run Migrations
 
 Run migrations after the stack is up and Postgres is healthy:

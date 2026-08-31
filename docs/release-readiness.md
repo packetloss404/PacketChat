@@ -30,6 +30,7 @@ Use this checklist after `npm run smoke` passes and before a pilot or production
 - `/admin/usage` shows daily/user/provider/model usage, recent records, estimated-token and unknown-cost flags, monthly run-rate projection, and chargeback warnings.
 - `/admin/audit` shows the latest audit events with actor, action, outcome, target, IP, user agent, metadata, filters, and action summaries.
 - `/admin/operations` shows provider accounts, model bindings, knowledge ingestion, seven-day agent run status, recent job failures, and provider audit signals.
+- The worker logged `Cleanup schedule registered` on boot, so daily retention cleanup is active. Windows and the manual trigger are in `docs/runbooks/worker-queues.md`.
 
 ## Minimum Manual Pass
 

@@ -52,6 +52,28 @@ export function getRedisConnection(): IORedis {
   return connection;
 }
 
+// Producers must never block a request path. The shared ioredis connection is
+// built with maxRetriesPerRequest: null (BullMQ requires that for Workers) and
+// ioredis's offline queue on, so while Redis is unreachable `queue.add` buffers
+// the command and its promise never settles or rejects - a caller's try/catch
+// around an enqueue is unreachable and the request hangs until the gateway
+// times out. Bounding every enqueue makes that catch reachable again.
+export const ENQUEUE_TIMEOUT_MS = 5_000;
+
+export async function withEnqueueTimeout<T>(describe: string, add: () => Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      add(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${describe} timed out after ${ENQUEUE_TIMEOUT_MS}ms`)), ENQUEUE_TIMEOUT_MS);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export function createQueue(name: string): Queue {
   return new Queue(name, { connection: getRedisConnection() });
 }
@@ -66,12 +88,14 @@ export function getQueue(name: string): Queue {
 }
 
 export async function enqueueFileIngestionJob(input: FileIngestionJob) {
-  return getQueue(queueNames.fileIngestion).add("ingest-file", input, {
+  // Bounded for the same reason as the producers in ./queues: an unreachable
+  // Redis must surface as a rejection the caller can catch, not a hung request.
+  return withEnqueueTimeout("file-ingestion enqueue", () => getQueue(queueNames.fileIngestion).add("ingest-file", input, {
     attempts: 3,
     backoff: { type: "exponential", delay: 5_000 },
     removeOnComplete: 100,
     removeOnFail: 500
-  });
+  }));
 }
 
 export function createWorker<T>(name: string, handler: Processor<T>): Worker<T> {

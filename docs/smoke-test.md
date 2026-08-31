@@ -44,7 +44,7 @@ For non-local targets, also set `PACKETCHAT_BASE_URL` to the deployment URL. The
 - `GET /api/healthz` returns `200` and `{"ok":true}`.
 - `GET /api/readyz` returns `200` with `database`, `redis`, and `objectStorage` set to `ok`.
 - `web` logs do not show repeated startup, auth, database, Redis, or object storage errors.
-- `worker` logs show startup without queue connection failures.
+- `worker` logs show startup without queue connection failures, including a `Cleanup schedule registered` line.
 
 ## Automated Route Coverage
 
@@ -103,6 +103,7 @@ These checks still require external credentials, provider configuration, or emai
 
 - MinIO readiness remains `ok` after uploads or provider tests that touch object storage.
 - Redis readiness remains `ok` after login and chat activity.
+- Creating a provider account or running a model sync from `/admin/providers` enqueues a `sync-provider` job; `worker` logs `Provider sync job completed` and no new job failure appears.
 - Worker logs remain clean during provider sync or queued work.
 - `/admin/operations` shows provider account status, model binding status, knowledge ingestion status, seven-day agent run status, and recent job failures.
 

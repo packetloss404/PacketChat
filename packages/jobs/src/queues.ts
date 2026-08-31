@@ -1,4 +1,4 @@
-import { getQueue, queueNames } from "./index";
+import { getQueue, queueNames, withEnqueueTimeout } from "./index";
 
 export const jobNames = {
   providerSync: "sync-provider",
@@ -16,10 +16,25 @@ export type AgentRunJob = {
   ownerUserId: string;
 };
 
+// The concrete retention targets the worker knows how to clean. Spelled exactly
+// as CleanupTarget in apps/worker/src/cleanup.ts ("completed-runs", not
+// "agent-runs") so a queue payload maps onto a worker target with no
+// translation table; the worker asserts at compile time that the two unions
+// still agree.
+export const CLEANUP_TARGETS = ["job-failures", "completed-runs", "orphan-attachments"] as const;
+
+export type CleanupJobTarget = typeof CLEANUP_TARGETS[number];
+
 export type CleanupJob = {
-  target: "job-failures" | "agent-runs" | "orphan-attachments" | "all";
+  target: CleanupJobTarget | "all";
   olderThanDays?: number;
 };
+
+// Daily at 03:15 in the worker process timezone: past the midnight rollover and
+// off the top of the hour, so retention deletes do not land on whatever else
+// the host runs on a round schedule.
+export const CLEANUP_SCHEDULE_ID = "daily-cleanup";
+export const CLEANUP_SCHEDULE_PATTERN = "15 3 * * *";
 
 // Literal list (mirrors the values of queueNames in ./index). Kept as a literal
 // rather than Object.values(queueNames) so this module has no top-level
@@ -43,28 +58,55 @@ export function assertKnownQueue(name: string): void {
 }
 
 export async function enqueueProviderSyncJob(input: ProviderSyncJob): Promise<unknown> {
-  return getQueue(queueNames.providerSync).add(jobNames.providerSync, input, {
+  // Deterministic jobId: while a sync for this account is still queued, a second
+  // request collapses onto it instead of racing it. This is a de-duplication
+  // convenience, not the correctness boundary - the worker takes an advisory
+  // lock per account, which is what actually prevents concurrent writers.
+  return withEnqueueTimeout("provider-sync enqueue", () => getQueue(queueNames.providerSync).add(jobNames.providerSync, input, {
+    jobId: `sync-${input.providerAccountId}`,
     attempts: 3,
     backoff: { type: "exponential", delay: 5_000 },
     removeOnComplete: 100,
     removeOnFail: 500
-  });
+  }));
 }
 
 export async function enqueueAgentRunJob(input: AgentRunJob): Promise<unknown> {
-  return getQueue(queueNames.agentRun).add(jobNames.agentRun, input, {
+  return withEnqueueTimeout("agent-run enqueue", () => getQueue(queueNames.agentRun).add(jobNames.agentRun, input, {
     attempts: 3,
     backoff: { type: "exponential", delay: 5_000 },
     removeOnComplete: 100,
     removeOnFail: 500
-  });
+  }));
 }
 
 export async function enqueueCleanupJob(input: CleanupJob): Promise<unknown> {
-  return getQueue(queueNames.cleanup).add(jobNames.cleanup, input, {
+  return withEnqueueTimeout("cleanup enqueue", () => getQueue(queueNames.cleanup).add(jobNames.cleanup, input, {
     attempts: 3,
     backoff: { type: "exponential", delay: 5_000 },
     removeOnComplete: 100,
     removeOnFail: 500
-  });
+  }));
+}
+
+export async function registerCleanupSchedule(input: { pattern?: string } = {}): Promise<unknown> {
+  const data: CleanupJob = { target: "all" };
+  // upsertJobScheduler is keyed by CLEANUP_SCHEDULE_ID, so calling this on every
+  // worker boot replaces the one scheduler instead of stacking a new repeatable
+  // per restart. A changed pattern is applied on the next boot for the same
+  // reason.
+  return getQueue(queueNames.cleanup).upsertJobScheduler(
+    CLEANUP_SCHEDULE_ID,
+    { pattern: input.pattern ?? CLEANUP_SCHEDULE_PATTERN },
+    {
+      name: jobNames.cleanup,
+      data,
+      opts: {
+        attempts: 3,
+        backoff: { type: "exponential", delay: 5_000 },
+        removeOnComplete: 100,
+        removeOnFail: 500
+      }
+    }
+  );
 }
