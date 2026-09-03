@@ -1,5 +1,6 @@
 import { getConfig } from "@packetchat/config";
 import { checkRateLimit, type RateLimitAlgorithm } from "@packetchat/jobs";
+import { logger } from "@packetchat/observability";
 import { jsonError, requestIp, userAgent } from "./http";
 
 type RateLimitSubject = {
@@ -24,14 +25,50 @@ function clientIdentifier(request: Request, subject?: RateLimitSubject | null) {
   return `anonymous:${userAgent(request) ?? "unknown"}`;
 }
 
+// Redis is reached through a connection configured with maxRetriesPerRequest:
+// null and ioredis's offline queue enabled, which BullMQ requires for Workers.
+// A command issued while Redis is unreachable is therefore buffered rather than
+// rejected, and its promise never settles. Without a bound, an outage would
+// hang every rate-limited request - including login - holding each connection
+// open until the gateway gave up, which takes the whole app down rather than
+// degrading it.
+const RATE_LIMIT_TIMEOUT_MS = 2_000;
+
+async function checkWithinTimeout(input: Parameters<typeof checkRateLimit>[0]) {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      checkRateLimit(input),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`rate limit check timed out after ${RATE_LIMIT_TIMEOUT_MS}ms`)), RATE_LIMIT_TIMEOUT_MS);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function rateLimitResponse(options: RateLimitOptions): Promise<Response | null> {
-  const result = await checkRateLimit({
-    namespace: options.namespace,
-    identifier: clientIdentifier(options.request, options.subject),
-    limit: options.limit,
-    windowSeconds: options.windowSeconds ?? 60,
-    algorithm: options.algorithm ?? "sliding-window"
-  });
+  let result;
+  try {
+    result = await checkWithinTimeout({
+      namespace: options.namespace,
+      identifier: clientIdentifier(options.request, options.subject),
+      limit: options.limit,
+      windowSeconds: options.windowSeconds ?? 60,
+      algorithm: options.algorithm ?? "sliding-window"
+    });
+  } catch (error) {
+    // Deliberate fail-open: when the limiter itself is unavailable the request
+    // proceeds unlimited rather than the app becoming unusable. Logged at error
+    // level because it means auth endpoints are briefly unthrottled. Invert this
+    // to a 503 if unthrottled auth is the worse risk for your deployment.
+    logger.error("Rate limit check failed; allowing request unthrottled", {
+      namespace: options.namespace,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return null;
+  }
 
   if (result.allowed) return null;
 

@@ -1,6 +1,4 @@
 import { getSql, recordAuditEvent } from "@packetchat/db";
-import { enqueueProviderSyncJob } from "@packetchat/jobs";
-import { logger } from "@packetchat/observability";
 import { getProviderAdapter, isUnsupportedModelDiscovery, normalizeFetchError, type ProviderModelSnapshot } from "@packetchat/providers";
 import { requireAdminOrJson } from "../../../../../lib/admin-auth";
 import { jsonError, jsonOk } from "../../../../../lib/http";
@@ -71,6 +69,11 @@ export async function POST(request: Request, context: { params: Promise<{ provid
   }
 
   await sql.begin(async (tx) => {
+    // Same lock the worker's provider sync takes. Both write bindings for this
+    // account with a read-then-insert, and model_account_bindings has no unique
+    // constraint, so without a shared lock a concurrent sync doubles every row.
+    await tx`select pg_advisory_xact_lock(hashtext(${`packetchat.provider-sync:${String(body.providerAccountId)}`}))`;
+
     const discoveredModelIds = [...new Set(models.map((model) => model.id))];
     if (discoveredModelIds.length > 0) {
       await tx`
@@ -132,28 +135,6 @@ export async function POST(request: Request, context: { params: Promise<{ provid
   });
 
   await recordAuditEvent({ actorUserId: admin.id, action: "provider.models.synced", targetType: "provider_account", targetId: String(body.providerAccountId), metadata: { provider: runtimeAccount.provider, count: models.length } });
-
-  // Hand the same refresh to the worker so the background catalog stays in step
-  // with what this route just wrote. The worker sync refuses accounts that are
-  // not enabled, so skip those rather than queue a job that can only fail. The
-  // refresh itself has already succeeded, so nothing here may fail the request.
-  try {
-    const statusRows = await sql<{ status: string }[]>`
-      select status
-      from provider_accounts
-      where id = ${String(body.providerAccountId)}
-      limit 1
-    `;
-    if (statusRows[0]?.status === "enabled") {
-      await enqueueProviderSyncJob({ providerAccountId: String(body.providerAccountId) });
-    }
-  } catch (error) {
-    logger.warn("Provider sync enqueue failed", {
-      providerAccountId: String(body.providerAccountId),
-      trigger: "provider.models.synced",
-      error: error instanceof Error ? error.message : String(error)
-    });
-  }
 
   return jsonOk({ models });
 }
