@@ -33,6 +33,9 @@ jobs:
       APP_ENV: test
       DATABASE_URL: postgres://packetchat:packetchat@localhost:5432/packetchat
       AUTH_DB_TEST_DATABASE_URL: postgres://packetchat:packetchat@localhost:5432/packetchat
+      # Integration tests skip themselves when this is unset. CI already runs a
+      # Postgres service, so point them at it rather than letting them no-op.
+      TEST_DATABASE_URL: postgres://packetchat:packetchat@localhost:5432/packetchat
       PACKETCHAT_AUTH_DB_TEST: "1"
       REDIS_URL: redis://localhost:6379
       S3_ENDPOINT: http://localhost:9000

@@ -1,0 +1,14 @@
+[Unit]
+Description=PacketChat backup (Postgres dump + MinIO archive)
+Documentation=file:/opt/stacks/packetchat/docs/runbooks/backup-restore.md
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Runs as the deploying user, who has passwordless sudo for docker. Substitute
+# your own at install time; see docs/runbooks/backup-restore.md.
+User=ianwalmsley
+WorkingDirectory=/opt/stacks/packetchat
+ExecStart=/opt/stacks/packetchat/scripts/backup-host.sh
+ProtectHome=read-only

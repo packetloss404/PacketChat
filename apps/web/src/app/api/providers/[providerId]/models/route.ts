@@ -129,6 +129,8 @@ export async function POST(request: Request, context: { params: Promise<{ provid
         await tx`
           insert into model_account_bindings (provider_account_id, model_catalog_id, provider_model_ref)
           values (${String(body.providerAccountId)}, ${catalogId}, ${JSON.stringify({ id: model.id, displayName: model.displayName })}::jsonb)
+          on conflict (provider_account_id, model_catalog_id) where model_catalog_id is not null
+          do update set provider_model_ref = excluded.provider_model_ref, enabled = true, updated_at = now()
         `;
       }
     }

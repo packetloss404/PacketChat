@@ -179,9 +179,16 @@ async function upsertBindingsInDatabase(providerAccountId: string, models: Synca
 
     for (const insert of plan.inserts) {
       const catalogId = await upsertCatalogModel(insert);
+      // The advisory lock above already serialises the sane paths; the conflict
+      // clause is the backstop that makes a duplicate impossible even if some
+      // future writer skips the lock. Refresh the model ref rather than doing
+      // nothing, so a racing insert still lands the newer display name, and
+      // leave enabled/capability_overrides alone so operator choices survive.
       await tx`
         insert into model_account_bindings (provider_account_id, model_catalog_id, provider_model_ref, enabled)
         values (${providerAccountId}, ${catalogId}, ${JSON.stringify({ id: insert.id, displayName: insert.displayName ?? insert.id })}::jsonb, true)
+        on conflict (provider_account_id, model_catalog_id) where model_catalog_id is not null
+        do update set provider_model_ref = excluded.provider_model_ref, updated_at = now()
       `;
     }
 

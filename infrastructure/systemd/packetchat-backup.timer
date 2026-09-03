@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily PacketChat backup
+
+[Timer]
+# 02:30, deliberately ahead of the worker's 03:15 retention cleanup: the backup
+# must capture data before the cleanup is allowed to delete any of it.
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

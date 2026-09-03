@@ -30,7 +30,20 @@ function readEnv(path) {
   return env;
 }
 
+// docker-compose.yml pins `name: packetchat`, so the volume name is deterministic.
+function minioVolumeName() {
+  return process.env.PACKETCHAT_MINIO_VOLUME || "packetchat_minio-data";
+}
+
+function dockerRun(args, outputPath) {
+  return runDocker(args, outputPath);
+}
+
 function dockerCompose(args, outputPath) {
+  return runDocker(["compose", "--env-file", envFile, "-f", composeFile, ...args], outputPath);
+}
+
+function runDocker(args, outputPath) {
   mkdirSync(dirname(outputPath), { recursive: true });
   const tempPath = `${outputPath}.tmp-${process.pid}`;
   return new Promise((resolve, reject) => {
@@ -45,7 +58,7 @@ function dockerCompose(args, outputPath) {
       }
       reject(error);
     };
-    const child = spawn("docker", ["compose", "--env-file", envFile, "-f", composeFile, ...args], {
+    const child = spawn("docker", args, {
       cwd: root,
       stdio: ["ignore", "pipe", "inherit"]
     });
@@ -85,7 +98,12 @@ async function backupPostgres() {
 
 async function backupMinio() {
   const output = join(backupDir, `${stamp}-minio-data.tar`);
-  await dockerCompose(["exec", "-T", "minio", "tar", "-C", "/data", "-cf", "-", "."], output);
+  // The MinIO image has no tar, so `compose exec minio tar` exits 127 and the
+  // archive silently failed. Mount the volume into a throwaway busybox instead.
+  await dockerRun(
+    ["run", "--rm", "-v", `${minioVolumeName()}:/data:ro`, "busybox:stable", "tar", "-C", "/data", "-cf", "-", "."],
+    output
+  );
   console.log(`MinIO data backup written to ${output}`);
 }
 

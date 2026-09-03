@@ -33,7 +33,8 @@
     "backup": "node scripts/backup.mjs all",
     "backup:postgres": "node scripts/backup.mjs postgres",
     "backup:minio": "node scripts/backup.mjs minio",
-    "restore:check": "node scripts/restore-check.mjs"
+    "restore:check": "node scripts/restore-check.mjs",
+    "test:integration": "node --import tsx --test \"packages/**/*.integration.test.ts\" \"apps/**/*.integration.test.ts\""
   },
   "engines": {
     "node": ">=22.0.0",
