@@ -38,6 +38,16 @@ export async function createTestDatabase(): Promise<TestDatabase> {
   const admin = postgres(TEST_DATABASE_URL, { max: 1, prepare: false });
 
   try {
+    // pgcrypto is database-global, but every migration run tries to create it.
+    // node --test runs files in parallel, so two runs can both find it missing
+    // and collide on pg_extension_name_index. Whoever loses the race can simply
+    // proceed: the extension it needed now exists.
+    try {
+      await admin.unsafe("create extension if not exists pgcrypto");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/duplicate key|already exists/i.test(message)) throw error;
+    }
     await admin.unsafe(`create schema "${schema}"`);
   } finally {
     await admin.end({ timeout: 5 });

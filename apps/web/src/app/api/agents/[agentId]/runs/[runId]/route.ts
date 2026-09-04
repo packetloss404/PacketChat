@@ -18,6 +18,10 @@ type AgentRunUsageRow = {
   estimated_count: number;
 };
 
+// Slightly above the executor's own 15-minute cap so a run that is genuinely
+// still working is never reaped out from under itself.
+const MAX_RUN_AGE_MINUTES = 20;
+
 export async function GET(request: Request, context: RouteContext) {
   const user = await authenticateRequest(request.headers);
   if (!user) return jsonError("Unauthenticated", 401);
@@ -33,6 +37,23 @@ export async function GET(request: Request, context: RouteContext) {
     limit 1
   `;
   if (runRows.length === 0) return jsonError("Agent run not found", 404);
+
+  // Detached runs execute in the web process, so a restart or a crash leaves a
+  // run stranded in a non-terminal state with nothing left to finish it. Fail
+  // anything that has outlived the cap on read, rather than showing a run that
+  // is "running" indefinitely with no process behind it.
+  const stranded = await sql`
+    update agent_runs
+    set status = 'timed_out',
+        ended_at = now(),
+        error_code = coalesce(error_code, 'run_abandoned'),
+        error_message = coalesce(error_message, 'Run exceeded the maximum duration or its process ended before completing.')
+    where id = ${runId}
+      and status in ('queued', 'preparing', 'running')
+      and coalesce(started_at, created_at) < now() - ${`${MAX_RUN_AGE_MINUTES} minutes`}::interval
+    returning id, agent_id, agent_version_id, status, input, started_at, ended_at, error_code, error_message, created_at
+  `;
+  const run = stranded[0] ?? runRows[0];
 
   const steps = await sql`
     select id, parent_step_id, sequence_no, step_type, status, name, input, output, started_at, ended_at
@@ -63,7 +84,7 @@ export async function GET(request: Request, context: RouteContext) {
   `;
 
   return jsonOk({
-    run: runRows[0],
+    run,
     steps,
     events,
     usage: usageRows[0] ?? {

@@ -11,6 +11,21 @@ Remaining acceptance notes:
 - Multi-step continuations resume after approved checkpoints instead of ending at the current single-pass boundary.
 - Tests cover loop limits, tool failure recovery, approval-resume paths, and transcript persistence.
 
+## Queue-Durable Agent Runs
+
+Agent runs can now be started detached: `POST /api/agents/{agentId}/runs` with `{"async": true}` (or `Prefer: respond-async`) returns `202` with a run id immediately and the run continues after the response, so it survives the caller closing the tab and is not capped by the gateway's request timeout. Callers poll `GET /api/agents/{agentId}/runs/{runId}`, which reconciles runs stranded past 20 minutes to `timed_out`.
+
+Execution is still in-process, not queue-durable: a web restart loses an in-flight run, and the reconcile-on-read is what stops it hanging in `running` forever. The `agent-run` queue remains deliberately unwired.
+
+The blocker is placement, not design: `executeRun` and its helpers live in `apps/web/src/app/api/agents/[agentId]/runs/route.ts` (~1000 lines) and depend on `apps/web/src/lib/{providers,usage,agent-access}`. The worker cannot import from `apps/web`.
+
+Acceptance notes:
+
+- Lift `executeRun` and the web-only helpers it needs into a package both apps can import.
+- The worker executes `agent-run` jobs, so a run survives a web restart and gets BullMQ retries.
+- Cancellation and the approval-resume path work across process boundaries, not just within one.
+- Reconcile-on-read stays as the backstop, but should stop being the only thing preventing stuck runs.
+
 ## Artifacts and Chat Files
 
 Artifact instructions and chat file pickers exist, but rendered artifacts and chat-attached file runtime context are not complete runtime features.

@@ -129,6 +129,41 @@ function textMessageContent(text: string) {
   return [{ type: "text", text }];
 }
 
+// A detached run is capped so a wedged provider call cannot leave a run
+// "running" forever. GET reconciles anything that outlives this.
+const MAX_DETACHED_RUN_MS = 15 * 60 * 1000;
+
+type RunVersion = { agent_id: string; agent_name: string };
+
+// Writes the assistant message and bumps the conversation. Shared so the
+// detached path records exactly what the inline path does.
+async function recordRunOutcome(input: {
+  conversationId: string | null;
+  runId: string;
+  userId: string;
+  version: RunVersion;
+  status: string;
+  text: string;
+}) {
+  if (!input.conversationId) return;
+  const sql = getSql();
+  await sql.begin(async (tx) => {
+    await tx`
+      insert into messages (conversation_id, owner_user_id, role, content, metadata)
+      values (
+        ${input.conversationId},
+        ${input.userId},
+        'assistant',
+        ${JSON.stringify(textMessageContent(input.text))}::jsonb,
+        ${JSON.stringify({ agentId: input.version.agent_id, agentName: input.version.agent_name, agentRunId: input.runId, agentMode: "single_pass_augmented", status: input.status })}::jsonb
+      )
+    `;
+    await tx`
+      update conversations set updated_at = now() where id = ${input.conversationId} and owner_user_id = ${input.userId}
+    `;
+  });
+}
+
 async function addRunEvent(runId: string, eventType: string, payload: Record<string, unknown>) {
   const sql = getSql();
   await sql`
@@ -817,6 +852,8 @@ export async function POST(request: Request, context: RouteContext) {
   const access = await getAgentAccess(agentId, user);
   if (!access?.canRun) return jsonError("Published agent version not found", 404);
   const body = await request.json().catch(() => null);
+  // Opt-in so existing callers keep their synchronous contract unchanged.
+  const runAsync = body?.async === true || request.headers.get("prefer") === "respond-async";
   const inputText = textOrNull(body?.inputText) ?? textOrNull(body?.input);
   if (!inputText) return jsonError("inputText or input is required", 400);
 
@@ -895,6 +932,37 @@ export async function POST(request: Request, context: RouteContext) {
   if (!setup) return jsonError("Conversation not found", 404);
   const { conversationId, runId } = setup;
   await addRunEvent(runId, "run.created", { inputText });
+
+  // Detached execution: the run keeps going after the response is sent, so it
+  // survives the client closing the tab and is not capped by the gateway's
+  // request timeout. The caller polls GET /api/agents/{agentId}/runs/{runId}.
+  //
+  // This is in-process, not queue-durable: a web restart still loses an
+  // in-flight run, which GET reconciles by failing runs stuck past
+  // MAX_DETACHED_RUN_MS. Moving execution to the worker needs executeRun and
+  // its web-only helpers lifted into a package; see BACKLOG.
+  if (runAsync) {
+    const detached = new AbortController();
+    const timeout = setTimeout(() => detached.abort(), MAX_DETACHED_RUN_MS);
+
+    void (async () => {
+      try {
+        const result = await executeRun({ runId, userId: user.id, resourceOwnerUserId: access.ownerUserId, spec: { ...version.spec, providerAccountId, model }, inputText, signal: detached.signal });
+        await recordRunOutcome({ conversationId, runId, userId: user.id, version, status: result.status, text: result.outputText });
+      } catch (error) {
+        const message = publicRunError(error);
+        logger.error("Detached agent run failed", { runId, error: message });
+        await recordRunOutcome({ conversationId, runId, userId: user.id, version, status: "failed", text: `Error: ${message}` }).catch(() => {
+          // The run row is already marked by executeRun; a failure to write the
+          // conversation message must not become an unhandled rejection.
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+    })();
+
+    return jsonOk({ runId, conversationId, status: "queued" }, { status: 202 });
+  }
 
   try {
     const result = await executeRun({ runId, userId: user.id, resourceOwnerUserId: access.ownerUserId, spec: { ...version.spec, providerAccountId, model }, inputText, signal: request.signal });
