@@ -4,14 +4,9 @@ import { hash, verify } from "@node-rs/argon2";
 import { getConfig } from "@packetchat/config";
 import { getSql, recordAuditEvent } from "@packetchat/db";
 
-export const refreshCookieName = "packetchat_refresh";
+export * from "./email";
 
-export type AuthEmailDelivery = {
-  provider: "manual" | "resend";
-  status: "manual" | "sent" | "failed";
-  id?: string;
-  message?: string;
-};
+export const refreshCookieName = "packetchat_refresh";
 
 export type AuthenticatedUser = {
   id: string;
@@ -358,57 +353,6 @@ export async function revokeSessionByRefreshToken(refreshToken: string): Promise
 
   const sessionId = rows[0]?.session_id;
   if (sessionId) await revokeSession(sessionId);
-}
-
-export async function sendAuthEmail(input: {
-  to: string;
-  kind: "invite" | "password_reset";
-  url: string;
-  expiresSeconds: number;
-}): Promise<AuthEmailDelivery> {
-  const config = getConfig();
-  if (config.EMAIL_PROVIDER !== "resend") return { provider: config.EMAIL_PROVIDER, status: "manual" };
-  if (!config.RESEND_API_KEY) return { provider: "manual", status: "manual", message: "RESEND_API_KEY is not configured" };
-
-  const isInvite = input.kind === "invite";
-  const subject = isInvite ? "Accept your PacketChat invite" : "Reset your PacketChat password";
-  const expiry = formatDuration(input.expiresSeconds);
-  const action = isInvite ? "accept your invite" : "reset your password";
-  const text = `Use this link to ${action}:\n\n${input.url}\n\nThis link expires in ${expiry}. If you did not expect this email, ignore it.`;
-  const html = `<p>Use this link to ${action}:</p><p><a href="${escapeHtml(input.url)}">${escapeHtml(subject)}</a></p><p>This link expires in ${escapeHtml(expiry)}. If you did not expect this email, ignore it.</p>`;
-
-  try {
-    const response = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.RESEND_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ from: config.EMAIL_FROM, to: input.to, subject, text, html })
-    });
-
-    if (!response.ok) return { provider: "resend", status: "failed", message: `Resend returned ${response.status}` };
-
-    const data = (await response.json().catch(() => null)) as { id?: string } | null;
-    return { provider: "resend", status: "sent", id: data?.id };
-  } catch {
-    return { provider: "resend", status: "failed", message: "Resend request failed" };
-  }
-}
-
-function formatDuration(seconds: number): string {
-  if (seconds % 86_400 === 0) return `${seconds / 86_400} day${seconds === 86_400 ? "" : "s"}`;
-  if (seconds % 3_600 === 0) return `${seconds / 3_600} hour${seconds === 3_600 ? "" : "s"}`;
-  return `${Math.ceil(seconds / 60)} minutes`;
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 }
 
 export function encryptJsonSecret(value: unknown): Record<string, string> {

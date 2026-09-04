@@ -9,6 +9,19 @@ const boolFromString = z
     return false;
   });
 
+// Unset and empty are both "not configured": an operator who comments out or
+// blanks an optional numeric setting should get the default, not a boot failure.
+const numberFromString = (fallback: number) =>
+  z
+    .union([z.number(), z.string()])
+    .optional()
+    .transform((value) => {
+      if (typeof value === "number") return value;
+      if (typeof value === "string" && value.trim() !== "") return Number(value);
+      return fallback;
+    })
+    .pipe(z.number().int().positive());
+
 const configSchema = z.object({
   APP_ENV: z.enum(["development", "test", "staging", "production"]).default("development"),
   APP_BASE_URL: z.string().url().default("http://localhost:3000"),
@@ -39,9 +52,16 @@ const configSchema = z.object({
   RATE_LIMIT_AUTH_PER_MINUTE: z.coerce.number().int().positive().default(20),
   RATE_LIMIT_CHAT_PER_MINUTE: z.coerce.number().int().positive().default(60),
   RATE_LIMIT_FILE_UPLOAD_PER_MINUTE: z.coerce.number().int().positive().default(20),
-  EMAIL_PROVIDER: z.enum(["manual", "resend"]).default("manual"),
+  EMAIL_PROVIDER: z.enum(["manual", "resend", "smtp"]).default("manual"),
   RESEND_API_KEY: z.string().optional().default(""),
-  EMAIL_FROM: z.string().optional().default("PacketChat <noreply@example.com>")
+  EMAIL_FROM: z.string().optional().default("PacketChat <noreply@example.com>"),
+  EMAIL_SEND_TIMEOUT_MS: numberFromString(10_000),
+  SMTP_HOST: z.string().optional().default(""),
+  SMTP_PORT: numberFromString(587),
+  SMTP_SECURE: boolFromString.default(false),
+  SMTP_USER: z.string().optional().default(""),
+  SMTP_PASSWORD: z.string().optional().default(""),
+  SMTP_REJECT_UNAUTHORIZED: boolFromString.default(true)
 });
 
 export type PacketChatConfig = z.infer<typeof configSchema>;

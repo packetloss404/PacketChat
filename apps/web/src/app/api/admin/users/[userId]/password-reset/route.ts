@@ -31,8 +31,16 @@ export async function POST(request: Request, context: { params: Promise<{ userId
   `;
 
   const resetUrl = `${config.APP_BASE_URL}/login?reset=${encodeURIComponent(token)}`;
+  // The reset row is already committed and resetUrl is returned whatever the mail
+  // result is, so a dead relay costs the operator a copy-paste, not the reset.
   const emailDelivery = await sendAuthEmail({ to: rows[0].email, kind: "password_reset", url: resetUrl, expiresSeconds: config.PASSWORD_RESET_TOKEN_TTL_SECONDS });
-  await recordAuditEvent({ actorUserId: admin.id, action: "user.updated", targetType: "user", targetId: userId, metadata: { operation: "password_reset_created", resetId: resetRows[0]!.id } });
+  await recordAuditEvent({
+    actorUserId: admin.id,
+    action: "user.updated",
+    targetType: "user",
+    targetId: userId,
+    metadata: { operation: "password_reset_created", resetId: resetRows[0]!.id, emailDelivery }
+  });
 
   return jsonOk({ resetId: resetRows[0]!.id, resetUrl, emailDelivery, email: rows[0].email });
 }

@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.787.0",
+    "@packetchat/agent-runtime": "file:../../packages/agent-runtime",
     "@packetchat/auth": "file:../../packages/auth",
     "@packetchat/config": "file:../../packages/config",
     "@packetchat/contracts": "file:../../packages/contracts",

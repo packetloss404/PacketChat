@@ -16,6 +16,7 @@
     "isolatedModules": true,
     "baseUrl": ".",
     "paths": {
+      "@packetchat/agent-runtime": ["packages/agent-runtime/src/index.ts"],
       "@packetchat/auth": ["packages/auth/src/index.ts"],
       "@packetchat/config": ["packages/config/src/index.ts"],
       "@packetchat/contracts": ["packages/contracts/src/index.ts"],

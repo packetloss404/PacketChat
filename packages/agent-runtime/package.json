@@ -1,0 +1,15 @@
+{
+  "name": "@packetchat/agent-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "build": "tsc -p tsconfig.json" },
+  "dependencies": {
+    "@packetchat/auth": "file:../auth",
+    "@packetchat/contracts": "file:../contracts",
+    "@packetchat/db": "file:../db",
+    "@packetchat/observability": "file:../observability",
+    "@packetchat/providers": "file:../providers"
+  }
+}

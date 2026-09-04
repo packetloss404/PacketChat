@@ -46,6 +46,14 @@ function formatDate(value: string | null) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 }
 
+// A failed send must not read like intentional manual delivery: the operator has
+// to know the mail never left before deciding to hand the URL over themselves.
+function deliveryMessage(delivery: EmailDelivery | undefined, sent: string, manual: string) {
+  if (delivery?.status === "sent") return sent;
+  if (delivery?.status === "failed") return `Email delivery failed via ${delivery.provider}${delivery.message ? ` (${delivery.message})` : ""}. ${manual}`;
+  return manual;
+}
+
 function formatDelivery(delivery: EmailDelivery) {
   if (delivery.status === "sent") return `${delivery.provider} sent`;
   if (delivery.status === "failed") return `${delivery.provider} failed${delivery.message ? ` (${delivery.message})` : ""}; manual URL available`;
@@ -127,7 +135,9 @@ export function AdminUsersClient() {
 
       if (data.inviteUrl) {
         setLinks((current) => [{ label: "Invite", email, url: data.inviteUrl!, delivery: data.emailDelivery }, ...current]);
-        setMessage(data.emailDelivery?.status === "sent" ? "Invite email sent. URL is also available below." : "Invite URL generated for manual delivery.");
+        setMessage(
+          deliveryMessage(data.emailDelivery, "Invite email sent. URL is also available below.", "Invite URL generated for manual delivery.")
+        );
       } else {
         setMessage("User created.");
       }
@@ -151,7 +161,9 @@ export function AdminUsersClient() {
         await authFetch(`/api/admin/users/${encodeURIComponent(user.id)}/password-reset`, { method: "POST" })
       );
       setLinks((current) => [{ label: "Password reset", email: data.email, url: data.resetUrl, delivery: data.emailDelivery }, ...current]);
-      setMessage(data.emailDelivery?.status === "sent" ? `Password reset email sent to ${data.email}.` : `Password reset URL generated for ${data.email}.`);
+      setMessage(
+        deliveryMessage(data.emailDelivery, `Password reset email sent to ${data.email}.`, `Password reset URL generated for ${data.email}.`)
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to create password reset");
     }

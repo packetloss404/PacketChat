@@ -58,7 +58,15 @@ export async function POST(request: Request) {
 
   const config = getConfig();
   const inviteUrl = `${config.APP_BASE_URL}/login?invite=${encodeURIComponent(token)}`;
+  // The invite row is already committed and inviteUrl is returned whatever the
+  // mail result is, so a dead relay costs the operator a copy-paste, not the invite.
   const emailDelivery = await sendAuthEmail({ to: email, kind: "invite", url: inviteUrl, expiresSeconds });
-  await recordAuditEvent({ actorUserId: admin.id, action: "user.created", targetType: "invite", targetId: created[0]!.id, metadata: { email } });
+  await recordAuditEvent({
+    actorUserId: admin.id,
+    action: "user.created",
+    targetType: "invite",
+    targetId: created[0]!.id,
+    metadata: { email, emailDelivery }
+  });
   return jsonOk({ inviteId: created[0]!.id, inviteUrl, emailDelivery });
 }
