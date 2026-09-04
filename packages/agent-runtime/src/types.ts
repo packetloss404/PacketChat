@@ -63,6 +63,14 @@ export type RunVersion = { agent_id: string; agent_name: string };
 
 export type RunFailureStatus = "failed" | "cancelled" | "timed_out";
 
+/**
+ * Outcome of claiming a queued run for execution. `status` is the run's current
+ * status when the claim was refused, and null when the run row is gone.
+ */
+export type RunClaim =
+  | { claimed: true }
+  | { claimed: false; status: string | null };
+
 export type RunExecutionResult =
   | { status: "completed"; outputText: string }
   | { status: "waiting_input"; approvalId: string; outputText: string };

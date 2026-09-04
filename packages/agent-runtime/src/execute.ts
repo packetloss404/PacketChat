@@ -146,6 +146,12 @@ async function runChildAgent(deps: AgentRunDeps, input: { parentRunId: string; r
   return { agentId: input.childAgentId, name: child.name, outputText: outputText.slice(0, 6000) };
 }
 
+// Hard cap on a single run, shared by every caller that owns a run without a
+// client waiting on it: the web route's in-process fallback and the queue
+// worker. A wedged provider call must not leave a run "running" forever, and the
+// single-run GET reconciles anything that outlives this by a margin.
+export const MAX_RUN_EXECUTION_MS = 15 * 60 * 1000;
+
 export async function executeRun(deps: AgentRunDeps, input: ExecuteRunInput): Promise<RunExecutionResult> {
   await deps.markRunRunning(input.runId);
   await deps.addRunEvent(input.runId, "run.started", {});

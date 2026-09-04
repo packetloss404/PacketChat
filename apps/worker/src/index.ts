@@ -1,9 +1,12 @@
-import { CLEANUP_SCHEDULE_ID, CLEANUP_SCHEDULE_PATTERN, createWorker, jobNames, queueNames, registerCleanupSchedule, type CleanupJob, type FileIngestionJob, type ProviderSyncJob } from "@packetchat/jobs";
+import { CLEANUP_SCHEDULE_ID, CLEANUP_SCHEDULE_PATTERN, createWorker, jobNames, queueNames, registerCleanupSchedule, type AgentRunJob, type CleanupJob, type FileIngestionJob, type ProviderSyncJob } from "@packetchat/jobs";
 import { assertKnownJobName } from "./job-router";
 import type { CleanupTarget } from "./cleanup";
 import { runCleanupJob } from "./cleanup-job";
+import { runAgentRunJob } from "./agent-run";
+import { createAgentRunJobDeps } from "./agent-run-deps";
 import { runProviderSync } from "./provider-sync";
 import { createProviderSyncDeps } from "./provider-sync-deps";
+import { MAX_RUN_EXECUTION_MS } from "@packetchat/agent-runtime";
 import { getConfig } from "@packetchat/config";
 import { checkDatabase, getSql } from "@packetchat/db";
 import { checkObjectStorage, createLocalEmbedding, downloadObject, extractSupportedText, LOCAL_EMBEDDING_VERSION, MAX_EXTRACTED_TEXT_CHARS } from "@packetchat/files";
@@ -122,10 +125,14 @@ function startHealthHeartbeat() {
   interval.unref();
 }
 
+// Every worker created, so SIGTERM can drain rather than sever in-flight jobs.
+const runningWorkers: Worker<never, never, never>[] = [];
+
 function attachFailureRecorder<DataType, ResultType, NameType extends string>(
   queueName: string,
   worker: Worker<DataType, ResultType, NameType>
 ) {
+  runningWorkers.push(worker as unknown as Worker<never, never, never>);
   worker.on("failed", (job, error) => {
     const message = error instanceof Error ? error.message : String(error);
     void recordJobFailure({
@@ -278,12 +285,25 @@ async function main() {
     await ingestFile(job.data);
   }));
 
-  attachFailureRecorder(queueNames.agentRun, createWorker(queueNames.agentRun, async (job) => {
+  attachFailureRecorder(queueNames.agentRun, createWorker<AgentRunJob>(queueNames.agentRun, async (job) => {
     assertKnownJobName(queueNames.agentRun, job.name, [jobNames.agentRun]);
-    logger.info("Agent run job received", { jobId: job.id, name: job.name });
-    // Agent runs still execute synchronously in the web API route. Async run
-    // execution is out of V1 scope; reject queued jobs rather than no-op.
-    throw new Error("agent-run async execution is not enabled in this build");
+    logger.info("Agent run job received", { jobId: job.id, name: job.name, runId: job.data?.runId });
+
+    // runAgentRunJob throws on everything that stops a run executing, so a
+    // failed run lands in job_failures and BullMQ retries it instead of
+    // completing as a success that ran nothing. The one quiet outcome is a run
+    // another executor already owns.
+    const result = await runAgentRunJob(job.data, createAgentRunJobDeps(), { maxRunMs: MAX_RUN_EXECUTION_MS });
+    if (!result.executed) {
+      logger.info("Agent run job skipped; the run is already claimed", {
+        jobId: job.id,
+        runId: job.data?.runId,
+        status: result.skippedStatus
+      });
+      return;
+    }
+
+    logger.info("Agent run job completed", { jobId: job.id, runId: job.data?.runId, status: result.status });
   }));
 
   attachFailureRecorder(queueNames.cleanup, createWorker<CleanupJob>(queueNames.cleanup, async (job) => {
@@ -320,7 +340,44 @@ main().catch((error) => {
   process.exit(1);
 });
 
-process.on("SIGTERM", () => {
-  logger.info("PacketChat worker received SIGTERM");
+// Agent runs can hold a worker for up to fifteen minutes. Exiting immediately
+// severed the job mid-flight and left its run row 'running' forever: the claim
+// only accepts 'queued'/'preparing', so the redelivered job matched nothing and
+// completed as a successful no-op. Closing the workers lets BullMQ finish or
+// properly release what is in flight.
+//
+// Draining is itself bounded, because a wedged provider call must not stop the
+// process from ever exiting - the container would then be SIGKILLed anyway, and
+// a stalled job is redelivered after its lock expires.
+const SHUTDOWN_DRAIN_MS = 20_000;
+
+let shuttingDown = false;
+
+async function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info("PacketChat worker shutting down", { signal, workers: runningWorkers.length });
+
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      Promise.allSettled(runningWorkers.map((worker) => worker.close())),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          logger.warn("Worker drain timed out; exiting anyway", { drainMs: SHUTDOWN_DRAIN_MS });
+          resolve();
+        }, SHUTDOWN_DRAIN_MS);
+      })
+    ]);
+  } catch (error) {
+    logger.error("Worker shutdown failed", { error: error instanceof Error ? error.message : String(error) });
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+
+  logger.info("PacketChat worker stopped", { signal });
   process.exit(0);
-});
+}
+
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));

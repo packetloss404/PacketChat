@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@packetchat/agent-runtime": "file:../../packages/agent-runtime",
     "@packetchat/config": "file:../../packages/config",
     "@packetchat/db": "file:../../packages/db",
     "@packetchat/files": "file:../../packages/files",

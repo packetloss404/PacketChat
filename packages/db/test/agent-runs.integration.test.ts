@@ -58,9 +58,23 @@ async function reconcile(runId: string) {
         error_code = coalesce(error_code, 'run_abandoned'),
         error_message = coalesce(error_message, 'Run exceeded the maximum duration or its process ended before completing.')
     where id = ${runId}
-      and status in ('queued', 'preparing', 'running')
-      and coalesce(started_at, created_at) < now() - ${`${MAX_RUN_AGE_MINUTES} minutes`}::interval
+      and status in ('preparing', 'running')
+      and started_at is not null
+      and started_at < now() - ${`${MAX_RUN_AGE_MINUTES} minutes`}::interval
     returning id, status, error_code
+  `;
+}
+
+// Mirrors claimRunForExecution in packages/agent-runtime/src/deps.ts.
+async function claim(runId: string) {
+  return db!.sql`
+    with claimed as (
+      update agent_runs set status = 'running', started_at = now()
+      where id = ${runId} and status in ('queued', 'preparing')
+      returning id
+    )
+    select (select count(*) from claimed)::integer as claimed,
+           (select status from agent_runs where id = ${runId} for share) as status
   `;
 }
 
@@ -91,16 +105,47 @@ test("an already-completed run is never rewritten", skipWithoutDatabase, async (
   assert.equal(current!.status, "completed", "a finished run must keep its outcome");
 });
 
+test("a queued run is never reaped for waiting in the queue", skipWithoutDatabase, async () => {
+  // A queued run has not started. Measuring from created_at timed out jobs for
+  // sitting in Redis while the worker was redeployed, and because the claim only
+  // accepts queued/preparing the job then came back to a run it could never
+  // execute - the caller was left with no assistant message at all.
+  const sql = db!.sql;
+  const { runId } = await seedRun("queued", 120);
+  await sql`update agent_runs set started_at = null where id = ${runId}`;
+
+  const reaped = await reconcile(runId);
+  assert.equal(reaped.length, 0, "queue wait must not time a run out");
+
+  const claimed = await claim(runId);
+  assert.equal(claimed[0]!.claimed, 1, "the run must still be claimable after a long queue wait");
+});
+
+test("the claim is race-safe and reports the settled status to the loser", skipWithoutDatabase, async () => {
+  const { runId } = await seedRun("queued", 1);
+  await db!.sql`update agent_runs set started_at = null where id = ${runId}`;
+
+  const first = await claim(runId);
+  assert.equal(first[0]!.claimed, 1, "the first claim wins");
+
+  const second = await claim(runId);
+  assert.equal(second[0]!.claimed, 0, "a second claim must not re-run the same run");
+  assert.equal(second[0]!.status, "running", "the loser must see the settled status, not a stale snapshot");
+});
+
 test("every non-terminal status is reachable by the reconcile predicate", skipWithoutDatabase, async () => {
-  for (const status of ["queued", "preparing", "running"]) {
+  for (const status of ["preparing", "running"]) {
     const { runId } = await seedRun(status, 45);
     const rows = await reconcile(runId);
     assert.equal(rows.length, 1, `${status} should reconcile`);
   }
 
   // waiting_input is deliberately excluded: it is blocked on a human, not
-  // abandoned, and reaping it would discard a pending approval.
-  const { runId } = await seedRun("waiting_input", 45);
-  const rows = await reconcile(runId);
-  assert.equal(rows.length, 0, "waiting_input must not be reaped");
+  // abandoned, and reaping it would discard a pending approval. queued is
+  // excluded too - it has not started, so there is nothing to time out.
+  for (const status of ["waiting_input", "queued"]) {
+    const { runId } = await seedRun(status, 45);
+    const rows = await reconcile(runId);
+    assert.equal(rows.length, 0, `${status} must not be reaped`);
+  }
 });

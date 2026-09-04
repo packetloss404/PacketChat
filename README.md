@@ -8,6 +8,7 @@ The frontend is a v3 LibreChat-style shell — three columns (left rail, main, c
 
 - Single deployment. V1 includes user-owned project workspaces, but not multi-tenant org / team workspaces.
 - Local users with admin-created accounts, invite links, and admin-triggered reset links.
+- Invite and password-reset links can be emailed. `EMAIL_PROVIDER` selects `manual` (the default: nothing is sent and the admin is handed the link), `smtp`, or `resend`. A send that fails is reported as failed and the link is still returned, so delivery never costs the invite. Configuration is in `docs/deployment.md`.
 - Self-service password change for the signed-in user (POST `/api/auth/change-password`), accessible from the account popover.
 - Forced password-reset accounts cannot mint normal sessions until the password is changed.
 - App-wide provider accounts, managed by admins at `/admin/providers` and browsed by everyone at `/providers`. Settings → API Keys links there instead of storing local provider keys.
@@ -94,9 +95,10 @@ The 48-px right rail expands a 320-px panel when an icon is selected. Each drawe
 - All auth endpoints: login, refresh, logout, invite accept, password reset complete, change password, /me.
 - All conversation, project, prompt, knowledge base, agent, agent draft, agent publish, agent run, approval, admin user, admin usage, admin audit, admin operations, and admin approval endpoints.
 - SSE streaming chat at `POST /api/chat`.
-- Agent publish, ACL sharing, and synchronous single-pass augmented agent runs, including file search, file context injection, artifact-format instructions, calculator, hardened URL fetch, HTTPS OpenAPI actions, bounded same-owner pre-run agent context, provider streaming, run steps/events/usage, approval checkpoints, user/admin approval queues, and chat-launched run transcript persistence. Viewers can inspect shared agents, while runners/editors/owners can run them. Scheduled runs, evaluations, and true multi-step tool loops are outside V1.
+- Agent publish, ACL sharing, and single-pass augmented agent runs — synchronous by default, or asynchronous with `{"async": true}` (or `Prefer: respond-async`), which returns `202` and hands the run to the `agent-run` worker queue — including file search, file context injection, artifact-format instructions, calculator, hardened URL fetch, HTTPS OpenAPI actions, bounded same-owner pre-run agent context, provider streaming, run steps/events/usage, approval checkpoints, user/admin approval queues, and chat-launched run transcript persistence. Viewers can inspect shared agents, while runners/editors/owners can run them. Scheduled runs, evaluations, and true multi-step tool loops are outside V1.
+- Invite and password-reset email delivery through SMTP or Resend. `manual` (the default) sends nothing. A configured provider that cannot send reports `failed` rather than passing as manual delivery, in the API response, on `/admin/users`, and in the audit event; the token and its link survive either way. There is no retry — re-issue the invite or reset to try again.
 - Runtime model use is checked against enabled model bindings for chat and agent runs.
-- Worker background queues: file ingestion, provider-sync model discovery, and scheduled retention cleanup. A provider-sync job is enqueued when an admin creates a provider account or runs a model sync; the worker registers a daily cleanup schedule on boot. Cadence, retention windows, the manual trigger, and known limitations are in `docs/runbooks/worker-queues.md`.
+- Worker background queues: file ingestion, provider-sync model discovery, queue-durable agent runs, and scheduled retention cleanup. A provider-sync job is enqueued when an admin creates a provider account or runs a model sync; the worker registers a daily cleanup schedule on boot. Cadence, retention windows, the manual trigger, and known limitations are in `docs/runbooks/worker-queues.md`.
 - Provider-account toggles persist via the existing `providers.updateAccount` path (account-level granularity; the backend has no per-binding toggle yet).
 - Speech Synthesis voice picker enumerates real `window.speechSynthesis` voices; chat reply playback is not wired yet.
 - Theme toggle, font-size slider, and most preferences in `/settings` write through to `localStorage` under `packetchat.settings.<section>.<key>`.
@@ -113,16 +115,14 @@ The 48-px right rail expands a 320-px panel when an icon is selected. Each drawe
 - Per-binding model toggle — not exposed by the backend; account-level toggle is what fires.
 - Code interpreter and MCP tools — visible in the builder as unavailable until their runtimes are configured.
 
-**Deliberately not wired:**
-
-- Asynchronous agent runs — agent runs execute synchronously in the web API. Nothing enqueues an `agent-run` job, and the worker's `agent-run` handler rejects any job it receives rather than logging a success-like no-op.
-
 ## Deployment Notes
 
 - Only the `web` service should be exposed to your reverse proxy.
 - Postgres, Redis, and MinIO stay private on the Compose network.
 - Use immutable image tags for pilot / prod.
-- Treat Compose as the supported V1 deployment shape. Kubernetes, multi-region HA, external managed databases, SSO, email-delivered invites/password resets, and Google provider runtime support are not included in the V1 promise.
+- Treat Compose as the supported V1 deployment shape. Kubernetes, multi-region HA, external managed databases, SSO, and Google provider runtime support are not included in the V1 promise.
+- Email delivery is off by default (`EMAIL_PROVIDER=manual`). Before relying on emailed invites or resets, set the SMTP or Resend credentials and a correct `APP_BASE_URL` — the link in the message is built from it — and send one invite to a real mailbox to confirm the response reports `sent`.
+- Asynchronous agent runs are executed by `worker`. With Redis unreachable the run falls back to executing inside `web` and is lost if that process restarts, and a run that sits queued longer than 20 minutes is marked `timed_out` by the next status poll and is not executed afterwards. Keep `worker` running, or use synchronous runs.
 - The worker runs a daily retention cleanup: job failures 30 days, terminal agent runs 90 days, orphan attachments 7 days. An orphan attachment's object is deleted from MinIO before its row, so a failed object delete leaves the row in place to retry rather than stranding an unidentifiable object. Back up Postgres before the first worker restart that carries this change — the first pass deletes whatever backlog already exists.
 - Run a restore drill before calling a deployment production-ready.
 - Use `npm run backup`, `npm run backup:postgres`, or `npm run backup:minio` for local Compose backup artifacts before upgrades.

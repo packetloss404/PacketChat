@@ -49,6 +49,8 @@ COOKIE_SECURE=false
 
 For local-only testing, `APP_BASE_URL=http://localhost:3000` and `COOKIE_SECURE=false` are expected.
 
+Email is off by default: `EMAIL_PROVIDER=manual` sends nothing and hands invite and reset links back in the API response. Set `smtp` or `resend` and their settings only when you want mail delivered locally; `docs/deployment.md` lists every value.
+
 ## Start The Stack
 
 Install dependencies once:
@@ -178,6 +180,8 @@ curl -i -X POST http://localhost:3000/api/admin/users \
 Omit `password` to generate an invite URL instead. Provider keys are app-wide, so a new user
 immediately sees every enabled provider account without any per-user setup.
 
+The response also carries `emailDelivery`. With the default `EMAIL_PROVIDER=manual` it reads `{"provider":"manual","status":"manual"}` and nothing was sent; with `smtp` or `resend` the status is `sent` or `failed`, and a `failed` status carries a redacted reason. The invite URL is returned either way, so a broken relay never costs the invite. The same applies to `POST /api/admin/users/{userId}/password-reset`.
+
 ## Health Checks
 
 Check web liveness:
@@ -273,6 +277,24 @@ See `docs/release-readiness.md` for the concise operator checklist.
 The `/agents` page supports creating single-pass augmented agents, editing drafts, publishing immutable versions, and starting manual runs for published agents when the agent spec has a valid provider account and model. Manual and chat-launched runs can use simple knowledge lookup, calculator, URL fetch, provider streaming, persisted run events, and transcript persistence when launched from chat.
 
 Run history, trace steps/events, usage summaries, and approval checkpoints are wired for the current single-pass runtime. Scheduled runs, evaluations, and true multi-step tool loops are outside the V1 scope and should not be promised as wired behavior.
+
+A run can also be started asynchronously. Add `"async": true` (or send `Prefer: respond-async`) and the request returns `202` immediately with a run id, and the run is executed by the `worker` service:
+
+```shell
+curl -i -X POST http://localhost:3000/api/agents/AGENT_ID_HERE/runs \
+  -H "Authorization: Bearer ACCESS_TOKEN_HERE" \
+  -H "Content-Type: application/json" \
+  -d '{"input":"Summarize the latest release notes","async":true}'
+```
+
+Poll the run for its status, steps, events, and usage:
+
+```shell
+curl -i http://localhost:3000/api/agents/AGENT_ID_HERE/runs/RUN_ID_HERE \
+  -H "Authorization: Bearer ACCESS_TOKEN_HERE"
+```
+
+The `worker` service must be running for an async run to execute; with Redis unreachable the run falls back to executing inside `web` and does not survive a restart. Polling a run that has sat queued for more than 20 minutes marks it `timed_out`, and it is not executed afterwards. Synchronous runs (the default, no `async` flag) are unaffected.
 
 ## Stop The Stack
 

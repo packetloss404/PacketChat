@@ -84,7 +84,7 @@ After authenticated smoke passes, use `docs/release-readiness.md` for the concis
 
 These checks still require external credentials, provider configuration, or email delivery and are intentionally not part of the default smoke script:
 
-- Admin bootstrap and invite/password-reset email delivery through Resend.
+- Admin bootstrap, and invite/password-reset email delivery through SMTP or Resend. With the default `EMAIL_PROVIDER=manual` nothing is sent and the link comes back in the response, which is what the automated checks exercise.
 - Provider account creation with real provider credentials.
 - `POST /api/providers/{providerId}/test` against a live provider endpoint.
 - `POST /api/providers/{providerId}/models` when the provider requires live credentials.
@@ -105,6 +105,7 @@ These checks still require external credentials, provider configuration, or emai
 - Redis readiness remains `ok` after login and chat activity.
 - Creating a provider account or running a model sync from `/admin/providers` enqueues a `sync-provider` job; `worker` logs `Provider sync job completed` and no new job failure appears.
 - Worker logs remain clean during provider sync or queued work.
+- Starting an agent run with `{"async": true}` returns `202` with a run id; `worker` logs `Agent run job received` and then `Agent run job completed`, and `GET /api/agents/{agentId}/runs/{runId}` reaches a terminal status. A run still `queued` after the worker has been idle means the queue is not being consumed - it is marked `timed_out` once it is 20 minutes old.
 - `/admin/operations` shows provider account status, model binding status, knowledge ingestion status, seven-day agent run status, and recent job failures.
 
 ## Shutdown

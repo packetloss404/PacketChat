@@ -15,16 +15,16 @@ Remaining acceptance notes:
 
 Agent runs can now be started detached: `POST /api/agents/{agentId}/runs` with `{"async": true}` (or `Prefer: respond-async`) returns `202` with a run id immediately and the run continues after the response, so it survives the caller closing the tab and is not capped by the gateway's request timeout. Callers poll `GET /api/agents/{agentId}/runs/{runId}`, which reconciles runs stranded past 20 minutes to `timed_out`.
 
-Execution is still in-process, not queue-durable: a web restart loses an in-flight run, and the reconcile-on-read is what stops it hanging in `running` forever. The `agent-run` queue remains deliberately unwired.
+Execution is now queue-durable. `executeRun` lives in `@packetchat/agent-runtime`, the route enqueues a `run-agent` job, and the worker rebuilds the run from `agent_runs` plus the agent version it pinned. The run row records the provider account and model it was resolved against (`resolved_provider_account_id`, `resolved_model`), so the worker never re-resolves a binding the caller did not ask for. Ownership is taken by a single conditional update out of `queued`, so a BullMQ retry or a redelivered stalled job cannot execute the same run twice. When the enqueue fails, `web` falls back to executing the run in its own process behind the same claim.
 
-The blocker is placement, not design: `executeRun` and its helpers live in `apps/web/src/app/api/agents/[agentId]/runs/route.ts` (~1000 lines) and depend on `apps/web/src/lib/{providers,usage,agent-access}`. The worker cannot import from `apps/web`.
+Remaining acceptance notes:
 
-Acceptance notes:
-
-- Lift `executeRun` and the web-only helpers it needs into a package both apps can import.
-- The worker executes `agent-run` jobs, so a run survives a web restart and gets BullMQ retries.
-- Cancellation and the approval-resume path work across process boundaries, not just within one.
-- Reconcile-on-read stays as the backstop, but should stop being the only thing preventing stuck runs.
+- Cancellation works across process boundaries: a caller can stop a run the worker owns, not only one running in the process that answered them.
+- The approval-resume path resumes a `waiting_input` run through the queue rather than only within the process that paused it.
+- A worker that dies mid-run still leaves the run stranded until reconcile-on-read; a heartbeat or a visibility timeout would shorten that from 20 minutes.
+- The in-process fallback is not durable. A run that took it is lost on a `web` restart, exactly as every async run was before.
+- A queued run is aged from `created_at` by the 20-minute reconcile in the single-run GET, so queue time counts against the same window as execution time. A worker outage or a deep backlog therefore lets a caller's own status poll mark its still-valid run `timed_out`; the claim then refuses it, the worker completes the job as skipped, and nothing writes the assistant message, so the conversation keeps the question and never gets an answer. A queued run needs its own clock, and the reconcile should write the outcome message that both executing paths write.
+- A published spec can carry a non-uuid `providerAccountId` — the draft writer only checks that it is a string — which now fails run creation with an unhandled `500` and no run row, because `0006` made it a `uuid` column. Validate it where the draft is written, and shape the insert failure as a `400`.
 
 ## Artifacts and Chat Files
 
@@ -40,12 +40,12 @@ Acceptance notes:
 
 ## Worker Queues and Runtime Jobs
 
-Provider sync and cleanup were wired on 2026-08-31. Both handlers now drive their DI-ready logic modules through real database adapters, provider sync has producers on provider-account create and admin model sync, and cleanup runs on a worker-registered daily schedule with concrete retention windows. Agent run is unchanged and remains synchronous-only by design.
+Provider sync and cleanup were wired on 2026-08-31. Both handlers now drive their DI-ready logic modules through real database adapters, provider sync has producers on provider-account create and admin model sync, and cleanup runs on a worker-registered daily schedule with concrete retention windows. Agent run was wired on 2026-09-04: asynchronous runs are enqueued by the runs route and executed by the worker, and the risks that came with it are listed under "Queue-Durable Agent Runs" above.
 
 Acceptance notes:
 
 - Done: Provider sync jobs execute real model discovery or are removed from operator-facing docs. `apps/worker/src/provider-sync-deps.ts` lists models through the provider adapters and upserts `model_catalog` / `model_account_bindings`; the handler rethrows on failure so the job retries and is recorded in `job_failures`.
-- Agent run jobs either execute asynchronously with persisted status or remain synchronous-only with no dead queue path.
+- Done: Agent run jobs either execute asynchronously with persisted status or remain synchronous-only with no dead queue path. The `agent-run` handler executes real runs through `@packetchat/agent-runtime`; status, steps, events, and usage are persisted as they are on the synchronous path, and there is no longer a queue that only rejects.
 - Done: Cleanup jobs have concrete retention targets and observable outcomes. Job failures 30 days, terminal agent runs 90 days, orphan attachments 7 days, swept daily at 03:15; each pass logs the selected targets, per-target deleted counts, and cutoffs. Operator detail is in `docs/runbooks/worker-queues.md`.
 - Done: Unsupported job names fail loudly instead of logging success-like no-ops. Every handler calls `assertKnownJobName`, and an unknown cleanup target or an out-of-range `olderThanDays` fails the job before any delete rather than cleaning nothing quietly.
 
@@ -104,8 +104,10 @@ _Findings from a 2026-07-17 code audit. The worker-queue wiring items were actio
   - Done 2026-08-31: `createProviderSyncDeps()` (apps/worker/src/provider-sync-deps.ts) feeds `runProviderSync()`, with producers on `POST /api/providers` and `POST /api/providers/{providerId}/models`. `runProviderSync` reports failure instead of throwing, so the handler rethrows on `!ok` and the job retries and lands in `job_failures`.
 - **[low/M]** cleanup worker throws 'not enabled' (index.ts:272)
   - Done 2026-08-31: `createCleanupDeps()` (apps/worker/src/cleanup-deps.ts) feeds `runCleanup()` through `runCleanupJob()`, and the worker upserts a daily `run-cleanup` schedule at 03:15 on every boot. Retention: job failures 30 days, terminal agent runs 90 days, orphan attachments 7 days.
+- **[low/M]** agent-run worker throws 'not enabled' instead of executing (index.ts:281)
+  - Done 2026-09-04: `createAgentRunJobDeps()` (apps/worker/src/agent-run-deps.ts) feeds `runAgentRunJob()` (apps/worker/src/agent-run.ts), with the producer on `POST /api/agents/{agentId}/runs` when the caller asks for an async run. The handler throws on everything that stops a run executing, so the job lands in `job_failures` and retries; the one quiet outcome is a run another executor already claimed. Migration `0006` persists the resolved provider account and model on the run row so the worker executes the binding the caller was promised.
 - **[low/L]** Rollup: wire the three unwired workers to their sibling logic modules
-  - Done 2026-08-31 for provider-sync and cleanup. agent-run was not touched and stays synchronous-only by design. `CleanupJob.target` was renamed from `agent-runs` to `completed-runs` so the queue payload matches `CleanupTarget`, and the worker carries a compile-time assertion that the two unions stay the same set. Remaining risks are listed under "Worker Queues and Runtime Jobs" above.
+  - Done 2026-08-31 for provider-sync and cleanup, and 2026-09-04 for agent-run. `CleanupJob.target` was renamed from `agent-runs` to `completed-runs` so the queue payload matches `CleanupTarget`, and the worker carries a compile-time assertion that the two unions stay the same set. Remaining risks are listed under "Worker Queues and Runtime Jobs" above.
 
 ### Later / deferred
 
@@ -118,5 +120,4 @@ _Findings from a 2026-07-17 code audit. The worker-queue wiring items were actio
 
 ### Known limitations (deliberate — not planned)
 
-- agent-run worker throws 'not enabled' (index.ts:263)
 - Cloud sync UI is a localStorage draft, backend not wired

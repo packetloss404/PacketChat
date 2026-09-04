@@ -1,15 +1,38 @@
 # Worker Queues Runbook
 
-The `worker` service consumes four BullMQ queues backed by `REDIS_URL`. Three do real work; one is deliberately inert.
+The `worker` service consumes four BullMQ queues backed by `REDIS_URL`.
 
 | Queue | Job name | Producer | Behavior |
 | --- | --- | --- | --- |
 | `file-ingestion` | `ingest-file` | knowledge document upload | Downloads the object, extracts text, chunks it, and writes `knowledge_chunks`. |
 | `provider-sync` | `sync-provider` | `POST /api/providers` (account created) and `POST /api/providers/{providerId}/models` (admin model sync) | Lists models from the provider and upserts `model_catalog` and `model_account_bindings`. |
 | `cleanup` | `run-cleanup` | the worker's own daily scheduler | Deletes rows past their retention window. |
-| `agent-run` | `run-agent` | none | Intentionally not wired. Agent runs execute synchronously in `web`. The handler throws `agent-run async execution is not enabled in this build` so a stray job fails visibly instead of disappearing. |
+| `agent-run` | `run-agent` | `POST /api/agents/{agentId}/runs` with `{"async": true}` (or `Prefer: respond-async`) | Rebuilds the run from its row, claims it, and executes it through `@packetchat/agent-runtime`. |
 
 Every handler validates the job name and rejects anything it does not recognize.
+
+## Agent Runs
+
+A `run-agent` job carries only `runId`, `agentId` and `resourceOwnerUserId`. Everything else is read back from `agent_runs` and the agent version the run pinned, so a job cannot drift from what the caller was told. `resourceOwnerUserId` is the **agent's** owner, which is who knowledge bases and child agents resolve against; the caller who started the run is `agent_runs.owner_user_id`, and for a shared agent those are different people. The worker refuses a job whose owner disagrees with the agent row.
+
+The provider account and model are read from `agent_runs.resolved_provider_account_id` / `resolved_model`, written when the run was created. The worker never re-resolves them: the default provider account can change between enqueue and execution, and a run must not quietly execute against a different model than the caller asked for. A run without a resolved binding is failed, not guessed at.
+
+Execution is claimed with a single conditional update from `queued`/`preparing` to `running`, so a BullMQ retry, a redelivered stalled job, or the web fallback below cannot run the same run twice. A job that loses the claim completes quietly and logs the status it found; a run that already failed is not re-executed by a retry, because re-running it would repeat paid provider calls. Everything else that stops a run executing throws, so it lands in `job_failures` and is retried.
+
+Runs are capped at 15 minutes. A worker that dies mid-run leaves the run in `running`, which `GET /api/agents/{agentId}/runs/{runId}` reconciles to `timed_out` once it is older than 20 minutes.
+
+If the enqueue fails - Redis down, or the five-second enqueue timeout - `web` executes the run in its own process instead of failing the caller. That path takes the same claim first, because a timed-out enqueue can still have landed the job. The fallback run is not durable: it dies with the `web` process, and the caller is not told which path their run took.
+
+Jobs retry 3 times with exponential backoff starting at 5 seconds, and every failed attempt is recorded in `job_failures`. A retry does not re-execute a run that already reached a terminal status - the claim refuses it - so a run that failed inside the executor is failed once and the remaining attempts complete quietly.
+
+Log lines to follow one run through the worker:
+
+- `Agent run job received` - the job was dequeued, with its `runId`.
+- `Agent run job completed` - the run executed, with the status it reached (`completed` or `waiting_input`).
+- `Agent run job skipped; the run is already claimed` - the run was not claimable. The logged `status` says why: `running` means another executor holds it, and `failed` / `timed_out` / `cancelled` mean it will never execute now.
+- `Agent run enqueue failed; running in process instead` - logged by `web` at warn level. Every one of these is a run the queue never saw.
+
+A run's own history is in `GET /api/agents/{agentId}/runs/{runId}` (status, steps, events, usage), and the seven-day rollup on `/admin/operations` shows failed and timed-out runs alongside job failures.
 
 ## Provider Sync
 
@@ -77,7 +100,7 @@ Rules the job enforces before deleting anything:
 
 ## When A Job Fails
 
-All three working queues retry 3 times with exponential backoff starting at 5 seconds. After the final attempt the failure is written to `job_failures` with the queue name, job name, error message, and payload, and appears in the job-failure rollup on `/admin/operations`.
+All four queues retry 3 times with exponential backoff starting at 5 seconds. Each failed attempt — not only the last — is written to `job_failures` with the queue name, job name, error message, and payload, and appears in the job-failure rollup on `/admin/operations`. The payload carries `attemptsMade`, which is how a retried job is told apart from one that failed once.
 
 Cleanup deletes are idempotent, so a retry after a partial pass is safe: an already-deleted id matches nothing.
 
@@ -91,5 +114,9 @@ Back up Postgres before the worker restart that carries this change — `npm run
 
 - Orphan attachment cleanup deletes the MinIO object before the row. The row carries the only copy of `bucket`/`object_key`, so removing it first would strand the object unidentifiably. If the object delete fails the row is kept and logged at warn level, and the next run retries it — expect `Cleanup left an attachment row in place` in the worker log when object storage is unavailable.
 - `model_account_bindings` has no unique constraint on `(provider_account_id, model_catalog_id)`. Two provider-sync jobs for the same account that overlap — creating an account and immediately running a model sync, for example — can both read an empty binding set and both insert. If `/providers` lists a model twice for one account, delete the extra binding.
-- The queue's Redis connection retries forever and queues commands while offline, so with Redis unreachable an enqueue can block instead of failing fast. The create-provider and model-sync requests can hang until the proxy times out even though their database writes already committed. After a Redis outage, check `/admin/providers` for duplicate accounts created by a retried request.
+- The queue's Redis connection retries forever and buffers commands while offline, so an enqueue against an unreachable Redis never settles on its own. Every producer is bounded at five seconds (`ENQUEUE_TIMEOUT_MS`) so the request fails fast instead, but each one then degrades differently: provider sync logs a warning and the account is still created, a file upload marks the document and attachment `failed` at the enqueue step, and an async agent run executes inside `web` instead. After a Redis outage, expect knowledge documents that need re-uploading and agent runs that were never durable.
 - The model-sync route refreshes models synchronously and also enqueues a background sync, so a manual refresh makes two model-listing calls to the provider a few seconds apart. The background job cannot undo the route's work, but it does double the outbound calls on a rate-limited provider.
+- A queued run is aged from `created_at` by the 20-minute reconcile in the single-run GET, so time spent waiting in the queue counts against the same window as time spent executing. If the worker is down or backlogged for longer than that, the caller polling the run they were told to poll flips it to `timed_out` with `error_code` `run_abandoned`; the worker then cannot claim it, logs `Agent run job skipped`, and completes the job, so nothing retries it and the conversation is left with the question and no answer. Watch `agent-run` queue depth, and re-run anything that timed out without ever starting - `started_at` is null on those rows.
+- Cancelling a run and resuming a `waiting_input` run still work only inside the process that owns the run, so neither reaches a run the worker is executing. The reconcile deliberately spares `waiting_input`, so such a run waits indefinitely rather than being failed.
+- A published agent spec whose `providerAccountId` is not a UUID now fails run creation with an unhandled `500` and no run row, because the value is written to `agent_runs.resolved_provider_account_id`, a `uuid` column, while the draft writer only checks that it is a string. Fix the agent's provider account in the builder and republish.
+- Runs created before migration `0006` have no resolved provider binding. If one is ever enqueued the job fails with `has no resolved provider binding to execute` rather than re-resolving against whatever the default account is today.

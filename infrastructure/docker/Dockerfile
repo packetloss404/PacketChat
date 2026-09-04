@@ -28,6 +28,8 @@ RUN for name in agent-runtime auth config contracts db files jobs observability 
   && sed -i 's/from "\.\/provider-http"/from "\.\/provider-http.js"/' packages/providers/dist/index.js \
   && sed -i 's/from "\.\/job-router"/from "\.\/job-router.js"/' apps/worker/dist/apps/worker/src/index.js \
   && sed -i 's/from "\.\/cleanup-job"/from "\.\/cleanup-job.js"/' apps/worker/dist/apps/worker/src/index.js \
+  && sed -i 's/from "\.\/agent-run"/from "\.\/agent-run.js"/' apps/worker/dist/apps/worker/src/index.js \
+  && sed -i 's/from "\.\/agent-run-deps"/from "\.\/agent-run-deps.js"/' apps/worker/dist/apps/worker/src/index.js \
   && sed -i 's/from "\.\/provider-sync"/from "\.\/provider-sync.js"/' apps/worker/dist/apps/worker/src/index.js \
   && sed -i 's/from "\.\/provider-sync-deps"/from "\.\/provider-sync-deps.js"/' apps/worker/dist/apps/worker/src/index.js \
   && sed -i 's/from "\.\/cleanup"/from "\.\/cleanup.js"/' apps/worker/dist/apps/worker/src/cleanup-job.js \

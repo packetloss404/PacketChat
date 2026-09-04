@@ -13,7 +13,13 @@ export type ProviderSyncJob = {
 export type AgentRunJob = {
   runId: string;
   agentId: string;
-  ownerUserId: string;
+  // The AGENT's owner, not the caller who started the run. The executor resolves
+  // knowledge bases and child agents against this id, and an agent shared
+  // through agent_permissions is run by someone who owns none of them; passing
+  // the caller here would resolve against the wrong user's resources. The
+  // caller is already on the run row as agent_runs.owner_user_id, which is what
+  // the run's conversation message is attributed to.
+  resourceOwnerUserId: string;
 };
 
 // The concrete retention targets the worker knows how to clean. Spelled exactly

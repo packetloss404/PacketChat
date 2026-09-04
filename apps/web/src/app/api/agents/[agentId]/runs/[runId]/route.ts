@@ -20,6 +20,13 @@ type AgentRunUsageRow = {
 
 // Slightly above the executor's own 15-minute cap so a run that is genuinely
 // still working is never reaped out from under itself.
+//
+// The clock is started_at, never created_at, and 'queued' is excluded: a queued
+// run has not started, so measuring from created_at would time out a job for
+// sitting in Redis while the worker was redeployed or busy. Reaping it that way
+// was permanent - the worker's claim only accepts 'queued'/'preparing', so the
+// job came back, matched nothing, and completed as a successful no-op, leaving
+// the caller with no assistant message at all.
 const MAX_RUN_AGE_MINUTES = 20;
 
 export async function GET(request: Request, context: RouteContext) {
@@ -49,8 +56,9 @@ export async function GET(request: Request, context: RouteContext) {
         error_code = coalesce(error_code, 'run_abandoned'),
         error_message = coalesce(error_message, 'Run exceeded the maximum duration or its process ended before completing.')
     where id = ${runId}
-      and status in ('queued', 'preparing', 'running')
-      and coalesce(started_at, created_at) < now() - ${`${MAX_RUN_AGE_MINUTES} minutes`}::interval
+      and status in ('preparing', 'running')
+      and started_at is not null
+      and started_at < now() - ${`${MAX_RUN_AGE_MINUTES} minutes`}::interval
     returning id, agent_id, agent_version_id, status, input, started_at, ended_at, error_code, error_message, created_at
   `;
   const run = stranded[0] ?? runRows[0];

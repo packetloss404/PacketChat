@@ -38,6 +38,10 @@ services:
       - packetchat
 
   worker:
+    # An agent run can hold the worker for up to 15 minutes and shutdown drains
+    # for up to 20s. Docker's 10s default would SIGKILL mid-drain, which is the
+    # exact severing the graceful handler exists to avoid.
+    stop_grace_period: 30s
     build:
       context: ../..
       dockerfile: infrastructure/docker/Dockerfile

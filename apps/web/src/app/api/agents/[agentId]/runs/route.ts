@@ -2,17 +2,25 @@ import { authenticateRequest } from "@packetchat/auth";
 import { getSql } from "@packetchat/db";
 import { logger } from "@packetchat/observability";
 import {
+  claimRunForExecution,
   createAgentRunDeps,
   executeRun,
+  MAX_RUN_EXECUTION_MS,
   publicRunError,
   recordRunOutcome,
   textMessageContent,
   textOrNull,
   type AgentSpec
 } from "@packetchat/agent-runtime";
+import { enqueueAgentRunJob } from "@packetchat/jobs";
 import { jsonError, jsonOk } from "../../../../../lib/http";
 import { getAgentAccess } from "../../../../../lib/agent-access";
+import { dispatchAgentRun } from "../../../../../lib/agent-run-dispatch";
 import { agentRateLimit } from "../../../../../lib/rate-limit";
+
+// resolved_provider_account_id is a uuid column; agent specs are not validated
+// as uuids when they are written, so the value is checked before it reaches SQL.
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type RouteContext = { params: Promise<{ agentId: string }> };
 
@@ -63,10 +71,6 @@ function titleFromText(text: string) {
   return normalized ? normalized.slice(0, 80) : "New chat";
 }
 
-// A detached run is capped so a wedged provider call cannot leave a run
-// "running" forever. GET reconciles anything that outlives this.
-const MAX_DETACHED_RUN_MS = 15 * 60 * 1000;
-
 export async function POST(request: Request, context: RouteContext) {
   const user = await authenticateRequest(request.headers);
   if (!user) return jsonError("Unauthenticated", 401);
@@ -96,6 +100,13 @@ export async function POST(request: Request, context: RouteContext) {
   const providerAccountId = textOrNull(version.spec.providerAccountId);
   const model = textOrNull(version.spec.model);
   if (!providerAccountId) return jsonError("Agent spec is missing providerAccountId. Save and publish a provider account before running.", 400);
+  // resolved_provider_account_id is a uuid column and this value comes from an
+  // agent spec, which the draft writer does not constrain. Rejecting here keeps
+  // a malformed spec a 400 rather than a 22P02 that aborts the insert - which
+  // would roll back the conversation and the user's own message with it.
+  if (!UUID_PATTERN.test(providerAccountId)) {
+    return jsonError("Agent spec has an invalid providerAccountId. Re-select the provider account and publish again.", 400);
+  }
   if (!model) return jsonError("Agent spec is missing model. Save and publish a model before running.", 400);
 
   const requestedConversationId = textOrNull(body?.conversationId);
@@ -137,17 +148,27 @@ export async function POST(request: Request, context: RouteContext) {
       `;
     }
 
+    // An async run is 'queued' until an executor claims it, so the reconcile
+    // clock starts when the run actually begins rather than when it was created.
+    // The synchronous path still inserts 'running': it begins immediately.
+    //
+    // The resolved provider account and model are persisted because they are
+    // resolved per request. Nothing else records them, and a worker that
+    // re-resolved them could run the agent against a different model than this
+    // caller asked for.
     const runRows = await tx<{ id: string }[]>`
-      insert into agent_runs (owner_user_id, agent_id, agent_version_id, conversation_id, trigger_type, status, input, resolved_manifest)
+      insert into agent_runs (owner_user_id, agent_id, agent_version_id, conversation_id, trigger_type, status, input, resolved_manifest, resolved_provider_account_id, resolved_model)
       values (
         ${user.id},
         ${version.agent_id},
         ${version.version_id},
         ${conversationId},
         ${conversationId ? "chat" : "manual"},
-        'running',
+        ${runAsync ? "queued" : "running"},
         ${JSON.stringify({ text: inputText })}::jsonb,
-        ${JSON.stringify(version.manifest)}::jsonb
+        ${JSON.stringify(version.manifest)}::jsonb,
+        ${providerAccountId},
+        ${model}
       )
       returning id
     `;
@@ -157,23 +178,31 @@ export async function POST(request: Request, context: RouteContext) {
   if (!setup) return jsonError("Conversation not found", 404);
   const { conversationId, runId } = setup;
   // Authorization is done; from here the executor only needs an owner id, so it
-  // runs on the same ports the queue worker will use.
+  // runs on the same ports the queue worker uses.
   const deps = createAgentRunDeps();
   await deps.addRunEvent(runId, "run.created", { inputText });
 
-  // Detached execution: the run keeps going after the response is sent, so it
+  // Async execution: the run keeps going after the response is sent, so it
   // survives the client closing the tab and is not capped by the gateway's
   // request timeout. The caller polls GET /api/agents/{agentId}/runs/{runId}.
   //
-  // This is in-process, not queue-durable: a web restart still loses an
-  // in-flight run, which GET reconciles by failing runs stuck past
-  // MAX_DETACHED_RUN_MS. executeRun now lives in @packetchat/agent-runtime, so
-  // what remains is wiring the worker's agent-run handler to it; see BACKLOG.
+  // The queue owns it whenever Redis is reachable, so the run survives a web
+  // restart too. When the enqueue fails the run executes in this process
+  // instead - degrading beats refusing - which is durable only until this
+  // process ends; GET reconciles whatever is left stranded past the cap.
   if (runAsync) {
-    const detached = new AbortController();
-    const timeout = setTimeout(() => detached.abort(), MAX_DETACHED_RUN_MS);
+    const detachedRun = async () => {
+      // A timed-out enqueue can still have landed the job, so ownership is taken
+      // the same way the worker takes it. Losing the claim means the worker has
+      // the run and executing it here as well would duplicate it.
+      const claim = await claimRunForExecution(runId);
+      if (!claim.claimed) {
+        logger.info("Skipping in-process agent run; the run is already claimed", { runId, status: claim.status });
+        return;
+      }
 
-    void (async () => {
+      const detached = new AbortController();
+      const timeout = setTimeout(() => detached.abort(), MAX_RUN_EXECUTION_MS);
       try {
         const result = await executeRun(deps, { runId, resourceOwnerUserId: access.ownerUserId, spec: { ...version.spec, providerAccountId, model }, inputText, signal: detached.signal });
         await recordRunOutcome({ conversationId, runId, userId: user.id, version, status: result.status, text: result.outputText });
@@ -187,7 +216,18 @@ export async function POST(request: Request, context: RouteContext) {
       } finally {
         clearTimeout(timeout);
       }
-    })();
+    };
+
+    await dispatchAgentRun({
+      enqueue: () => enqueueAgentRunJob({ runId, agentId: version.agent_id, resourceOwnerUserId: access.ownerUserId }),
+      executeDetached: () => {
+        void detachedRun().catch((error) => {
+          // Only the claim itself can reach here; everything after it is already
+          // handled above. An unhandled rejection would take the process down.
+          logger.error("Detached agent run could not start", { runId, error: error instanceof Error ? error.message : String(error) });
+        });
+      }
+    }, { runId });
 
     return jsonOk({ runId, conversationId, status: "queued" }, { status: 202 });
   }

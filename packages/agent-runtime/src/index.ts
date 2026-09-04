@@ -11,6 +11,7 @@ export type {
   ExecuteRunInput,
   KnowledgeResult,
   ModelBinding,
+  RunClaim,
   RunExecutionResult,
   RunFailureStatus,
   RunVersion

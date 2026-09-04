@@ -4,7 +4,7 @@ import { lookup } from "node:dns/promises";
 import { snippetFor, termsFor, textMessageContent } from "./helpers";
 import { getEnabledModelBindingForRuntime, getProviderAccountForRuntime } from "./provider-runtime";
 import { recordUsage } from "./usage";
-import type { AgentRunDeps, AgentRunStepInput, AgentSpec, KnowledgeResult, RunVersion } from "./types";
+import type { AgentRunDeps, AgentRunStepInput, AgentSpec, KnowledgeResult, RunClaim, RunVersion } from "./types";
 
 async function markRunRunning(runId: string) {
   const sql = getSql();
@@ -13,6 +13,46 @@ async function markRunRunning(runId: string) {
     set status = 'running', started_at = now()
     where id = ${runId}
   `;
+}
+
+/**
+ * Takes ownership of a queued run so exactly one executor runs it.
+ *
+ * The queue is at-least-once: BullMQ retries a failed attempt and redelivers a
+ * stalled one, and a producer whose enqueue timed out may still have landed the
+ * job while it falls back to executing in process. Every one of those paths
+ * would otherwise re-run markRunRunning and duplicate paid provider calls and
+ * run events.
+ *
+ * This is one statement, not a read followed by a write: the update takes a row
+ * lock, and a second claimer that was waiting on that lock re-evaluates the
+ * status predicate against the committed row and matches nothing. There is no
+ * window between the check and the act for a second executor to slip into.
+ *
+ * Only 'queued' and 'preparing' are claimable. 'running' is left alone because
+ * an executor may still be alive behind it; a run whose executor died instead is
+ * reconciled by the single-run GET once it outlives the cap.
+ */
+export async function claimRunForExecution(runId: string): Promise<RunClaim> {
+  const sql = getSql();
+  const rows = await sql<{ claimed: number; status: string | null }[]>`
+    with claimed as (
+      update agent_runs
+      set status = 'running', started_at = now()
+      where id = ${runId}
+        and status in ('queued', 'preparing')
+      returning id
+    )
+    select
+      (select count(*) from claimed)::integer as claimed,
+      -- FOR SHARE, not a plain sub-select: a plain read uses the statement
+      -- snapshot and reports the status as it was BEFORE the winning claim, so
+      -- the loser of a race is told "queued" for a run that is already running.
+      (select status from agent_runs where id = ${runId} for share) as status
+  `;
+  const row = rows[0];
+  if (row && row.claimed > 0) return { claimed: true };
+  return { claimed: false, status: row?.status ?? null };
 }
 
 async function markRunWaitingInput(runId: string) {
