@@ -80,6 +80,7 @@ export type ConversationUpdatedStreamEvent = {
 export type ChatStreamEvent = StreamEvent | ConversationStreamEvent | ConversationUpdatedStreamEvent;
 
 export * from "./chat-tree";
+export * from "./packet-agent";
 export * from "./share";
 
 export type NormalizedUsage = {

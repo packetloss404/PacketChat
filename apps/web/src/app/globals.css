@@ -4519,3 +4519,88 @@ label {
   color: var(--ink-3);
   font-size: var(--text-sm);
 }
+
+/* PacketAgent project integration panel */
+.packet-agent {
+  display: grid;
+  gap: 14px;
+  margin-top: var(--space-4);
+}
+.packet-agent h3 {
+  margin: var(--space-1) 0 0;
+}
+.packet-agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+.packet-agent-card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+.packet-agent-reveal {
+  border: 1px solid var(--warning-line);
+  background: var(--warning-soft);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: grid;
+  gap: 10px;
+  font-size: 13px;
+}
+.packet-agent-connection-list,
+.packet-agent-run-list {
+  display: grid;
+  gap: 10px;
+}
+.packet-agent-connection,
+.packet-agent-run {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--bg-2);
+  display: grid;
+  gap: 6px;
+}
+.packet-agent-connection__head,
+.packet-agent-run__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.packet-agent-connection__actions,
+.packet-agent-run__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.packet-agent-run__summary {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+.packet-agent-inspect {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-3);
+  padding: 10px;
+  max-height: 260px;
+  overflow: auto;
+}
+.packet-agent-inspect pre {
+  margin: 0;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.packet-agent-start {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+.packet-agent-start .button {
+  align-self: end;
+}

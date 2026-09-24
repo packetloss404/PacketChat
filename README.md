@@ -122,6 +122,19 @@ The 48-px right rail expands a 320-px panel when an icon is selected. There are 
 
 See `docs/deployment.md`, `docs/local-run.md`, `docs/smoke-test.md`, `docs/runbooks/worker-queues.md`, and `docs/runbooks/backup-restore.md`.
 
+## PacketAgent integration
+
+A private project can connect a PacketAgent deployment, start a worker run, and display the versioned Worker notifications as a threaded run card. Nothing is added to the browser: the ingest credential is shown once, and the signed Agent callback URLs are encrypted at rest and proxied by PacketChat.
+
+1. **Create a PacketAgent product credential** (for example `pkchat...`) in PacketAgent. This is the Agent token PacketChat presents when it reads a worker deployment and activates a run. In PacketAgent: `node --import tsx src/db/cli.ts packet-product-credential issue --workspace <workspaceId> --product PacketChat` prints the `pkchat.<credentialId>.<secret>` token exactly once.
+2. **Deploy and activate a worker** in PacketAgent so the workspace, deployment, and worker version exist.
+3. **Create a PacketChat connection** on `/projects` for the selected project. Enter a name, the PacketAgent workspace id, an optional deployment id, the Agent base URL (an `http(s)` origin, no userinfo/query/hash), and the Agent token. PacketChat stores the Agent token encrypted and returns the ingest **endpoint URL** and **bearer token once**.
+4. **Paste the endpoint and token into the Worker version's `packetchat` notification route config** in PacketAgent. The returned `routeConfig` already has the shape `{ schemaVersion: "packetagent.packetchat-route/v1", endpoint, bearerToken, ... }`.
+5. **Set `callbackBaseUrl` and `callbackSecret`** in that route config to the operator's PacketAgent callback host and secret. PacketAgent puts the signed `open`/`inspect` URLs it mints into each notification; PacketChat encrypts them and fetches/redirects server-side.
+6. **Rotate or revoke** the connection from the project panel. Rotating mints a new token (shown once, old one rejected immediately); revoking deletes the connection and cascades its runs and events.
+
+Signed callback URLs are never returned to the browser or logged: `GET .../runs/{id}/inspect` and `GET .../runs/{id}/open` fetch the signed callback server-side and return only the Agent's read-only detail or plain UI URL. An expired callback returns `{ ok: false, expired: true }`, which the project panel explains honestly rather than opening a dead link. The endpoints are listed in "Wiring status" below.
+
 ## Front-end conventions
 
 - Dark monochrome tokens in `apps/web/src/app/globals.css` (`--bg`, `--ink`, `--line`, etc.) plus a `.light` override.

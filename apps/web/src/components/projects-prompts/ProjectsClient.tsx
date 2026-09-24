@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiClient, type Project } from "../../lib/api-client";
+import { PacketAgentPanel } from "../packet-agent/PacketAgentPanel";
 import { ConfirmButton, EmptyState, ErrorState, LoadingBlock, StatusBadge, useToast } from "../ui";
 
 type ProjectDraft = {
@@ -292,6 +293,8 @@ export function ProjectsClient() {
               {selectedProject ? <button className="button button--ghost" type="button" onClick={startCreate}>Clear selection</button> : null}
             </div>
           </form>
+
+          {selectedProject ? <PacketAgentPanel projectId={selectedProject.id} /> : null}
         </section>
       </div>
     </section>

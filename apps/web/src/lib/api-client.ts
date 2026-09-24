@@ -508,6 +508,106 @@ export type AdminApproval = {
   started_at: string;
 };
 
+export type PacketAgentConnection = {
+  id: string;
+  projectId: string;
+  name: string;
+  workspaceId: string;
+  deploymentId: string | null;
+  agentBaseUrl: string;
+  ingestTokenPrefix: string;
+  createdAt: string;
+  updatedAt: string;
+  rotatedAt: string | null;
+};
+
+export type PacketAgentRouteConfig = {
+  schemaVersion: string;
+  endpoint: string;
+  bearerToken: string;
+  callbackBaseUrl: string;
+  callbackSecret: string;
+};
+
+export type PacketAgentConnectionCreated = {
+  connection: PacketAgentConnection;
+  ingestToken: { token: string; prefix: string };
+  endpointUrl: string;
+  routeConfig: PacketAgentRouteConfig;
+};
+
+export type PacketAgentRunDisplayState =
+  | "progress"
+  | "attention"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "budget_exceeded"
+  | "unknown";
+
+export type PacketAgentRunView = {
+  id: string;
+  connectionId: string;
+  projectId: string;
+  threadKey: string;
+  workerRunId: string;
+  workerDefinitionId: string;
+  workerDeploymentId: string;
+  workerVersionId: string;
+  workerVersionContentDigest: string;
+  title: string;
+  summary: string;
+  state: {
+    deployment: string;
+    run: string;
+    version: string;
+    versionNumber: number;
+    reason?: string | null;
+  };
+  budget: { usage: Record<string, unknown>; limits: Record<string, unknown> };
+  checkpoint: {
+    id: string;
+    sequence: number;
+    phase: string;
+    iteration: number;
+    stateDigest: string;
+  } | null;
+  requiredAction: string;
+  evidence: { id?: string; href?: string } | Record<string, unknown>;
+  displayState: PacketAgentRunDisplayState;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PacketAgentRunEvent = {
+  id: string;
+  messageKey: string;
+  event: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type PacketAgentRunDetail = {
+  run: PacketAgentRunView;
+  events: PacketAgentRunEvent[];
+};
+
+export type PacketAgentInspectResult =
+  | { ok: true; expired: false; detail: unknown }
+  | { ok: false; expired: true; message: string };
+
+export type PacketAgentOpenResult =
+  | { ok: true; expired: false; url: string }
+  | { ok: false; expired: true; message: string };
+
+export type PacketAgentStartResult = {
+  ok: true;
+  connectionId: string;
+  deploymentId: string;
+  revision: string | number;
+  result: unknown;
+};
+
 export async function parseApiResponse<T>(response: Response): Promise<T> {
   const data = (await response.json().catch(() => null)) as (T & ApiError) | null;
   if (!response.ok) {
@@ -610,6 +710,54 @@ export const apiClient = {
     update: (projectId: string, body: { name?: string; description?: string | null; instructions?: string | null }) =>
       apiFetch<{ project: Project }>(`/api/projects/${encodePath(projectId)}`, jsonInit("PATCH", body)),
     delete: (projectId: string) => apiFetch<{ deleted: true }>(`/api/projects/${encodePath(projectId)}`, { method: "DELETE" })
+  },
+  packetAgent: {
+    connections: {
+      list: (projectId: string, init?: RequestInit) =>
+        apiFetch<{ connections: PacketAgentConnection[] }>(
+          `/api/projects/${encodePath(projectId)}/packet-agent/connections`,
+          init
+        ),
+      create: (
+        projectId: string,
+        body: { name: string; workspaceId: string; deploymentId?: string; agentBaseUrl: string; agentToken: string }
+      ) =>
+        apiFetch<PacketAgentConnectionCreated>(
+          `/api/projects/${encodePath(projectId)}/packet-agent/connections`,
+          jsonInit("POST", body)
+        ),
+      rotate: (projectId: string, connectionId: string) =>
+        apiFetch<PacketAgentConnectionCreated>(
+          `/api/projects/${encodePath(projectId)}/packet-agent/connections/${encodePath(connectionId)}/rotate`,
+          { method: "POST" }
+        ),
+      remove: (projectId: string, connectionId: string) =>
+        apiFetch<{ deleted: true }>(
+          `/api/projects/${encodePath(projectId)}/packet-agent/connections/${encodePath(connectionId)}`,
+          { method: "DELETE" }
+        )
+    },
+    runs: {
+      list: (projectId: string, init?: RequestInit) =>
+        apiFetch<{ runs: PacketAgentRunView[] }>(`/api/projects/${encodePath(projectId)}/packet-agent/runs`, init),
+      start: (projectId: string, body: { connectionId: string; deploymentId?: string; input?: unknown }) =>
+        apiFetch<PacketAgentStartResult>(`/api/projects/${encodePath(projectId)}/packet-agent/runs`, jsonInit("POST", body)),
+      detail: (projectId: string, runId: string, init?: RequestInit) =>
+        apiFetch<PacketAgentRunDetail>(
+          `/api/projects/${encodePath(projectId)}/packet-agent/runs/${encodePath(runId)}`,
+          init
+        ),
+      inspect: (projectId: string, runId: string, init?: RequestInit) =>
+        apiFetch<PacketAgentInspectResult>(
+          `/api/projects/${encodePath(projectId)}/packet-agent/runs/${encodePath(runId)}/inspect`,
+          init
+        ),
+      open: (projectId: string, runId: string, init?: RequestInit) =>
+        apiFetch<PacketAgentOpenResult>(
+          `/api/projects/${encodePath(projectId)}/packet-agent/runs/${encodePath(runId)}/open`,
+          init
+        )
+    }
   },
   prompts: {
     list: (init?: RequestInit) => apiFetch<{ prompts: Prompt[] }>("/api/prompts", init),
