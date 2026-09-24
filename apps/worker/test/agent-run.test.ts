@@ -22,11 +22,12 @@ function context(overrides: Partial<AgentRunContext> = {}): AgentRunContext {
     conversationId: "conversation-1",
     spec: { providerAccountId: "account-1", model: "model-1" },
     inputText: "hello",
+    userMessageId: "user-message-1",
     ...overrides
   };
 }
 
-type Recorded = { status: string; text: string; userId: string; ownerUserId: string };
+type Recorded = { status: string; text: string; userId: string; ownerUserId: string; userMessageId: string | null };
 
 function makeDeps(overrides: Partial<AgentRunJobDeps> = {}) {
   const executed: AgentRunContext[] = [];
@@ -44,7 +45,13 @@ function makeDeps(overrides: Partial<AgentRunJobDeps> = {}) {
       return { status: "completed", outputText: "done" };
     },
     recordOutcome: async ({ context: runContext, status, text }) => {
-      recorded.push({ status, text, userId: runContext.callerUserId, ownerUserId: runContext.resourceOwnerUserId });
+      recorded.push({
+        status,
+        text,
+        userId: runContext.callerUserId,
+        ownerUserId: runContext.resourceOwnerUserId,
+        userMessageId: runContext.userMessageId
+      });
     },
     publicError: (error) => (error instanceof Error ? error.message : String(error)),
     ...overrides
@@ -61,7 +68,7 @@ test("a claimed run executes and records the outcome against the caller", async 
   assert.deepEqual(result, { executed: true, status: "completed" });
   assert.equal(executed.length, 1);
   assert.equal(executed[0]?.resourceOwnerUserId, OWNER, "the executor resolves resources as the agent owner");
-  assert.deepEqual(recorded, [{ status: "completed", text: "done", userId: CALLER, ownerUserId: OWNER }]);
+  assert.deepEqual(recorded, [{ status: "completed", text: "done", userId: CALLER, ownerUserId: OWNER, userMessageId: "user-message-1" }]);
 });
 
 test("a waiting_input run is a normal outcome, not a failure", async () => {
@@ -128,7 +135,7 @@ test("an execution failure rethrows so the job fails loudly, and still records t
     /provider account not found/,
     "a failed run must surface as a failed job"
   );
-  assert.deepEqual(recorded, [{ status: "failed", text: "Error: provider account not found", userId: CALLER, ownerUserId: OWNER }]);
+  assert.deepEqual(recorded, [{ status: "failed", text: "Error: provider account not found", userId: CALLER, ownerUserId: OWNER, userMessageId: "user-message-1" }]);
 });
 
 test("a failure to record the outcome does not mask the original failure", async () => {
@@ -153,6 +160,24 @@ test("the execution cap aborts the run and fails the job", async () => {
 
   await assert.rejects(runAgentRunJob(job, deps, { maxRunMs: 1 }), /Agent run cancelled/);
   assert.equal(recorded[0]?.text, "Error: Agent run cancelled");
+  // executeRun would have written "cancelled" on the run row; the conversation
+  // message must agree instead of a blanket "failed".
+  assert.equal(recorded[0]?.status, "cancelled");
+});
+
+test("the payload's user message id is handed to the context loader", async () => {
+  const loadInputs: Array<{ runId: string; agentId: string; userMessageId?: string | null }> = [];
+  const { deps, recorded } = makeDeps({
+    loadContext: async (input) => {
+      loadInputs.push(input);
+      return context();
+    }
+  });
+
+  await runAgentRunJob({ ...job, userMessageId: "payload-message-9" }, deps, { maxRunMs: 60_000 });
+
+  assert.deepEqual(loadInputs, [{ runId: "run-1", agentId: "agent-1", userMessageId: "payload-message-9" }]);
+  assert.equal(recorded[0]?.userMessageId, "user-message-1", "the row's id wins when the loader returns one");
 });
 
 test("a job for a run that no longer exists fails loudly", async () => {

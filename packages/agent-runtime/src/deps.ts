@@ -1,5 +1,6 @@
 import { getSql } from "@packetchat/db";
 import { getProviderAdapter } from "@packetchat/providers";
+import { randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { snippetFor, termsFor, textMessageContent } from "./helpers";
 import { getEnabledModelBindingForRuntime, getProviderAccountForRuntime } from "./provider-runtime";
@@ -277,6 +278,14 @@ export function createAgentRunDeps(overrides: Partial<AgentRunDeps> = {}): Agent
  * Writes the assistant message and bumps the conversation. Shared so every
  * caller - inline, detached, and the queue worker - records exactly the same
  * thing. A run with no conversation writes nothing.
+ *
+ * The assistant reply is linked under the run's user turn (the run's
+ * `userMessageId`), which is persisted on agent_runs and carried in the queue
+ * payload so every caller - inline, detached and the queue worker - can pass it.
+ * Only a legacy run created before agent_runs.user_message_id existed falls back
+ * to the conversation's active leaf, which the route moved to that user turn
+ * when it created the run. The inserted assistant message then becomes the
+ * active leaf, mirroring the chat route.
  */
 export async function recordRunOutcome(input: {
   conversationId: string | null;
@@ -285,22 +294,37 @@ export async function recordRunOutcome(input: {
   version: RunVersion;
   status: string;
   text: string;
+  userMessageId?: string | null;
 }) {
   if (!input.conversationId) return;
   const sql = getSql();
+  const assistantMessageId = randomUUID();
   await sql.begin(async (tx) => {
+    let parentMessageId = input.userMessageId ?? null;
+    if (!parentMessageId) {
+      const rows = await tx<{ active_leaf_message_id: string | null }[]>`
+        select active_leaf_message_id
+        from conversations
+        where id = ${input.conversationId} and owner_user_id = ${input.userId}
+        limit 1
+      `;
+      parentMessageId = rows[0]?.active_leaf_message_id ?? null;
+    }
+
     await tx`
-      insert into messages (conversation_id, owner_user_id, role, content, metadata)
+      insert into messages (id, conversation_id, owner_user_id, role, content, metadata, parent_message_id)
       values (
+        ${assistantMessageId},
         ${input.conversationId},
         ${input.userId},
         'assistant',
         ${JSON.stringify(textMessageContent(input.text))}::jsonb,
-        ${JSON.stringify({ agentId: input.version.agent_id, agentName: input.version.agent_name, agentRunId: input.runId, agentMode: "single_pass_augmented", status: input.status })}::jsonb
+        ${JSON.stringify({ agentId: input.version.agent_id, agentName: input.version.agent_name, agentRunId: input.runId, agentMode: "single_pass_augmented", status: input.status })}::jsonb,
+        ${parentMessageId}
       )
     `;
     await tx`
-      update conversations set updated_at = now() where id = ${input.conversationId} and owner_user_id = ${input.userId}
+      update conversations set active_leaf_message_id = ${assistantMessageId}, updated_at = now() where id = ${input.conversationId} and owner_user_id = ${input.userId}
     `;
   });
 }

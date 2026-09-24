@@ -203,44 +203,75 @@ export function ProjectsClient() {
           </div>
         </aside>
 
-        <section className="card projects-prompts-editor" aria-label={selectedProject ? "Edit project" : "Create project"}>
+        <section className="card projects-prompts-editor" aria-label={selectedProject ? `Project details for ${selectedProject.name}` : "Create project"}>
           <div className="panel-title">
             <div>
-              <div className="eyebrow">{selectedProject ? "Edit" : "Create"}</div>
-              <h2>{selectedProject ? selectedProject.name : "New project"}</h2>
-              <p className="muted">Workspace settings collect the persistent context this project contributes to chats, prompts, and agents.</p>
+              <div className="eyebrow">{selectedProject ? "Project details" : "New project"}</div>
+              <h2>{selectedProject ? selectedProject.name : "Create a project"}</h2>
+              <p className="muted">
+                {selectedProject
+                  ? selectedProject.description || "No description yet."
+                  : "Give the workspace a name and the persistent context it should contribute to chats."}
+              </p>
+              {selectedProject ? (
+                <div className="projects-prompts-chip-row" aria-label="Project summary">
+                  <span className={`projects-prompts-chip ${hasInstructions(selectedProject) ? "projects-prompts-chip--success" : "projects-prompts-chip--warning"}`}>
+                    {hasInstructions(selectedProject) ? "Instructions ready" : "No instructions"}
+                  </span>
+                  <span className={`projects-prompts-chip ${selectedProject.default_model_preset_id ? "projects-prompts-chip--success" : ""}`}>
+                    {defaultModelLabel(selectedProject)}
+                  </span>
+                  <span className="projects-prompts-chip">{pluralize(selectedConversationCount, "linked chat")}</span>
+                  <span className="projects-prompts-chip">Updated {formatUpdated(selectedProject.updated_at)}</span>
+                </div>
+              ) : null}
             </div>
             {selectedProject ? (
               <ConfirmButton className="button button--danger" message="Delete this project?" confirmLabel="Delete" disabled={deletingId === selectedProject.id} onConfirm={() => deleteProject(selectedProject)}>
-                Delete
+                Delete project
               </ConfirmButton>
             ) : null}
           </div>
 
-          <div className="projects-workspace-summary" aria-label="Workspace readiness">
-            <div className="projects-workspace-summary__item">
-              <StatusBadge tone={draftHasInstructions ? "success" : "warning"}>{draftHasInstructions ? "Ready" : "Missing"}</StatusBadge>
-              <strong>Instructions</strong>
-              <small>{draftHasInstructions ? `${draft.instructions.trim().length.toLocaleString()} characters of workspace guidance` : "No persistent guidance yet"}</small>
+          {selectedProject ? (
+            <div className="projects-workspace-summary" aria-label="Workspace readiness">
+              <div className="projects-workspace-summary__item">
+                <StatusBadge tone={selectedProject.instructions?.trim() ? "success" : "warning"}>{selectedProject.instructions?.trim() ? "Ready" : "Missing"}</StatusBadge>
+                <strong>Reusable instructions</strong>
+                <small>
+                  {selectedProject.instructions?.trim()
+                    ? `${selectedProject.instructions.trim().length.toLocaleString()} characters of persistent workspace guidance`
+                    : "No persistent guidance yet"}
+                </small>
+                <span className="projects-prompts-chip">Editable below</span>
+              </div>
+              <div className="projects-workspace-summary__item">
+                <StatusBadge tone={selectedProject.default_model_preset_id ? "success" : "neutral"}>{selectedProject.default_model_preset_id ? "Pinned" : "Inherited"}</StatusBadge>
+                <strong>Default model</strong>
+                <small>{defaultModelLabel(selectedProject)}. {defaultModelDetail(selectedProject)}</small>
+                <span className="projects-prompts-chip" title="The projects API does not accept a model preset, so this value is shown for reference only.">Read-only</span>
+              </div>
+              <div className="projects-workspace-summary__item">
+                <StatusBadge tone={selectedConversationCount > 0 ? "info" : "neutral"}>{selectedConversationCount > 0 ? "Active" : "Empty"}</StatusBadge>
+                <strong>Linked chats</strong>
+                <small>{pluralize(selectedConversationCount, "chat")} currently reference this project.</small>
+                <span className="projects-prompts-chip">Read-only</span>
+              </div>
+              <div className="projects-workspace-summary__item">
+                <StatusBadge tone="neutral">Agent-level</StatusBadge>
+                <strong>Knowledge</strong>
+                <small>Knowledge binding is configured per agent, not on the project itself.</small>
+              </div>
             </div>
-            <div className="projects-workspace-summary__item">
-              <StatusBadge tone={selectedProject?.default_model_preset_id ? "success" : "neutral"}>{selectedProject?.default_model_preset_id ? "Pinned" : "Inherited"}</StatusBadge>
-              <strong>Default model</strong>
-              <small>{defaultModelLabel(selectedProject)}. {defaultModelDetail(selectedProject)}</small>
-            </div>
-            <div className="projects-workspace-summary__item">
-              <StatusBadge tone="neutral">Agent-level</StatusBadge>
-              <strong>Knowledge</strong>
-              <small>Project-level knowledge binding is not available in this workspace view.</small>
-            </div>
-            <div className="projects-workspace-summary__item">
-              <StatusBadge tone={selectedConversationCount > 0 ? "info" : "neutral"}>{selectedConversationCount > 0 ? "Active" : "Empty"}</StatusBadge>
-              <strong>Chats</strong>
-              <small>{selectedProject ? pluralize(selectedConversationCount, "linked chat") : "No linked chats yet"}</small>
-            </div>
-          </div>
+          ) : null}
 
-          <form className="projects-prompts-form" onSubmit={(event) => void saveProject(event)}>
+          <form className="projects-prompts-form" onSubmit={(event) => void saveProject(event)} aria-label={selectedProject ? `Edit ${selectedProject.name}` : "Create project"}>
+            <div>
+              <div className="eyebrow">{selectedProject ? "Edit workspace" : "New workspace"}</div>
+              <p className="muted" style={{ margin: "4px 0 0", fontSize: 12.5 }}>
+                Name, description, and reusable instructions are saved to this project. The default model and linked chat count above are shown for reference.
+              </p>
+            </div>
             <label>
               Name
               <input className="input" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} required />
@@ -250,11 +281,14 @@ export function ProjectsClient() {
               <input className="input" value={draft.description} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} placeholder="What this workspace is for" />
             </label>
             <label>
-              Instructions
+              Reusable instructions
               <textarea value={draft.instructions} onChange={(event) => setDraft((current) => ({ ...current, instructions: event.target.value }))} rows={8} placeholder="Persistent style, constraints, project context, or domain notes" />
+              <span className="field__hint">
+                Sent with chats that use this project. {draftHasInstructions ? `${draft.instructions.trim().length.toLocaleString()} characters.` : "Currently empty."}
+              </span>
             </label>
             <div className="projects-prompts-actions">
-              <button className="button" disabled={saving} type="submit">{saving ? "Saving..." : selectedProject ? "Save project" : "Create project"}</button>
+              <button className="button" disabled={saving} type="submit">{saving ? "Saving..." : selectedProject ? "Save changes" : "Create project"}</button>
               {selectedProject ? <button className="button button--ghost" type="button" onClick={startCreate}>Clear selection</button> : null}
             </div>
           </form>

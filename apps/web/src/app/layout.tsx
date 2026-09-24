@@ -27,7 +27,15 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              '(function(){try{var m=localStorage.getItem("packetchat.settings.appearance.theme");document.documentElement.classList.toggle("light",m==="light");}catch(e){document.documentElement.classList.remove("light");}})();'
+          }}
+        />
+      </head>
       <body>
         <ToastProvider>
           <AuthProvider>

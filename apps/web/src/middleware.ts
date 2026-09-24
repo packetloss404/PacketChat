@@ -18,7 +18,12 @@ export function middleware(request: NextRequest) {
 }
 
 function isPublicPage(pathname: string) {
-  return pathname === "/login" || pathname.startsWith("/login/");
+  return (
+    pathname === "/login" ||
+    pathname.startsWith("/login/") ||
+    pathname === "/share" ||
+    pathname.startsWith("/share/")
+  );
 }
 
 export const config = {

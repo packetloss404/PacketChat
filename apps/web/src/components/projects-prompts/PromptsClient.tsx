@@ -78,6 +78,11 @@ function promptVariables(prompt: Prompt): string[] {
   return Array.isArray(prompt.variables) ? prompt.variables : [];
 }
 
+function promptPreview(prompt: Prompt): string {
+  const source = prompt.description?.trim() || prompt.body?.trim() || "";
+  return source.replace(/\s+/g, " ").trim();
+}
+
 function draftFromPrompt(prompt: Prompt): PromptDraft {
   return {
     name: prompt.name,
@@ -220,6 +225,16 @@ export function PromptsClient() {
   useEffect(() => {
     setPendingDeleteId(null);
   }, [query, tagFilter, sort]);
+
+  // Allow Escape to dismiss the template browser, matching a modal dialog.
+  useEffect(() => {
+    if (!browseOpen) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setBrowseOpen(false);
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [browseOpen]);
 
   function openCreate() {
     setEditing(null);
@@ -441,9 +456,51 @@ export function PromptsClient() {
           const favored = favorites.has(prompt.id);
           const isPendingDelete = pendingDeleteId === prompt.id;
           const isDeleting = deletingId === prompt.id;
+          const preview = promptPreview(prompt);
+          const variables = promptVariables(prompt);
           return (
             <article className="prompt-card" key={prompt.id}>
-              <div className="prompt-card__title">{prompt.name}</div>
+              <div className="prompt-card__body" style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
+                <h3 className="prompt-card__title" title={prompt.name}>{prompt.name}</h3>
+                {preview ? (
+                  <p
+                    className="prompt-card__desc"
+                    title={preview}
+                    style={{
+                      margin: 0,
+                      color: "var(--ink-3)",
+                      fontSize: 12.5,
+                      lineHeight: 1.45,
+                      display: "-webkit-box",
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: "vertical",
+                      overflow: "hidden"
+                    }}
+                  >
+                    {preview}
+                  </p>
+                ) : null}
+                {variables.length > 0 ? (
+                  <div className="prompt-card__tags" aria-label={`Variables: ${variables.join(", ")}`} style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {variables.map((variable) => (
+                      <span
+                        key={variable}
+                        className="prompt-card__tag"
+                        style={{
+                          fontSize: 11,
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          background: "var(--bg-3)",
+                          border: "1px solid var(--line)",
+                          color: "var(--ink-3)"
+                        }}
+                      >
+                        {variable}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
               <div className="prompt-card__footer">
                 <div className="prompt-card__actions">
                   <button
@@ -484,7 +541,7 @@ export function PromptsClient() {
                         type="button"
                         onClick={() => void confirmDelete(prompt)}
                         disabled={isDeleting}
-                        style={{ padding: "2px 10px", fontSize: 12 }}
+                        style={{ minHeight: 28, padding: "2px 10px", fontSize: 12 }}
                       >
                         {isDeleting ? "Deleting..." : "Confirm"}
                       </button>
@@ -493,7 +550,7 @@ export function PromptsClient() {
                         type="button"
                         onClick={cancelDelete}
                         disabled={isDeleting}
-                        style={{ padding: "2px 10px", fontSize: 12 }}
+                        style={{ minHeight: 28, padding: "2px 10px", fontSize: 12 }}
                       >
                         Cancel
                       </button>
@@ -563,6 +620,7 @@ export function PromptsClient() {
 
       {browseOpen ? (
         <div
+          className="prompt-browse"
           role="dialog"
           aria-modal="true"
           aria-label="Browse prompt templates"
@@ -581,9 +639,11 @@ export function PromptsClient() {
           }}
         >
           <div
+            className="prompt-browse__panel"
             style={{
-              background: "var(--surface, #fff)",
-              color: "var(--text, #111)",
+              background: "var(--bg-2)",
+              color: "var(--ink)",
+              border: "1px solid var(--line)",
               width: "min(720px, 100%)",
               maxHeight: "85vh",
               overflow: "auto",
@@ -592,7 +652,7 @@ export function PromptsClient() {
               padding: 20
             }}
           >
-            <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <header className="prompt-browse__head" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
               <div>
                 <h2 style={{ margin: 0, fontSize: 18 }}>Browse prompt templates</h2>
                 <p className="sub" style={{ margin: "4px 0 0", fontSize: 13 }}>
@@ -603,24 +663,25 @@ export function PromptsClient() {
                 <Icon.plus style={{ transform: "rotate(45deg)" }} />
               </button>
             </header>
-            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 12 }}>
+            <ul className="prompt-browse__list" style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 12 }}>
               {TEMPLATE_CATALOG.map((template) => {
                 const adding = creatingFromTemplateId === template.id;
                 return (
                   <li
                     key={template.id}
+                    className="prompt-browse__item"
                     style={{
-                      border: "1px solid var(--border, #e3e4e8)",
+                      border: "1px solid var(--line)",
                       borderRadius: 10,
                       padding: 14,
                       display: "grid",
-                      gap: 8
+                      gap: 10
                     }}
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
                       <div style={{ minWidth: 0 }}>
-                        <div style={{ fontWeight: 600 }}>{template.name}</div>
-                        <div className="sub" style={{ fontSize: 13, marginTop: 2 }}>{template.description}</div>
+                        <div style={{ fontWeight: 600, color: "var(--ink)" }}>{template.name}</div>
+                        <div className="sub" style={{ fontSize: 13, marginTop: 2, color: "var(--ink-3)" }}>{template.description}</div>
                       </div>
                       <button
                         type="button"
@@ -632,32 +693,44 @@ export function PromptsClient() {
                         {adding ? "Adding..." : "Use template"}
                       </button>
                     </div>
-                    <pre
-                      style={{
-                        margin: 0,
-                        padding: 10,
-                        background: "var(--surface-2, #f5f6f8)",
-                        borderRadius: 8,
-                        fontSize: 12,
-                        whiteSpace: "pre-wrap",
-                        wordBreak: "break-word",
-                        maxHeight: 120,
-                        overflow: "auto"
-                      }}
-                    >
-                      {template.body}
-                    </pre>
+                    <div className="prompt-browse__body-wrap">
+                      <div className="eyebrow" style={{ marginBottom: 4 }}>Template body</div>
+                      <pre
+                        className="prompt-browse__body"
+                        tabIndex={0}
+                        aria-label={`Template body for ${template.name}`}
+                        style={{
+                          margin: 0,
+                          padding: 10,
+                          background: "var(--bg-3)",
+                          color: "var(--ink-2)",
+                          border: "1px solid var(--line)",
+                          borderRadius: 8,
+                          fontSize: 12,
+                          lineHeight: 1.5,
+                          fontFamily: "var(--font-mono)",
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-word",
+                          maxHeight: 168,
+                          overflow: "auto"
+                        }}
+                      >
+                        {template.body}
+                      </pre>
+                    </div>
                     {template.variables.length > 0 ? (
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      <div className="prompt-browse__tags" style={{ display: "flex", flexWrap: "wrap", gap: 6 }} aria-label={`Variables: ${template.variables.join(", ")}`}>
                         {template.variables.map((variable) => (
                           <span
                             key={variable}
+                            className="prompt-browse__tag"
                             style={{
                               fontSize: 11,
                               padding: "2px 8px",
                               borderRadius: 999,
-                              background: "var(--surface-2, #eef0f4)",
-                              border: "1px solid var(--border, #e3e4e8)"
+                              background: "var(--bg-3)",
+                              border: "1px solid var(--line)",
+                              color: "var(--ink-3)"
                             }}
                           >
                             {variable}

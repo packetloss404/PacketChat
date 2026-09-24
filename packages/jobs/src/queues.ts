@@ -20,6 +20,11 @@ export type AgentRunJob = {
   // caller is already on the run row as agent_runs.owner_user_id, which is what
   // the run's conversation message is attributed to.
   resourceOwnerUserId: string;
+  // The user turn the run's final answer must be parented under. Also persisted
+  // on agent_runs.user_message_id; carried here so the worker can record the
+  // answer against the right node even if the row read is degraded. Null for a
+  // run with no conversation.
+  userMessageId?: string | null;
 };
 
 // The concrete retention targets the worker knows how to clean. Spelled exactly

@@ -154,9 +154,17 @@ export const MAX_RUN_EXECUTION_MS = 15 * 60 * 1000;
 
 export async function executeRun(deps: AgentRunDeps, input: ExecuteRunInput): Promise<RunExecutionResult> {
   await deps.markRunRunning(input.runId);
-  await deps.addRunEvent(input.runId, "run.started", {});
+  // A resumed run is announced as such so the event stream shows why the model
+  // was called a second time on the same run.
+  if (input.resume) {
+    await deps.addRunEvent(input.runId, "run.resumed", { approvalSequenceNo: input.resume.approvalSequenceNo });
+  } else {
+    await deps.addRunEvent(input.runId, "run.started", {});
+  }
 
-  let nextStep = 1;
+  // Resumed runs continue the paused run's sequence numbering; the step table
+  // has a unique (run_id, sequence_no), so restarting at 1 would collide.
+  let nextStep = input.resume?.nextSequenceNo ?? 1;
   let stepId: string | null = null;
 
   try {
@@ -164,24 +172,30 @@ export async function executeRun(deps: AgentRunDeps, input: ExecuteRunInput): Pr
     const contextBlocks: string[] = [];
     const maxAgentSteps = Math.min(Math.max(Number(input.spec.maxAgentSteps) || 4, 1), 25);
     let remainingToolSteps = maxAgentSteps;
-    const externalApprovalInput = externalActionApprovalInput(input.spec, input.inputText);
-    if (externalApprovalInput) {
-      const approvalId = await deps.addRunStep({
-        runId: input.runId,
-        sequenceNo: nextStep++,
-        stepType: "approval",
-        status: "running",
-        name: "Approve external actions",
-        input: externalApprovalInput,
-        output: { state: "pending" }
-      });
-      await deps.markRunWaitingInput(input.runId);
-      await deps.addRunEvent(input.runId, "approval.required", { approvalId, ...externalApprovalInput });
-      return {
-        status: "waiting_input",
-        approvalId,
-        outputText: "Waiting for approval before external actions run."
-      };
+    // Only a fresh run consults the approval gate. On resume the approval was
+    // already decided, so the run falls through to the external actions it
+    // gated and on to the model. Skipping this block is what guarantees the
+    // approved actions execute exactly once.
+    if (!input.resume) {
+      const externalApprovalInput = externalActionApprovalInput(input.spec, input.inputText);
+      if (externalApprovalInput) {
+        const approvalId = await deps.addRunStep({
+          runId: input.runId,
+          sequenceNo: nextStep++,
+          stepType: "approval",
+          status: "running",
+          name: "Approve external actions",
+          input: externalApprovalInput,
+          output: { state: "pending" }
+        });
+        await deps.markRunWaitingInput(input.runId);
+        await deps.addRunEvent(input.runId, "approval.required", { approvalId, ...externalApprovalInput });
+        return {
+          status: "waiting_input",
+          approvalId,
+          outputText: "Waiting for approval before external actions run."
+        };
+      }
     }
 
     const chain = input.spec.agentChain;

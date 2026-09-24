@@ -80,12 +80,20 @@ async function listExpired(sql: CleanupSql, target: CleanupTarget, cutoff: Date)
       // no message, and no knowledge document pointing at it. All three
       // foreign keys use `on delete set null`/`cascade`, so a row can outlive
       // its owner without any other trace.
+      //
+      // Chat attachments are uploaded before a conversation/message exists and
+      // only gain a linkage once the persisting message adopts them, so their
+      // conversation_id/message_id are legitimately null. The message metadata
+      // holds the only reference, which this predicate cannot see, so purpose
+      // is the ownership signal: a chat_attachment must never be reaped as an
+      // orphan.
       const rows = await sql<ExpiredRow[]>`
         select a.id, a.created_at
         from attachments as a
         where a.created_at < ${cutoff}
           and a.conversation_id is null
           and a.message_id is null
+          and a.metadata->>'purpose' is distinct from 'chat_attachment'
           and a.status <> ${IN_FLIGHT_ATTACHMENT_STATUS}
           and not exists (
             select 1
@@ -143,6 +151,7 @@ async function deleteBatch(sql: CleanupSql, target: CleanupTarget, ids: string[]
         where a.id in ${sql(ids)}
           and a.conversation_id is null
           and a.message_id is null
+          and a.metadata->>'purpose' is distinct from 'chat_attachment'
           and a.status <> ${IN_FLIGHT_ATTACHMENT_STATUS}
           and not exists (
             select 1
@@ -172,6 +181,7 @@ async function deleteBatch(sql: CleanupSql, target: CleanupTarget, ids: string[]
         where a.id in ${sql(purged)}
           and a.conversation_id is null
           and a.message_id is null
+          and a.metadata->>'purpose' is distinct from 'chat_attachment'
           and a.status <> ${IN_FLIGHT_ATTACHMENT_STATUS}
           and not exists (
             select 1

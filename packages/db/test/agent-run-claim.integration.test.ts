@@ -24,7 +24,7 @@ after(async () => {
   await db?.close();
 });
 
-async function seedRun(status: string, resolved: { providerAccountId: string | null; model: string | null }) {
+async function seedRun(status: string, resolved: { providerAccountId: string | null; model: string | null; userMessageId?: string | null }) {
   const sql = db!.sql;
   const [user] = await sql<{ id: string }[]>`
     insert into users (email, display_name, role, status)
@@ -42,7 +42,7 @@ async function seedRun(status: string, resolved: { providerAccountId: string | n
     returning id
   `;
   const [run] = await sql<{ id: string }[]>`
-    insert into agent_runs (owner_user_id, agent_id, agent_version_id, status, input, resolved_provider_account_id, resolved_model)
+    insert into agent_runs (owner_user_id, agent_id, agent_version_id, status, input, resolved_provider_account_id, resolved_model, user_message_id)
     values (
       ${user!.id},
       ${agent!.id},
@@ -50,7 +50,8 @@ async function seedRun(status: string, resolved: { providerAccountId: string | n
       ${status},
       ${JSON.stringify({ text: "hello" })}::jsonb,
       ${resolved.providerAccountId},
-      ${resolved.model}
+      ${resolved.model},
+      ${resolved.userMessageId ?? null}
     )
     returning id
   `;
@@ -96,6 +97,29 @@ test("a run created before the binding columns existed keeps nulls", skipWithout
   // never asked for; the columns must stay nullable for that to be expressible.
   assert.equal(row!.resolved_provider_account_id, null);
   assert.equal(row!.resolved_model, null);
+});
+
+test("the user turn a run answers round-trips on the run row", skipWithoutDatabase, async () => {
+  const userMessageId = randomUUID();
+  const { runId } = await seedRun("queued", { providerAccountId: randomUUID(), model: "m", userMessageId });
+
+  const [row] = await db!.sql<{ user_message_id: string | null }[]>`
+    select user_message_id from agent_runs where id = ${runId}
+  `;
+
+  assert.equal(row!.user_message_id, userMessageId, "the queued worker must be able to parent the answer under this turn");
+});
+
+test("a run created before the user-message column existed keeps a null id", skipWithoutDatabase, async () => {
+  const { runId } = await seedRun("queued", { providerAccountId: randomUUID(), model: "m" });
+
+  const [row] = await db!.sql<{ user_message_id: string | null }[]>`
+    select user_message_id from agent_runs where id = ${runId}
+  `;
+
+  // Nullable is what lets the writer fall back to the active leaf only for
+  // legacy rows rather than rewriting the parent of every old run.
+  assert.equal(row!.user_message_id, null);
 });
 
 test("claiming a queued run takes it and starts the clock", skipWithoutDatabase, async () => {

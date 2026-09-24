@@ -27,7 +27,14 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-const PUBLIC_PATHS = new Set<string>(["/login"]);
+function isPublicPath(pathname: string) {
+  return (
+    pathname === "/login" ||
+    pathname.startsWith("/login/") ||
+    pathname === "/share" ||
+    pathname.startsWith("/share/")
+  );
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -103,7 +110,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (status !== "anonymous") return;
     if (typeof window === "undefined") return;
     const safePath = pathname && pathname.startsWith("/") && !pathname.startsWith("//") ? pathname + window.location.search : "/";
-    if (PUBLIC_PATHS.has(pathname)) return;
+    if (isPublicPath(pathname)) return;
     const target = `/login?next=${encodeURIComponent(safePath)}`;
     if (window.location.pathname + window.location.search === safePath) {
       // Avoid loops if middleware already redirected us.
@@ -148,7 +155,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // authenticated. The middleware only checks that a refresh cookie exists; a
   // stale cookie lets the request through, and without this gate the page
   // would flash before the client-side guard above redirects to /login.
-  const isPublic = PUBLIC_PATHS.has(pathname);
+  const isPublic = isPublicPath(pathname);
   const canRender = isPublic || status === "authenticated";
 
   return <AuthContext.Provider value={value}>{canRender ? children : null}</AuthContext.Provider>;
