@@ -8,11 +8,13 @@ import {
   MAX_RUN_EXECUTION_MS,
   publicRunError,
   recordRunOutcome,
+  runFailureStatus,
   textMessageContent,
   textOrNull,
   type AgentSpec
 } from "@packetchat/agent-runtime";
 import { enqueueAgentRunJob } from "@packetchat/jobs";
+import { randomUUID } from "node:crypto";
 import { jsonError, jsonOk } from "../../../../../lib/http";
 import { getAgentAccess } from "../../../../../lib/agent-access";
 import { dispatchAgentRun } from "../../../../../lib/agent-run-dispatch";
@@ -113,16 +115,19 @@ export async function POST(request: Request, context: RouteContext) {
   const wantsConversation = body?.conversation === true || Boolean(requestedConversationId);
   const setup = await sql.begin(async (tx) => {
     let conversationId: string | null = null;
+    let userMessageId: string | null = null;
     if (wantsConversation) {
+      let previousLeafId: string | null = null;
       if (requestedConversationId) {
-        const conversations = await tx<{ id: string }[]>`
-          select id
+        const conversations = await tx<{ id: string; active_leaf_message_id: string | null }[]>`
+          select id, active_leaf_message_id
           from conversations
           where id = ${requestedConversationId} and owner_user_id = ${user.id} and archived_at is null
           limit 1
         `;
         if (!conversations[0]) return null;
         conversationId = conversations[0].id;
+        previousLeafId = conversations[0].active_leaf_message_id ?? null;
       } else {
         const conversations = await tx<{ id: string }[]>`
           insert into conversations (owner_user_id, title, mode)
@@ -132,19 +137,25 @@ export async function POST(request: Request, context: RouteContext) {
         conversationId = conversations[0]!.id;
       }
 
+      // Mirror the chat route: the new user turn hangs off the previous active
+      // leaf (null for the first turn) and becomes the active leaf until the
+      // assistant reply is written.
+      userMessageId = randomUUID();
       await tx`
-        insert into messages (conversation_id, owner_user_id, role, content, metadata)
+        insert into messages (id, conversation_id, owner_user_id, role, content, metadata, parent_message_id)
         values (
+          ${userMessageId},
           ${conversationId},
           ${user.id},
           'user',
           ${JSON.stringify(textMessageContent(inputText))}::jsonb,
-          ${JSON.stringify({ agentId: version.agent_id, agentName: version.agent_name, agentMode: "single_pass_augmented" })}::jsonb
+          ${JSON.stringify({ agentId: version.agent_id, agentName: version.agent_name, agentMode: "single_pass_augmented" })}::jsonb,
+          ${previousLeafId}
         )
       `;
 
       await tx`
-        update conversations set updated_at = now() where id = ${conversationId} and owner_user_id = ${user.id}
+        update conversations set active_leaf_message_id = ${userMessageId}, updated_at = now() where id = ${conversationId} and owner_user_id = ${user.id}
       `;
     }
 
@@ -157,7 +168,7 @@ export async function POST(request: Request, context: RouteContext) {
     // re-resolved them could run the agent against a different model than this
     // caller asked for.
     const runRows = await tx<{ id: string }[]>`
-      insert into agent_runs (owner_user_id, agent_id, agent_version_id, conversation_id, trigger_type, status, input, resolved_manifest, resolved_provider_account_id, resolved_model)
+      insert into agent_runs (owner_user_id, agent_id, agent_version_id, conversation_id, trigger_type, status, input, resolved_manifest, resolved_provider_account_id, resolved_model, user_message_id)
       values (
         ${user.id},
         ${version.agent_id},
@@ -168,15 +179,16 @@ export async function POST(request: Request, context: RouteContext) {
         ${JSON.stringify({ text: inputText })}::jsonb,
         ${JSON.stringify(version.manifest)}::jsonb,
         ${providerAccountId},
-        ${model}
+        ${model},
+        ${userMessageId}
       )
       returning id
     `;
 
-    return { conversationId, runId: runRows[0]!.id };
+    return { conversationId, runId: runRows[0]!.id, userMessageId };
   });
   if (!setup) return jsonError("Conversation not found", 404);
-  const { conversationId, runId } = setup;
+  const { conversationId, runId, userMessageId } = setup;
   // Authorization is done; from here the executor only needs an owner id, so it
   // runs on the same ports the queue worker uses.
   const deps = createAgentRunDeps();
@@ -205,11 +217,11 @@ export async function POST(request: Request, context: RouteContext) {
       const timeout = setTimeout(() => detached.abort(), MAX_RUN_EXECUTION_MS);
       try {
         const result = await executeRun(deps, { runId, resourceOwnerUserId: access.ownerUserId, spec: { ...version.spec, providerAccountId, model }, inputText, signal: detached.signal });
-        await recordRunOutcome({ conversationId, runId, userId: user.id, version, status: result.status, text: result.outputText });
+        await recordRunOutcome({ conversationId, runId, userId: user.id, version, status: result.status, text: result.outputText, userMessageId });
       } catch (error) {
         const message = publicRunError(error);
         logger.error("Detached agent run failed", { runId, error: message });
-        await recordRunOutcome({ conversationId, runId, userId: user.id, version, status: "failed", text: `Error: ${message}` }).catch(() => {
+        await recordRunOutcome({ conversationId, runId, userId: user.id, version, status: runFailureStatus(message), text: `Error: ${message}`, userMessageId }).catch(() => {
           // The run row is already marked by executeRun; a failure to write the
           // conversation message must not become an unhandled rejection.
         });
@@ -219,7 +231,7 @@ export async function POST(request: Request, context: RouteContext) {
     };
 
     await dispatchAgentRun({
-      enqueue: () => enqueueAgentRunJob({ runId, agentId: version.agent_id, resourceOwnerUserId: access.ownerUserId }),
+      enqueue: () => enqueueAgentRunJob({ runId, agentId: version.agent_id, resourceOwnerUserId: access.ownerUserId, userMessageId }),
       executeDetached: () => {
         void detachedRun().catch((error) => {
           // Only the claim itself can reach here; everything after it is already
@@ -236,18 +248,21 @@ export async function POST(request: Request, context: RouteContext) {
     const result = await executeRun(deps, { runId, resourceOwnerUserId: access.ownerUserId, spec: { ...version.spec, providerAccountId, model }, inputText, signal: request.signal });
     if (conversationId) {
       await sql.begin(async (tx) => {
+        const assistantMessageId = randomUUID();
         await tx`
-          insert into messages (conversation_id, owner_user_id, role, content, metadata)
+          insert into messages (id, conversation_id, owner_user_id, role, content, metadata, parent_message_id)
           values (
+            ${assistantMessageId},
             ${conversationId},
             ${user.id},
             'assistant',
             ${JSON.stringify(textMessageContent(result.outputText))}::jsonb,
-            ${JSON.stringify({ agentId: version.agent_id, agentName: version.agent_name, agentRunId: runId, agentMode: "single_pass_augmented", status: result.status })}::jsonb
+            ${JSON.stringify({ agentId: version.agent_id, agentName: version.agent_name, agentRunId: runId, agentMode: "single_pass_augmented", status: result.status })}::jsonb,
+            ${userMessageId}
           )
         `;
         await tx`
-          update conversations set updated_at = now() where id = ${conversationId} and owner_user_id = ${user.id}
+          update conversations set active_leaf_message_id = ${assistantMessageId}, updated_at = now() where id = ${conversationId} and owner_user_id = ${user.id}
         `;
       });
     }
@@ -260,24 +275,30 @@ export async function POST(request: Request, context: RouteContext) {
     }, { status: 201 });
   } catch (error) {
     const message = publicRunError(error);
+    // Match the status executeRun persisted on the run row (cancelled/timed_out
+    // rather than a blanket "failed") so the message and the run row agree.
+    const failureStatus = runFailureStatus(message);
     if (conversationId) {
       await sql.begin(async (tx) => {
+        const assistantMessageId = randomUUID();
         await tx`
-          insert into messages (conversation_id, owner_user_id, role, content, metadata)
+          insert into messages (id, conversation_id, owner_user_id, role, content, metadata, parent_message_id)
           values (
+            ${assistantMessageId},
             ${conversationId},
             ${user.id},
             'assistant',
             ${JSON.stringify(textMessageContent(`Error: ${message}`))}::jsonb,
-            ${JSON.stringify({ agentId: version.agent_id, agentName: version.agent_name, agentRunId: runId, agentMode: "single_pass_augmented", status: "failed" })}::jsonb
+            ${JSON.stringify({ agentId: version.agent_id, agentName: version.agent_name, agentRunId: runId, agentMode: "single_pass_augmented", status: failureStatus })}::jsonb,
+            ${userMessageId}
           )
         `;
         await tx`
-          update conversations set updated_at = now() where id = ${conversationId} and owner_user_id = ${user.id}
+          update conversations set active_leaf_message_id = ${assistantMessageId}, updated_at = now() where id = ${conversationId} and owner_user_id = ${user.id}
         `;
       });
     }
-    return jsonOk({ runId, conversationId, status: "failed", error: message }, { status: 201 });
+    return jsonOk({ runId, conversationId, status: failureStatus, error: message }, { status: 201 });
   }
 }
 

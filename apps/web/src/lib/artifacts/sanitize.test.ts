@@ -16,7 +16,7 @@ function artifact(partial: Partial<ParsedArtifact> & { type: string; content: st
   };
 }
 
-const SANDBOX = "allow-scripts";
+const SANDBOX = "";
 const CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:;";
 
 test("ALLOWED_ARTIFACT_TYPES lists exactly the supported media types", () => {
@@ -114,6 +114,7 @@ test("oversize content is truncated with a warning while staying safe", () => {
   const content = "a".repeat(100);
   const result = sanitizeArtifact(artifact({ type: "application/vnd.mermaid", content }), { maxBytes: 10 });
   assert.equal(result.safe, true);
+  assert.equal(result.truncated, true);
   assert.equal(Buffer.byteLength(result.sanitizedContent, "utf8") <= 10, true);
   assert.equal(result.warnings.some((w) => /truncat/i.test(w)), true);
 });
@@ -127,10 +128,11 @@ test("mermaid and react content is passed through as inert data", () => {
   assert.deepEqual(result.warnings, []);
 });
 
-test("sandbox never grants allow-same-origin", () => {
+test("sandbox never grants scripts or same-origin", () => {
   const result = sanitizeArtifact(artifact({ type: "text/html", content: "<p>x</p>" }));
   assert.equal(result.sandbox.iframeSandbox.includes("allow-same-origin"), false);
-  assert.equal(result.sandbox.iframeSandbox, "allow-scripts");
+  assert.equal(result.sandbox.iframeSandbox.includes("allow-scripts"), false);
+  assert.equal(result.sandbox.iframeSandbox, "");
   assert.equal(result.sandbox.csp, CSP);
 });
 

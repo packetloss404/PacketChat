@@ -136,6 +136,46 @@ test("executeRun stops at waiting_input when the spec needs external action appr
   assert.equal(recorded.requests.length, 0);
 });
 
+test("executeRun resumes an approved run: runs the gated external actions and reaches a final answer", async () => {
+  const fetched: string[] = [];
+  const { deps, recorded } = fakeDeps({
+    resolveHost: async () => ["93.184.216.34"],
+    fetch: async (url) => {
+      fetched.push(url.toString());
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+  });
+
+  const result = await executeRun(deps, {
+    ...baseInput,
+    inputText: "Look this up: https://example.com/page",
+    spec: {
+      ...baseInput.spec,
+      openApiActions: [{ id: "a", name: "Lookup", method: "GET", url: "https://api.example/x" }],
+      tools: { urlFetch: true }
+    },
+    resume: { approvalSequenceNo: 1, nextSequenceNo: 2 }
+  });
+
+  assert.deepEqual(result, { status: "completed", outputText: "Hello world" });
+  assert.deepEqual(recorded.runStatus, ["running", "completed"]);
+  // The resumed run never creates a second approval and does not reuse seq 1.
+  assert.equal(recorded.steps.some((step) => step.stepType === "approval"), false);
+  assert.equal(recorded.steps[0]?.sequenceNo, 2);
+  // The approved external actions actually ran (the shared runtime, not a copy).
+  assert.ok(fetched.includes("https://api.example/x"));
+  assert.ok(fetched.includes("https://example.com/page"));
+  // The model was driven to a final answer.
+  assert.equal(recorded.usage, 1);
+  assert.equal(recorded.requests.length, 1);
+  assert.deepEqual(recorded.events.map((event) => event.type)[0], "run.resumed");
+  assert.equal(recorded.events.some((event) => event.type === "approval.required"), false);
+  assert.equal(recorded.events.at(-1)?.type, "run.completed");
+});
+
 test("executeRun fails the run and hides an unrecognised provider error", async () => {
   const { deps, recorded } = fakeDeps({
     streamChat: async function* () {

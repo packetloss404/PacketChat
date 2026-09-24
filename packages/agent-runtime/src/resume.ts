@@ -27,6 +27,25 @@ export type ResumeState =
   | { kind: "resume"; fromSequenceNo: number }
   | { kind: "halt"; reason: "rejected" | "terminal" };
 
+/**
+ * What a resumed run needs to pick up where the paused one left off.
+ *
+ * `approvalSequenceNo` is the sequence number of the approval step the caller
+ * just resolved; zero means "no approval was involved" (a fresh run). The
+ * executor only treats the run as a resume when this is greater than zero.
+ * `nextSequenceNo` continues the run's `unique (run_id, sequence_no)` step
+ * numbering instead of restarting at 1 and colliding with the paused steps.
+ */
+export type ExecuteRunResume = {
+  approvalSequenceNo: number;
+  nextSequenceNo: number;
+};
+
+export type ResumePlan =
+  | { kind: "blocked"; pendingApprovalSeq: number }
+  | { kind: "halt"; reason: "rejected" | "terminal" }
+  | { kind: "resume"; approvalSequenceNo: number; nextSequenceNo: number };
+
 const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>([
   "completed",
   "failed",
@@ -82,4 +101,25 @@ export function applyApprovalDecision(
       output: { ...(step.output ?? {}), decision }
     };
   });
+}
+
+export function nextSequenceNo(steps: Array<{ sequenceNo: number }>): number {
+  return steps.reduce((max, step) => Math.max(max, step.sequenceNo), 0) + 1;
+}
+
+/**
+ * Turns a step/run snapshot into the action the caller should take. This is the
+ * shared state machine for the approval route, the worker's job loader and the
+ * in-process fallback: a resolved approved approval resumes, a rejected one
+ * halts, a still-running approval blocks, and a terminal run is already over.
+ */
+export function planResume(run: RunSnapshot, steps: StepSnapshot[]): ResumePlan {
+  const state = computeResumeState(run, steps);
+  if (state.kind !== "resume") return state;
+
+  return {
+    kind: "resume",
+    approvalSequenceNo: state.fromSequenceNo,
+    nextSequenceNo: nextSequenceNo(steps)
+  };
 }

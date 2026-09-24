@@ -1,27 +1,22 @@
 import { authenticateRequest } from "@packetchat/auth";
 import { getSql, recordAuditEvent } from "@packetchat/db";
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import {
+  claimRunForExecution,
+  createAgentRunDeps,
+  executeRun,
+  MAX_RUN_EXECUTION_MS,
+  publicRunError,
+  recordRunOutcome,
+  textOrNull,
+  type AgentSpec
+} from "@packetchat/agent-runtime";
+import { enqueueAgentRunJob } from "@packetchat/jobs";
 import { jsonError, jsonOk, requestIp, userAgent } from "../../../../lib/http";
+import { dispatchApprovedResume, finalizeRejectedRun } from "../../../../lib/agent-runtime/approval-resume";
 
 type RouteContext = { params: Promise<{ approvalId: string }> };
 
 type ApprovalDecision = "approved" | "rejected";
-
-type AgentSpec = {
-  openApiActions?: Array<{
-    id?: string;
-    name?: string;
-    method?: string;
-    url?: string;
-    headers?: Record<string, string>;
-    bodyTemplate?: string;
-    enabled?: boolean;
-  }>;
-  tools?: {
-    urlFetch?: boolean;
-  };
-};
 
 type ApprovalStepRow = {
   id: string;
@@ -29,10 +24,16 @@ type ApprovalStepRow = {
   agent_id: string;
   agent_name: string;
   requester_user_id: string;
+  agent_owner_user_id: string;
+  conversation_id: string | null;
+  user_message_id: string | null;
+  approval_sequence_no: number;
   status: string;
   input: Record<string, unknown>;
   output: Record<string, unknown>;
   run_input: Record<string, unknown>;
+  resolved_provider_account_id: string | null;
+  resolved_model: string | null;
   spec: AgentSpec;
 };
 
@@ -50,155 +51,6 @@ function noteFromBody(value: unknown) {
 function inputTextFromRun(input: Record<string, unknown>) {
   const text = input.text;
   return typeof text === "string" ? text : "";
-}
-
-function renderTemplate(template: string | undefined, values: Record<string, string>) {
-  if (!template) return "";
-  return Object.entries(values).reduce((next, [key, value]) => next.replaceAll(`{{${key}}}`, value), template);
-}
-
-function timeoutSignal(timeoutMs: number) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  if (typeof timeout === "object" && "unref" in timeout && typeof timeout.unref === "function") timeout.unref();
-  return {
-    signal: controller.signal,
-    clear: () => clearTimeout(timeout)
-  };
-}
-
-function isBlockedAddress(address: string) {
-  if (address.startsWith("127.") || address.startsWith("0.") || address.startsWith("10.") || address.startsWith("169.254.") || address.startsWith("192.168.")) return true;
-  const ipv4Private = address.match(/^172\.(\d+)\./);
-  if (ipv4Private && Number(ipv4Private[1]) >= 16 && Number(ipv4Private[1]) <= 31) return true;
-  const normalized = address.toLowerCase();
-  return normalized === "::1" || normalized === "::" || normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd");
-}
-
-async function isBlockedHost(hostname: string) {
-  const host = hostname.toLowerCase();
-  if (host === "localhost" || host.endsWith(".localhost")) return true;
-  if (/^(127\.|10\.|0\.|169\.254\.|192\.168\.)/.test(host)) return true;
-  const match = host.match(/^172\.(\d+)\./);
-  if (match && Number(match[1]) >= 16 && Number(match[1]) <= 31) return true;
-  if (isIP(host)) return isBlockedAddress(host);
-  const records = await lookup(host, { all: true, verbatim: true }).catch(() => []);
-  if (records.length === 0) return true;
-  return records.some((record) => isBlockedAddress(record.address));
-}
-
-async function addRunEvent(runId: string, eventType: string, payload: Record<string, unknown>) {
-  const sql = getSql();
-  await sql`
-    insert into agent_run_events (run_id, sequence_no, event_type, payload)
-    select ${runId}, coalesce(max(sequence_no), 0) + 1, ${eventType}, ${JSON.stringify(payload)}::jsonb
-    from agent_run_events
-    where run_id = ${runId}
-  `;
-}
-
-async function addCompletedStep(runId: string, stepType: "tool_result" | "message", name: string, input: Record<string, unknown>, output: Record<string, unknown>) {
-  const sql = getSql();
-  await sql`
-    insert into agent_run_steps (run_id, sequence_no, step_type, status, name, input, output, ended_at)
-    select ${runId}, coalesce(max(sequence_no), 0) + 1, ${stepType}, 'completed', ${name}, ${JSON.stringify(input)}::jsonb, ${JSON.stringify(output)}::jsonb, now()
-    from agent_run_steps
-    where run_id = ${runId}
-  `;
-}
-
-async function executeOpenApiActions(inputText: string, actions: NonNullable<AgentSpec["openApiActions"]>) {
-  const results = [];
-  for (const action of actions.filter((item) => item.enabled !== false).slice(0, 5)) {
-    const method = (action.method || "GET").toUpperCase();
-    const rawUrl = action.url?.trim();
-    if (!rawUrl || !["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) continue;
-    let url: URL;
-    try {
-      url = new URL(renderTemplate(rawUrl, { input: inputText, inputEncoded: encodeURIComponent(inputText) }));
-    } catch {
-      results.push({ name: action.name ?? action.id ?? "OpenAPI action", error: "invalid_url" });
-      continue;
-    }
-    if (url.protocol !== "https:" || await isBlockedHost(url.hostname)) {
-      results.push({ name: action.name ?? action.id ?? url.toString(), error: "blocked_url" });
-      continue;
-    }
-
-    const timeout = timeoutSignal(8000);
-    try {
-      const headers = { ...(action.headers ?? {}) };
-      const bodyText = method === "GET" ? undefined : renderTemplate(action.bodyTemplate, { input: inputText });
-      if (bodyText && !Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) headers["content-type"] = "application/json";
-      const response = await fetch(url, { method, headers, body: bodyText || undefined, redirect: "manual", signal: timeout.signal });
-      const contentType = response.headers.get("content-type") ?? "";
-      const text = (await response.text()).slice(0, 32_000);
-      results.push({
-        name: action.name ?? action.id ?? url.toString(),
-        method,
-        url: url.toString(),
-        status: response.status,
-        contentType,
-        body: /json|text|html|xml/i.test(contentType) ? text.slice(0, 6000) : `[${contentType || "binary"} response omitted]`
-      });
-    } catch {
-      results.push({ name: action.name ?? action.id ?? url.toString(), method, url: url.toString(), error: "request_failed" });
-    } finally {
-      timeout.clear();
-    }
-  }
-  return results;
-}
-
-async function fetchUrlContext(inputText: string) {
-  const matches = inputText.match(/https?:\/\/[^\s)\]}>,"']+/gi) ?? [];
-  const urls = [...new Set(matches)].slice(0, 3);
-  const results = [];
-  for (const raw of urls) {
-    const url = new URL(raw);
-    if ((url.protocol !== "http:" && url.protocol !== "https:") || await isBlockedHost(url.hostname)) continue;
-    const timeout = timeoutSignal(5000);
-    try {
-      const response = await fetch(url, { signal: timeout.signal, redirect: "manual" });
-      const contentType = response.headers.get("content-type") ?? "";
-      if (!response.ok || !/text|json|html|xml/i.test(contentType)) continue;
-      const text = (await response.text()).slice(0, 64_000).replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 3000);
-      results.push({ url: url.toString(), status: response.status, contentType, text });
-    } catch {
-      results.push({ url: url.toString(), error: "fetch_failed" });
-    } finally {
-      timeout.clear();
-    }
-  }
-  return results;
-}
-
-async function completeApprovedExternalActions(approval: ApprovalStepRow) {
-  const sql = getSql();
-  const inputText = inputTextFromRun(approval.run_input);
-  const actionResults = approval.spec.openApiActions?.length ? await executeOpenApiActions(inputText, approval.spec.openApiActions) : [];
-  if (actionResults.length > 0) {
-    await addCompletedStep(approval.run_id, "tool_result", "Approved OpenAPI actions", { approvalId: approval.id, count: actionResults.length }, { actionResults });
-    await addRunEvent(approval.run_id, "tool.openapi_actions.completed", { approvalId: approval.id, actionResults });
-  }
-
-  const fetched = approval.spec.tools?.urlFetch ? await fetchUrlContext(inputText) : [];
-  if (fetched.length > 0) {
-    await addCompletedStep(approval.run_id, "tool_result", "Approved URL fetch", { approvalId: approval.id, inputText }, { fetched });
-    await addRunEvent(approval.run_id, "tool.url_fetch.completed", { approvalId: approval.id, fetched });
-  }
-
-  await addCompletedStep(approval.run_id, "message", "Approval completion", { approvalId: approval.id }, {
-    text: actionResults.length > 0 || fetched.length > 0
-      ? "Approved external actions completed. Inspect tool steps for captured results."
-      : "Approval recorded. No external actions were available to execute."
-  });
-  await sql`
-    update agent_runs
-    set status = 'completed', ended_at = now()
-    where id = ${approval.run_id}
-  `;
-  await addRunEvent(approval.run_id, "run.completed", { approvalId: approval.id, approvedExternalActions: actionResults.length, approvedUrlFetches: fetched.length });
 }
 
 export async function PATCH(request: Request, context: RouteContext) {
@@ -224,10 +76,16 @@ export async function PATCH(request: Request, context: RouteContext) {
         ar.agent_id,
         a.name as agent_name,
         ar.owner_user_id as requester_user_id,
+        a.owner_user_id as agent_owner_user_id,
+        ar.conversation_id,
+        ar.user_message_id,
+        ars.sequence_no as approval_sequence_no,
         ars.status,
         ars.input,
         ars.output,
         ar.input as run_input,
+        ar.resolved_provider_account_id,
+        ar.resolved_model,
         v.spec
       from agent_run_steps ars
       join agent_runs ar on ar.id = ars.run_id
@@ -270,15 +128,27 @@ export async function PATCH(request: Request, context: RouteContext) {
       where run_id = ${approval.run_id}
     `;
 
+    // Approved runs go back to 'queued' so the queue worker can claim and resume
+    // them (its claim only accepts queued/preparing). Rejected runs are terminal.
     await tx`
       update agent_runs
-      set status = ${decision === "approved" ? "running" : "cancelled"},
+      set status = ${decision === "approved" ? "queued" : "cancelled"},
           ended_at = ${decision === "approved" ? null : new Date()}
       where id = ${approval.run_id}
     `;
 
+    // The resume continues the run's (run_id, sequence_no) numbering, so it must
+    // start after every step the paused run already wrote - including this
+    // approval step.
+    const sequenceRows = await tx<{ next_sequence_no: number }[]>`
+      select coalesce(max(sequence_no), 0) + 1 as next_sequence_no
+      from agent_run_steps
+      where run_id = ${approval.run_id}
+    `;
+
     return {
       conflict: false as const,
+      nextSequenceNo: sequenceRows[0]?.next_sequence_no ?? 1,
       approval: { ...approval, ...updatedRows[0]!, status: nextStatus, output: { ...(approval.output ?? {}), ...decisionOutput } }
     };
   });
@@ -304,11 +174,87 @@ export async function PATCH(request: Request, context: RouteContext) {
     }
   });
 
-  if (decision === "approved") {
-    await completeApprovedExternalActions(updated.approval);
-  } else {
-    await addRunEvent(updated.approval.run_id, "run.cancelled", { approvalId, decision });
+  const runtimeDeps = createAgentRunDeps();
+  const approval = updated.approval;
+  const version = { agent_id: approval.agent_id, agent_name: approval.agent_name };
+
+  if (decision === "rejected") {
+    await finalizeRejectedRun(
+      {
+        addRunEvent: runtimeDeps.addRunEvent,
+        addMessageStep: async (input) => {
+          await runtimeDeps.addRunStep({
+            runId: input.runId,
+            sequenceNo: updated.nextSequenceNo,
+            stepType: "message",
+            status: "completed",
+            name: input.name,
+            input: input.input,
+            output: input.output
+          });
+        },
+        record: (outcome) =>
+          recordRunOutcome({
+            conversationId: approval.conversation_id,
+            runId: approval.run_id,
+            userId: approval.requester_user_id,
+            version,
+            status: outcome.status,
+            text: outcome.text,
+            userMessageId: approval.user_message_id
+          })
+      },
+      { runId: approval.run_id, approvalId, note }
+    );
+    return jsonOk({ approval });
   }
 
-  return jsonOk({ approval: updated.approval });
+  // The recorded binding is authoritative when present; a run created before
+  // 0006 falls back to the pinned version's spec, which is immutable and yields
+  // the same values.
+  const providerAccountId = approval.resolved_provider_account_id ?? textOrNull(approval.spec.providerAccountId);
+  const model = approval.resolved_model ?? textOrNull(approval.spec.model);
+  const inputText = inputTextFromRun(approval.run_input);
+  const resume = {
+    approvalSequenceNo: approval.approval_sequence_no,
+    nextSequenceNo: updated.nextSequenceNo
+  };
+
+  const dispatch = await dispatchApprovedResume(
+    {
+      runId: approval.run_id,
+      claim: () => claimRunForExecution(approval.run_id),
+      execute: (signal) =>
+        executeRun(runtimeDeps, {
+          runId: approval.run_id,
+          resourceOwnerUserId: approval.agent_owner_user_id,
+          spec: { ...approval.spec, providerAccountId: providerAccountId ?? undefined, model: model ?? undefined },
+          inputText,
+          signal,
+          resume
+        }),
+      record: (outcome) =>
+        recordRunOutcome({
+          conversationId: approval.conversation_id,
+          runId: approval.run_id,
+          userId: approval.requester_user_id,
+          version,
+          status: outcome.status,
+          text: outcome.text,
+          userMessageId: approval.user_message_id
+        }),
+      publicError: publicRunError,
+      maxRunMs: MAX_RUN_EXECUTION_MS,
+      enqueue: () =>
+        enqueueAgentRunJob({
+          runId: approval.run_id,
+          agentId: approval.agent_id,
+          resourceOwnerUserId: approval.agent_owner_user_id,
+          userMessageId: approval.user_message_id
+        })
+    },
+    { runId: approval.run_id }
+  );
+
+  return jsonOk({ approval, resume: dispatch });
 }

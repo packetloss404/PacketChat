@@ -24,10 +24,109 @@ function formatActor(event: AdminAuditEvent) {
   return event.actor_email ?? "Unknown user";
 }
 
-function formatMetadata(value: Record<string, unknown> | null) {
-  const metadata = value ?? {};
-  if (Object.keys(metadata).length === 0) return "None";
-  return JSON.stringify(metadata);
+function formatMetadataValue(value: unknown): string {
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function metadataEntries(value: Record<string, unknown> | null | undefined): Array<[string, string]> {
+  if (!value) return [];
+  try {
+    return Object.entries(value).map(([key, entry]) => [key, formatMetadataValue(entry)]);
+  } catch {
+    return [];
+  }
+}
+
+function metadataRaw(value: Record<string, unknown> | null | undefined) {
+  if (!value || Object.keys(value).length === 0) return "";
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return "";
+  }
+}
+
+function metadataSearchText(value: Record<string, unknown> | null | undefined) {
+  return metadataEntries(value).map(([key, entry]) => `${key} ${entry}`).join(" ");
+}
+
+async function writeClipboard(text: string): Promise<boolean> {
+  if (typeof navigator !== "undefined" && navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // fall through to the legacy path
+    }
+  }
+  if (typeof document === "undefined") return false;
+  try {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.top = "-1000px";
+    textarea.style.left = "-1000px";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function MetadataCell({ metadata }: { metadata: Record<string, unknown> | null | undefined }) {
+  const entries = metadataEntries(metadata);
+  const raw = metadataRaw(metadata);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+
+  useEffect(() => {
+    if (copyState === "idle") return;
+    const timer = window.setTimeout(() => setCopyState("idle"), 2000);
+    return () => window.clearTimeout(timer);
+  }, [copyState]);
+
+  if (entries.length === 0) return <span className="muted">None</span>;
+
+  return (
+    <div style={{ display: "grid", gap: "6px", maxWidth: "360px" }}>
+      <dl style={{ display: "grid", gap: "3px", margin: 0 }}>
+        {entries.map(([key, entry]) => (
+          <div key={key} style={{ display: "grid", gap: "8px", gridTemplateColumns: "minmax(0, max-content) minmax(0, 1fr)" }}>
+            <dt style={{ color: "var(--ink-4-accessible)", fontSize: "11px", fontWeight: 500 }}>{key}</dt>
+            <dd style={{ color: "var(--ink-2)", fontSize: "12px", margin: 0, overflowWrap: "anywhere" }}>{entry}</dd>
+          </div>
+        ))}
+      </dl>
+      <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+        <button
+          type="button"
+          className="button button--ghost"
+          style={{ fontSize: "11px", minHeight: "24px", padding: "2px 8px" }}
+          onClick={() => {
+            void writeClipboard(raw).then((ok) => setCopyState(ok ? "copied" : "error"));
+          }}
+        >
+          Copy raw JSON
+        </button>
+        <span className="sr-only" role="status">
+          {copyState === "copied" ? "Raw JSON metadata copied to clipboard" : copyState === "error" ? "Unable to copy metadata" : ""}
+        </span>
+      </div>
+    </div>
+  );
 }
 
 function humanizeAction(action: string) {
@@ -102,7 +201,7 @@ export function AuditClient() {
         event.target_id ?? "",
         event.ip_address ?? "",
         event.user_agent ?? "",
-        formatMetadata(event.metadata)
+        metadataSearchText(event.metadata)
       ].join(" ").toLowerCase().includes(needle);
       return matchesOutcome && matchesAction && matchesQuery;
     });
@@ -202,7 +301,7 @@ export function AuditClient() {
                   <td><StatusBadge tone={event.outcome === "failure" ? "danger" : "success"}>{event.outcome}</StatusBadge></td>
                   <td><div className="audit-page__target"><span>{humanizeTarget(event.target_type)}</span>{event.target_id ? <span className="muted">{event.target_id}</span> : null}</div></td>
                   <td>{event.ip_address ?? "Unknown"}{event.user_agent ? <div className="muted">{event.user_agent}</div> : null}</td>
-                  <td><code className="audit-page__metadata">{formatMetadata(event.metadata)}</code></td>
+                  <td><MetadataCell metadata={event.metadata} /></td>
                 </tr>
               ))}
               {!loading && filteredEvents.length === 0 ? <tr><td colSpan={7}><span className="empty-state">No audit events match the current filters.</span></td></tr> : null}

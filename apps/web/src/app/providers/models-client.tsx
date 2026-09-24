@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { apiClient, type ProviderAccount, type ProviderModelBinding } from "../../lib/api-client";
 import { LoadingBlock, StatusBadge, useToast } from "../../components/ui";
@@ -11,16 +11,6 @@ type DetailTab = "overview" | "parameters";
 
 type ModelRow = ProviderModelBinding & {
   account: ProviderAccount;
-};
-
-type CustomModel = {
-  id: string;
-  provider: string;
-  displayName: string;
-  modelId: string;
-  contextLength: number | null;
-  notes: string;
-  createdAt: string;
 };
 
 type ProviderMeta = {
@@ -38,8 +28,6 @@ const PROVIDERS: Record<string, ProviderMeta> = {
   minimax: { id: "minimax", name: "MiniMax", tint: "#7c3aed", glyph: "M" },
   google: { id: "google", name: "Google", tint: "#4285f4", glyph: "G" }
 };
-
-const CUSTOM_MODELS_KEY = "packetchat.models.custom";
 
 function providerMeta(id: string): ProviderMeta {
   return PROVIDERS[id] ?? { id, name: id, tint: "#5f5f63", glyph: (id[0] ?? "?").toUpperCase() };
@@ -137,28 +125,6 @@ const PARAM_LABELS: Array<{ keys: string[]; label: string; format?: (value: unkn
   }
 ];
 
-function readCustomModels(): CustomModel[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(CUSTOM_MODELS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((entry): entry is CustomModel => entry && typeof entry === "object" && typeof entry.id === "string");
-  } catch {
-    return [];
-  }
-}
-
-function writeCustomModels(list: CustomModel[]) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(CUSTOM_MODELS_KEY, JSON.stringify(list));
-  } catch {
-    /* swallow quota errors */
-  }
-}
-
 function ProviderBadge({ id, size = 22 }: { id: string; size?: number }) {
   const meta = providerMeta(id);
   return (
@@ -192,10 +158,11 @@ export function ModelsClient() {
   const [selectedBindingId, setSelectedBindingId] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>("overview");
   const [moreOpen, setMoreOpen] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
-  const [customModels, setCustomModels] = useState<CustomModel[]>([]);
+  const [togglingBindingId, setTogglingBindingId] = useState<string | null>(null);
   const moreRef = useRef<HTMLDivElement | null>(null);
   const toast = useToast();
+  const { user } = useAuth();
+  const canManageBindings = user?.role === "admin";
 
   useEffect(() => {
     let cancelled = false;
@@ -217,10 +184,6 @@ export function ModelsClient() {
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  useEffect(() => {
-    setCustomModels(readCustomModels());
   }, []);
 
   useEffect(() => {
@@ -293,17 +256,10 @@ export function ModelsClient() {
     return { enabled, total: rows.length };
   }, [rows, isAccountEnabled]);
 
-  const customRowsForCategory = useMemo(() => {
-    if (categoryId === "all") return customModels;
-    if (categoryId === "others") return customModels.filter((entry) => !PROVIDERS[entry.provider]);
-    return customModels.filter((entry) => entry.provider === categoryId);
-  }, [customModels, categoryId]);
-
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return rows.filter((row) => {
-      if (categoryId !== "all" && categoryId !== "others" && row.account.provider !== categoryId) return false;
-      if (categoryId === "others" && PROVIDERS[row.account.provider]) return false;
+      if (categoryId !== "all" && row.account.provider !== categoryId) return false;
       if (!needle) return true;
       const hay = [row.model ?? "", row.display_name ?? "", row.account.display_name ?? "", row.account.provider]
         .join(" ")
@@ -311,15 +267,6 @@ export function ModelsClient() {
       return hay.includes(needle);
     });
   }, [rows, categoryId, query]);
-
-  const filteredCustom = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return customRowsForCategory;
-    return customRowsForCategory.filter((entry) => {
-      const hay = [entry.displayName, entry.modelId, entry.provider, entry.notes].join(" ").toLowerCase();
-      return hay.includes(needle);
-    });
-  }, [customRowsForCategory, query]);
 
   useEffect(() => {
     if (filtered.length > 0) {
@@ -347,8 +294,7 @@ export function ModelsClient() {
         displayName: row.display_name,
         accountEnabled: isAccountEnabled(row.account.id),
         bindingEnabled: row.enabled ?? true
-      })),
-      customModels
+      }))
     };
     try {
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -370,26 +316,28 @@ export function ModelsClient() {
     }
   }
 
-  function handleAddCustomModel(entry: CustomModel) {
-    const next = [...customModels, entry];
-    setCustomModels(next);
-    writeCustomModels(next);
-    setAddOpen(false);
-    toast({
-      message: "Custom model registration is not yet wired to a backend endpoint. Saved locally for reference.",
-      variant: "info"
-    });
-  }
-
-  function handleRemoveCustomModel(id: string) {
-    const next = customModels.filter((entry) => entry.id !== id);
-    setCustomModels(next);
-    writeCustomModels(next);
+  async function toggleBinding(row: ModelRow, nextEnabled: boolean) {
+    setTogglingBindingId(row.id);
+    try {
+      await apiClient.providers.updateBinding(row.account.id, row.id, nextEnabled);
+      setBindings((current) =>
+        current.map((binding) => (binding.id === row.id ? { ...binding, enabled: nextEnabled } : binding))
+      );
+      toast({ message: `${row.display_name || row.model || "Model"} ${nextEnabled ? "enabled" : "disabled"}.`, variant: "success" });
+    } catch (err) {
+      toast({
+        title: "Unable to update model binding",
+        message: err instanceof Error ? err.message : String(err),
+        variant: "error"
+      });
+    } finally {
+      setTogglingBindingId(null);
+    }
   }
 
   return (
     <section className="models-lib">
-      <ModelsHeader onAdd={() => setAddOpen(true)} />
+      <ModelsHeader />
 
       {error ? <p className="error-state" role="alert" style={{ marginTop: 12 }}>{error}</p> : null}
       {loading ? <LoadingBlock title="Loading models" /> : null}
@@ -442,31 +390,6 @@ export function ModelsClient() {
                 </button>
               );
             })}
-
-            <button
-              type="button"
-              className={`models-rail-item ${categoryId === "others" ? "on" : ""}`}
-              onClick={() => setCategoryId("others")}
-            >
-              <span
-                aria-hidden="true"
-                style={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: 6,
-                  background: "var(--bg-3)",
-                  display: "grid",
-                  placeItems: "center",
-                  color: "var(--ink-2)"
-                }}
-              >
-                <Icon.mcp />
-              </span>
-              <span className="models-rail-item__body">
-                <strong>Others</strong>
-                <span>{customModels.filter((entry) => !PROVIDERS[entry.provider]).length} custom</span>
-              </span>
-            </button>
           </aside>
 
           <section className="models-lib__list" aria-label="Models">
@@ -500,8 +423,8 @@ export function ModelsClient() {
                       top: "calc(100% + 6px)",
                       right: 0,
                       minWidth: 200,
-                      background: "var(--bg-1)",
-                      border: "1px solid var(--bd-1)",
+                      background: "var(--bg-2)",
+                      border: "1px solid var(--line)",
                       borderRadius: 8,
                       boxShadow: "0 12px 32px rgba(0,0,0,0.18)",
                       padding: 4,
@@ -522,7 +445,6 @@ export function ModelsClient() {
             </div>
             <p className="muted" style={{ fontSize: 12, margin: "2px 2px 8px" }}>
               Showing {filtered.length} of {rows.length} models
-              {filteredCustom.length > 0 ? ` · ${filteredCustom.length} custom` : ""}
             </p>
 
             <div className="models-lib__rows">
@@ -562,50 +484,28 @@ export function ModelsClient() {
                 );
               })}
 
-              {filteredCustom.length > 0 ? (
-                <div style={{ marginTop: 12 }}>
-                  <p className="muted" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, margin: "0 2px 6px" }}>
-                    Custom (local)
-                  </p>
-                  {filteredCustom.map((entry) => (
-                    <div key={entry.id} className="model-row" style={{ cursor: "default" }}>
-                      <ProviderBadge id={entry.provider} size={24} />
-                      <span className="model-row__body">
-                        <span className="model-row__name">{entry.displayName || entry.modelId}</span>
-                        <span className="model-row__ctx">{entry.modelId}</span>
-                      </span>
-                      <button
-                        type="button"
-                        className="ib"
-                        aria-label={`Remove ${entry.displayName}`}
-                        title="Remove"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleRemoveCustomModel(entry.id);
-                        }}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-
-              {filtered.length === 0 && filteredCustom.length === 0 ? (
+              {filtered.length === 0 ? (
                 <div className="empty-state">No models match. Adjust the category or search.</div>
               ) : null}
             </div>
           </section>
 
           <section className="models-lib__detail" aria-label="Model detail">
-            {selected ? <ModelDetail row={selected} tab={detailTab} onTabChange={setDetailTab} /> : (
+            {selected ? (
+              <ModelDetail
+                row={selected}
+                tab={detailTab}
+                onTabChange={setDetailTab}
+                canManageBindings={canManageBindings}
+                togglingBindingId={togglingBindingId}
+                onToggleBinding={toggleBinding}
+              />
+            ) : (
               <div className="empty-state">Select a model to see details.</div>
             )}
           </section>
         </div>
       ) : null}
-
-      {addOpen ? <AddCustomModelDialog onClose={() => setAddOpen(false)} onSubmit={handleAddCustomModel} /> : null}
     </section>
   );
 }
@@ -619,11 +519,11 @@ const popoverItemStyle: CSSProperties = {
   border: 0,
   borderRadius: 6,
   font: "inherit",
-  color: "var(--ink-1)",
+  color: "var(--ink)",
   cursor: "pointer"
 };
 
-function ModelsHeader({ onAdd }: { onAdd: () => void }) {
+function ModelsHeader() {
   const { user } = useAuth();
 
   return (
@@ -638,15 +538,26 @@ function ModelsHeader({ onAdd }: { onAdd: () => void }) {
             Providers &amp; keys
           </Link>
         ) : null}
-        <button className="button button--primary" type="button" onClick={onAdd}>
-          Add custom model
-        </button>
       </div>
     </header>
   );
 }
 
-function ModelDetail({ row, tab, onTabChange }: { row: ModelRow; tab: DetailTab; onTabChange: (tab: DetailTab) => void }) {
+function ModelDetail({
+  row,
+  tab,
+  onTabChange,
+  canManageBindings,
+  togglingBindingId,
+  onToggleBinding
+}: {
+  row: ModelRow;
+  tab: DetailTab;
+  onTabChange: (tab: DetailTab) => void;
+  canManageBindings: boolean;
+  togglingBindingId: string | null;
+  onToggleBinding: (row: ModelRow, nextEnabled: boolean) => Promise<void>;
+}) {
   const meta = providerMeta(row.account.provider);
   const ctx = formatContext(row);
   const pricing = readPricing(row);
@@ -682,6 +593,18 @@ function ModelDetail({ row, tab, onTabChange }: { row: ModelRow; tab: DetailTab;
         <div className="model-detail__title">{row.display_name || row.model}</div>
         <StatusBadge tone={routeEnabled ? "success" : "neutral"}>{routeEnabled ? "Enabled" : "Disabled"}</StatusBadge>
         {row.account.is_default ? <span className="model-detail__default"><span>✓</span> Default</span> : null}
+        {canManageBindings ? (
+          <button
+            className="button button--ghost"
+            type="button"
+            style={{ marginLeft: "auto" }}
+            disabled={togglingBindingId === row.id}
+            title={bindingEnabled ? "Disable this model binding" : "Enable this model binding"}
+            onClick={() => void onToggleBinding(row, !bindingEnabled)}
+          >
+            {togglingBindingId === row.id ? "Saving..." : bindingEnabled ? "Disable" : "Enable"}
+          </button>
+        ) : null}
       </header>
 
       {!routeEnabled ? (
@@ -816,159 +739,3 @@ function PriceChip({ icon, value }: { icon: string; value: number | null }) {
     </span>
   );
 }
-
-function AddCustomModelDialog({
-  onClose,
-  onSubmit
-}: {
-  onClose: () => void;
-  onSubmit: (entry: CustomModel) => void;
-}) {
-  const [provider, setProvider] = useState<string>(Object.keys(PROVIDERS)[0] ?? "openai-compatible");
-  const [displayName, setDisplayName] = useState("");
-  const [modelId, setModelId] = useState("");
-  const [contextLength, setContextLength] = useState("");
-  const [notes, setNotes] = useState("");
-
-  useEffect(() => {
-    function handleKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [onClose]);
-
-  function handleSubmit(event: FormEvent) {
-    event.preventDefault();
-    if (!displayName.trim() || !modelId.trim()) return;
-    const ctx = contextLength.trim() ? Number(contextLength) : NaN;
-    const entry: CustomModel = {
-      id: typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `cm-${Date.now()}`,
-      provider,
-      displayName: displayName.trim(),
-      modelId: modelId.trim(),
-      contextLength: Number.isFinite(ctx) && ctx > 0 ? ctx : null,
-      notes: notes.trim(),
-      createdAt: new Date().toISOString()
-    };
-    onSubmit(entry);
-  }
-
-  return (
-    <div
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(15, 17, 22, 0.55)",
-        display: "grid",
-        placeItems: "center",
-        zIndex: 100
-      }}
-    >
-      <form
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="add-custom-model-title"
-        onSubmit={handleSubmit}
-        style={{
-          background: "var(--bg-1)",
-          border: "1px solid var(--bd-1)",
-          borderRadius: 12,
-          width: "min(480px, calc(100vw - 48px))",
-          padding: 20,
-          display: "grid",
-          gap: 12,
-          boxShadow: "0 24px 60px rgba(0,0,0,0.35)"
-        }}
-      >
-        <header style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
-          <h2 id="add-custom-model-title" style={{ margin: 0, fontSize: 18 }}>Add custom model</h2>
-          <button type="button" className="ib" aria-label="Close" onClick={onClose}>×</button>
-        </header>
-
-        <label style={fieldLabelStyle}>
-          <span>Provider</span>
-          <select
-            value={provider}
-            onChange={(event) => setProvider(event.target.value)}
-            style={fieldInputStyle}
-          >
-            {Object.entries(PROVIDERS).map(([id, meta]) => (
-              <option key={id} value={id}>{meta.name}</option>
-            ))}
-          </select>
-        </label>
-
-        <label style={fieldLabelStyle}>
-          <span>Display name</span>
-          <input
-            value={displayName}
-            onChange={(event) => setDisplayName(event.target.value)}
-            placeholder="e.g. Claude Opus 4.7"
-            required
-            style={fieldInputStyle}
-          />
-        </label>
-
-        <label style={fieldLabelStyle}>
-          <span>Model ID</span>
-          <input
-            value={modelId}
-            onChange={(event) => setModelId(event.target.value)}
-            placeholder="e.g. claude-opus-4-8"
-            required
-            style={fieldInputStyle}
-          />
-        </label>
-
-        <label style={fieldLabelStyle}>
-          <span>Context length</span>
-          <input
-            type="number"
-            inputMode="numeric"
-            min={1}
-            value={contextLength}
-            onChange={(event) => setContextLength(event.target.value)}
-            placeholder="200000"
-            style={fieldInputStyle}
-          />
-        </label>
-
-        <label style={fieldLabelStyle}>
-          <span>Notes</span>
-          <textarea
-            value={notes}
-            onChange={(event) => setNotes(event.target.value)}
-            rows={3}
-            style={{ ...fieldInputStyle, resize: "vertical", minHeight: 60 }}
-          />
-        </label>
-
-        <footer style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
-          <button type="button" className="button" onClick={onClose}>Cancel</button>
-          <button type="submit" className="button button--primary">Save locally</button>
-        </footer>
-      </form>
-    </div>
-  );
-}
-
-const fieldLabelStyle: CSSProperties = {
-  display: "grid",
-  gap: 4,
-  fontSize: 12,
-  color: "var(--ink-2)"
-};
-
-const fieldInputStyle: CSSProperties = {
-  font: "inherit",
-  color: "var(--ink-1)",
-  background: "var(--bg-2)",
-  border: "1px solid var(--bd-1)",
-  borderRadius: 8,
-  padding: "8px 10px"
-};

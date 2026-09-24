@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import { apiClient } from "../../lib/api-client";
 import { authFetch } from "../../lib/auth-client";
 import { ConfirmButton, EmptyState, ErrorState, LoadingBlock, StatusBadge, useToast } from "../ui";
 
@@ -153,6 +154,7 @@ export function ProvidersManager() {
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [rotatingId, setRotatingId] = useState<string | null>(null);
+  const [togglingBindingId, setTogglingBindingId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -344,6 +346,25 @@ export function ProvidersManager() {
       toast({ title: "Unable to sync models", message: nextError, variant: "error" });
     } finally {
       setSyncingId(null);
+    }
+  }
+
+  async function toggleBinding(account: ProviderAccount, binding: ProviderModelBinding) {
+    const nextEnabled = !isBindingEnabled(binding);
+    setTogglingBindingId(binding.id);
+    setMessage(null);
+    setError(null);
+    try {
+      await apiClient.providers.updateBinding(account.id, binding.id, nextEnabled);
+      setMessage(`${modelLabel(binding)} ${nextEnabled ? "enabled" : "disabled"}.`);
+      toast({ message: `${modelLabel(binding)} ${nextEnabled ? "enabled" : "disabled"}.`, variant: "success" });
+      await loadProviders();
+    } catch (err) {
+      const nextError = err instanceof Error ? err.message : "Unable to update model binding";
+      setError(nextError);
+      toast({ title: "Unable to update model binding", message: nextError, variant: "error" });
+    } finally {
+      setTogglingBindingId(null);
     }
   }
 
@@ -562,9 +583,18 @@ export function ProvidersManager() {
                             ...capabilitySummary(model)
                           ].filter(Boolean).join(" / ");
                           return (
-                            <span className={`providers-model-chip ${modelEnabled ? "" : "providers-model-chip--disabled"}`} key={model.id} title={modelMeta}>
+                            <button
+                              className={`providers-model-chip ${modelEnabled ? "" : "providers-model-chip--disabled"}`}
+                              key={model.id}
+                              type="button"
+                              aria-pressed={modelEnabled}
+                              aria-label={`${modelLabel(model)}: ${modelEnabled ? "enabled" : "disabled"}. Click to ${modelEnabled ? "disable" : "enable"}.`}
+                              title={`${modelMeta} — click to ${modelEnabled ? "disable" : "enable"}`}
+                              disabled={togglingBindingId === model.id}
+                              onClick={() => void toggleBinding(account, model)}
+                            >
                               {modelLabel(model)}{modelEnabled ? "" : " (disabled)"}
-                            </span>
+                            </button>
                           );
                         })}
                         {accountModels.length > 5 ? <span className="muted">+{accountModels.length - 5} more</span> : null}

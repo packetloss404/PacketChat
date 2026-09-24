@@ -16,15 +16,18 @@ const TYPE_TO_KIND: Record<string, ArtifactKind> = {
   "image/svg+xml": "svg"
 };
 
-const DEFAULT_MAX_BYTES = 64 * 1024;
+export const DEFAULT_MAX_BYTES = 64 * 1024;
 
-const IFRAME_SANDBOX = "allow-scripts";
+// No script tokens: artifact frames are always script-free and same-origin-free.
+const IFRAME_SANDBOX = "";
 const CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:;";
 
 export type SanitizeResult = {
   safe: boolean;
   sanitizedContent: string;
   warnings: string[];
+  /** True when the content exceeded `maxBytes` and was UTF-8-safely truncated. */
+  truncated: boolean;
   sandbox: { iframeSandbox: string; csp: string };
 };
 
@@ -81,7 +84,7 @@ function safeFromCodePoint(code: number): string {
   }
 }
 
-type StripState = { content: string; warnings: string[] };
+type StripState = { content: string; warnings: string[]; truncated: boolean };
 
 function stripScriptTags(state: StripState): void {
   // Match <script ...>...</script> including broken/unclosed variants.
@@ -186,6 +189,7 @@ function enforceMaxBytes(state: StripState, maxBytes: number): void {
     end -= 1;
   }
   state.content = full.subarray(0, end).toString("utf8");
+  state.truncated = true;
   state.warnings.push(`Content exceeded ${maxBytes} bytes and was truncated`);
 }
 
@@ -201,11 +205,12 @@ export function sanitizeArtifact(
       safe: false,
       sanitizedContent: "",
       warnings: [`Disallowed artifact type "${artifact.type}"; content blanked`],
+      truncated: false,
       sandbox: sandbox()
     };
   }
 
-  const state: StripState = { content: artifact.content, warnings: [] };
+  const state: StripState = { content: artifact.content, warnings: [], truncated: false };
 
   if (kind === "html" || kind === "svg") {
     // Run the strip passes to a fixpoint so a token reformed by one removal
@@ -231,6 +236,7 @@ export function sanitizeArtifact(
     safe: true,
     sanitizedContent: state.content,
     warnings: state.warnings,
+    truncated: state.truncated,
     sandbox: sandbox()
   };
 }

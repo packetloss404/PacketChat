@@ -1,5 +1,6 @@
 import type { NormalizedChatRequest, ProviderId, StreamEvent } from "@packetchat/contracts";
 import type { ProviderAccountRuntime, StreamChatOptions } from "@packetchat/providers";
+import type { ExecuteRunResume } from "./resume";
 import type { UsageRecordInput } from "./usage";
 
 export type AgentSpec = {
@@ -128,4 +129,9 @@ export type ExecuteRunInput = {
   spec: AgentSpec;
   inputText: string;
   signal?: AbortSignal;
+  // Present when resuming a run paused on an approved approval. The external
+  // actions that the approval gated now run, and step numbering continues
+  // instead of restarting at 1. Absent for a fresh run, which still creates the
+  // approval and waits.
+  resume?: ExecuteRunResume;
 };

@@ -19,6 +19,15 @@ function formatDay(value: string) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
 }
 
+function formatShortDay(value: string) {
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  const date = dateOnly
+    ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
+    : new Date(value);
+  if (Number.isNaN(date.valueOf())) return value;
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
+}
+
 function formatCost(value: number | null) {
   if (value === null) return "Unknown";
   return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(value);
@@ -88,6 +97,27 @@ export function UsageClient() {
   const unknownCostCount = filteredSummary.reduce((sum, row) => sum + row.unknown_cost_count, 0);
   const governance = data.governance;
 
+  const dailyTotals = useMemo(() => {
+    const days = new Map<string, { day: string; requests: number; cost: number }>();
+    for (const row of filteredSummary) {
+      const entry = days.get(row.usage_date) ?? { day: row.usage_date, requests: 0, cost: 0 };
+      entry.requests += row.request_count;
+      entry.cost += row.cost_usd;
+      days.set(row.usage_date, entry);
+    }
+    return Array.from(days.values()).sort((left, right) => left.day.localeCompare(right.day)).slice(-14);
+  }, [filteredSummary]);
+  const maxDailyRequests = dailyTotals.reduce((max, row) => Math.max(max, row.requests), 0);
+  const totalDailyRequests = dailyTotals.reduce((sum, row) => sum + row.requests, 0);
+
+  const chartWidth = 640;
+  const chartHeight = 200;
+  const plotTop = 20;
+  const plotBottom = chartHeight - 44;
+  const plotHeight = plotBottom - plotTop;
+  const chartStep = dailyTotals.length > 0 ? chartWidth / dailyTotals.length : chartWidth;
+  const barWidth = Math.min(chartStep * 0.6, 36);
+
   return (
     <div className="usage-page">
       <section className="card usage-page__hero">
@@ -123,6 +153,72 @@ export function UsageClient() {
         <div className="card usage-page__stat"><span className="muted">Output tokens</span><strong>{number(totalOutputTokens)}</strong></div>
         <div className="card usage-page__stat"><span className="muted">Cost</span><strong>{formatKnownCost(totalCost, unknownCostCount)}</strong></div>
         <div className="card usage-page__stat"><span className="muted">Unknown cost</span><strong>{number(unknownCostCount)}</strong></div>
+      </section>
+
+      <section className="card">
+        <div className="eyebrow">Trend</div>
+        <h2>Requests per day</h2>
+        {dailyTotals.length === 0 ? (
+          <p className="muted">{loading ? "Loading usage records." : "No usage records match the current filters."}</p>
+        ) : (
+          <figure style={{ display: "grid", gap: "10px", margin: 0 }}>
+            <figcaption className="muted" style={{ fontSize: "12px" }}>
+              {`Daily request totals for the ${dailyTotals.length} most recent day${dailyTotals.length === 1 ? "" : "s"} in range (${formatDay(dailyTotals[0].day)} to ${formatDay(dailyTotals[dailyTotals.length - 1].day)}): ${number(totalDailyRequests)} requests total, peak ${number(maxDailyRequests)} in a day.`}
+            </figcaption>
+            <svg
+              viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+              role="img"
+              aria-label={`Bar chart of requests per day. ${dailyTotals.map((row) => `${formatDay(row.day)}: ${number(row.requests)}`).join(", ")}.`}
+              style={{ display: "block", height: "auto", width: "100%" }}
+            >
+              <line x1={0} y1={plotBottom} x2={chartWidth} y2={plotBottom} stroke="var(--line)" strokeWidth={1} />
+              {dailyTotals.map((row, index) => {
+                const center = chartStep * index + chartStep / 2;
+                const ratio = maxDailyRequests > 0 ? row.requests / maxDailyRequests : 0;
+                const barHeight = Math.round(ratio * plotHeight);
+                const barTop = plotBottom - barHeight;
+                return (
+                  <g key={row.day}>
+                    <rect
+                      x={center - barWidth / 2}
+                      y={barTop}
+                      width={barWidth}
+                      height={Math.max(barHeight, row.requests > 0 ? 2 : 0)}
+                      rx={2}
+                      fill="var(--accent)"
+                    >
+                      <title>{`${formatDay(row.day)}: ${number(row.requests)} requests, ${formatCost(row.cost)}`}</title>
+                    </rect>
+                    <text x={center} y={barTop - 4} textAnchor="middle" fontSize={9} fill="var(--ink-3)">{number(row.requests)}</text>
+                    <text
+                      x={center}
+                      y={plotBottom + 12}
+                      textAnchor="end"
+                      fontSize={9}
+                      fill="var(--ink-4-accessible)"
+                      transform={`rotate(-45 ${center} ${plotBottom + 12})`}
+                    >
+                      {formatShortDay(row.day)}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+            <table className="sr-only">
+              <caption>Requests and cost per day</caption>
+              <thead><tr><th scope="col">Date</th><th scope="col">Requests</th><th scope="col">Cost</th></tr></thead>
+              <tbody>
+                {dailyTotals.map((row) => (
+                  <tr key={row.day}>
+                    <th scope="row">{formatDay(row.day)}</th>
+                    <td>{number(row.requests)}</td>
+                    <td>{formatCost(row.cost)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </figure>
+        )}
       </section>
 
       {governance ? (

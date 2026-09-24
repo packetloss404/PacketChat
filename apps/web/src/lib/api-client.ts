@@ -54,6 +54,7 @@ export type Conversation = {
   mode?: "chat" | "agent_test" | string;
   temporary?: boolean;
   archived_at?: string | null;
+  active_leaf_message_id?: string | null;
   created_at?: string;
   updated_at: string;
 };
@@ -64,7 +65,67 @@ export type ConversationMessage = {
   content: unknown;
   metadata?: unknown;
   text: string;
+  parentMessageId?: string | null;
+  createdAt?: string;
   created_at: string;
+};
+
+export type ConversationMessagesResponse = {
+  messages: ConversationMessage[];
+  activeLeafMessageId: string | null;
+};
+
+export type ConversationExportFormat = "md" | "json" | "txt";
+
+export type ConversationShare = {
+  id: string;
+  conversationId: string;
+  token: string;
+  activeLeafMessageId: string | null;
+  createdAt: string;
+  revokedAt: string | null;
+  revoked: boolean;
+  url: string;
+};
+
+export type ChatRequestBody = {
+  conversationId?: string | null;
+  providerAccountId: string;
+  provider: ProviderId;
+  model: string;
+  stream?: boolean;
+  temperature?: number;
+  maxOutputTokens?: number;
+  messages: Array<{
+    role: "system" | "developer" | "user" | "assistant" | "tool";
+    content: Array<{ type: "text"; text: string }>;
+  }>;
+  /** Parent for a new user message; defaults to the conversation's active leaf. */
+  parentMessageId?: string | null;
+  /** Rerun an existing user message as a new branch instead of inserting one. */
+  editMessageId?: string;
+  /** Regenerate the assistant sibling under the given message instead of inserting a user message. */
+  regenerate?: boolean;
+  /** Chat-scoped attachments whose extracted text is injected for this turn. */
+  attachmentIds?: string[];
+};
+
+export type ChatAttachmentExtractionStatus = "ready" | "unsupported" | "empty" | "failed" | string;
+
+export type ChatAttachmentUpload = {
+  attachmentId: string;
+  documentId: null;
+  scope: "chat";
+  fileName: string;
+  mimeType: string | null;
+  sizeBytes: number;
+  extraction: {
+    status: ChatAttachmentExtractionStatus;
+    detectedType?: string;
+    chars?: number;
+    truncated?: boolean;
+    error?: string;
+  };
 };
 
 export type ProjectDefaultModelPreset = {
@@ -489,21 +550,58 @@ export const apiClient = {
       apiFetch<{ providerAccountId: string }>(`/api/providers/accounts/${encodePath(accountId)}`, jsonInit("PATCH", body)),
     rotateKey: (accountId: string, apiKey: string) =>
       apiFetch<{ providerAccountId: string }>(`/api/providers/accounts/${encodePath(accountId)}/key`, jsonInit("PATCH", { apiKey })),
+    updateBinding: (accountId: string, bindingId: string, enabled: boolean) =>
+      apiFetch<{ providerAccountId: string; bindingId: string; enabled: boolean }>(
+        `/api/providers/accounts/${encodePath(accountId)}/bindings/${encodePath(bindingId)}`,
+        jsonInit("PATCH", { enabled })
+      ),
     deleteAccount: (accountId: string) =>
       apiFetch<{ providerAccountId: string }>(`/api/providers/accounts/${encodePath(accountId)}`, { method: "DELETE" }),
     test: (providerId: ProviderId | string, providerAccountId: string) =>
       apiFetch<{ ok: boolean; message?: string }>(`/api/providers/${encodePath(providerId)}/test`, jsonInit("POST", { providerAccountId }))
   },
   conversations: {
-    list: (init?: RequestInit) => apiFetch<{ conversations: Conversation[] }>("/api/conversations", init),
+    list: (init?: RequestInit & { search?: string }) => {
+      const { search, ...requestInit } = init ?? {};
+      const query = search?.trim() ? `?search=${encodeURIComponent(search.trim())}` : "";
+      return apiFetch<{ conversations: Conversation[] }>(`/api/conversations${query}`, requestInit);
+    },
     create: (body: { title?: string; mode?: "chat" | "agent_test"; temporary?: boolean }) =>
       apiFetch<{ conversation: Conversation }>("/api/conversations", jsonInit("POST", body)),
-    update: (conversationId: string, body: { title?: string; archived?: boolean }) =>
+    update: (conversationId: string, body: { title?: string; archived?: boolean; activeLeafMessageId?: string | null }) =>
       apiFetch<{ conversation: Conversation }>(`/api/conversations/${encodePath(conversationId)}`, jsonInit("PATCH", body)),
+    setActiveLeaf: (conversationId: string, activeLeafMessageId: string | null) =>
+      apiFetch<{ conversation: Conversation }>(
+        `/api/conversations/${encodePath(conversationId)}`,
+        jsonInit("PATCH", { activeLeafMessageId })
+      ),
     delete: (conversationId: string) =>
       apiFetch<{ deleted: true }>(`/api/conversations/${encodePath(conversationId)}`, { method: "DELETE" }),
     messages: (conversationId: string, init?: RequestInit) =>
-      apiFetch<{ messages: ConversationMessage[] }>(`/api/conversations/${encodePath(conversationId)}/messages`, init)
+      apiFetch<ConversationMessagesResponse>(`/api/conversations/${encodePath(conversationId)}/messages`, init),
+    export: (conversationId: string, format: ConversationExportFormat = "md", init?: RequestInit) =>
+      authFetch(`/api/conversations/${encodePath(conversationId)}/export?format=${encodeURIComponent(format)}`, init),
+    share: {
+      list: (conversationId: string, init?: RequestInit) =>
+        apiFetch<{ shares: ConversationShare[] }>(`/api/conversations/${encodePath(conversationId)}/share`, init),
+      create: (conversationId: string) =>
+        apiFetch<{ share: ConversationShare }>(`/api/conversations/${encodePath(conversationId)}/share`, { method: "POST" }),
+      revoke: (conversationId: string, shareId: string) =>
+        apiFetch<{ share: ConversationShare }>(
+          `/api/conversations/${encodePath(conversationId)}/share/${encodePath(shareId)}`,
+          { method: "DELETE" }
+        )
+    }
+  },
+  chat: {
+    send: (body: ChatRequestBody, init?: RequestInit) =>
+      authFetch("/api/chat", { ...jsonInit("POST", body), ...init }),
+    uploadAttachment: (body: FormData) =>
+      apiFetch<ChatAttachmentUpload>("/api/files/upload", { method: "POST", body }),
+    createWithParent: (body: ChatRequestBody, parentMessageId: string | null, init?: RequestInit) =>
+      authFetch("/api/chat", { ...jsonInit("POST", { ...body, parentMessageId }), ...init }),
+    regenerate: (body: ChatRequestBody, parentMessageId: string, init?: RequestInit) =>
+      authFetch("/api/chat", { ...jsonInit("POST", { ...body, parentMessageId, regenerate: true }), ...init })
   },
   projects: {
     list: (init?: RequestInit) => apiFetch<{ projects: Project[] }>("/api/projects", init),

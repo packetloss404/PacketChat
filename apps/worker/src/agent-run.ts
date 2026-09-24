@@ -1,4 +1,4 @@
-import type { AgentSpec, RunExecutionResult } from "@packetchat/agent-runtime";
+import { runFailureStatus, type AgentSpec, type ExecuteRunResume, type RunExecutionResult } from "@packetchat/agent-runtime";
 import type { AgentRunJob } from "@packetchat/jobs";
 import { logger } from "@packetchat/observability";
 
@@ -23,6 +23,13 @@ export type AgentRunContext = {
   // the caller would have got synchronously.
   spec: AgentSpec;
   inputText: string;
+  // The user turn this run answers, so the final assistant message is parented
+  // under the right node rather than the conversation's current active leaf.
+  // Null for a run with no conversation, or one created before the column.
+  userMessageId: string | null;
+  // Set when the run is being resumed after an approved approval. Absent for
+  // the initial execution, which still creates the approval gate and waits.
+  resume?: ExecuteRunResume;
 };
 
 export type AgentRunClaim =
@@ -34,7 +41,9 @@ export type AgentRunClaim =
  * ./agent-run-deps) talk to postgres and the agent runtime; tests inject fakes.
  */
 export type AgentRunJobDeps = {
-  loadContext: (input: { runId: string; agentId: string }) => Promise<AgentRunContext | null>;
+  // `userMessageId` is the payload's copy, used as a fallback when the run row
+  // predates the agent_runs.user_message_id column. The row read wins when set.
+  loadContext: (input: { runId: string; agentId: string; userMessageId?: string | null }) => Promise<AgentRunContext | null>;
   claimRun: (runId: string) => Promise<AgentRunClaim>;
   execute: (input: { context: AgentRunContext; signal: AbortSignal }) => Promise<RunExecutionResult>;
   recordOutcome: (input: { context: AgentRunContext; status: string; text: string }) => Promise<void>;
@@ -73,7 +82,7 @@ export async function runAgentRunJob(
   const agentId = requiredId(job?.agentId, "agentId");
   const resourceOwnerUserId = requiredId(job?.resourceOwnerUserId, "resourceOwnerUserId");
 
-  const context = await deps.loadContext({ runId, agentId });
+  const context = await deps.loadContext({ runId, agentId, userMessageId: job.userMessageId ?? null });
   if (!context) throw new Error(`agent-run job references an unknown run: ${runId}`);
   // The payload's owner is what the web route authorised against. If the
   // database disagrees, the job is stale or forged and executing it would
@@ -107,9 +116,11 @@ export async function runAgentRunJob(
 
     // The executor has already marked the run row failed. The conversation still
     // needs the error message the synchronous path would have written, and a
-    // failure to write it must not mask the original error.
+    // failure to write it must not mask the original error. The status is
+    // derived the same way executeRun derived the run row's, so a cancellation
+    // or timeout is not relabelled "failed".
     const message = deps.publicError(error);
-    await deps.recordOutcome({ context, status: "failed", text: `Error: ${message}` }).catch(() => {});
+    await deps.recordOutcome({ context, status: runFailureStatus(message), text: `Error: ${message}` }).catch(() => {});
     throw error;
   } finally {
     clearTimeout(timeout);

@@ -3,11 +3,14 @@ import {
   claimRunForExecution,
   createAgentRunDeps,
   executeRun,
+  planResume,
   publicRunError,
   recordRunOutcome,
   textOrNull,
   type AgentRunDeps,
-  type AgentSpec
+  type AgentSpec,
+  type RunSnapshot,
+  type StepSnapshot
 } from "@packetchat/agent-runtime";
 import type { AgentRunContext, AgentRunJobDeps } from "./agent-run";
 
@@ -17,10 +20,19 @@ type RunContextRow = {
   input: Record<string, unknown>;
   resolved_provider_account_id: string | null;
   resolved_model: string | null;
+  user_message_id: string | null;
   agent_id: string;
   agent_name: string;
   resource_owner_user_id: string;
   spec: AgentSpec;
+  status: string;
+};
+
+type RunStepRow = {
+  sequence_no: number;
+  step_type: string;
+  status: string;
+  output: Record<string, unknown> | null;
 };
 
 /**
@@ -28,7 +40,7 @@ type RunContextRow = {
  * the version it pinned, so a job carries no state that could drift from what
  * the caller was told.
  */
-async function loadContext(input: { runId: string; agentId: string }): Promise<AgentRunContext | null> {
+async function loadContext(input: { runId: string; agentId: string; userMessageId?: string | null }): Promise<AgentRunContext | null> {
   const sql = getSql();
   const rows = await sql<RunContextRow[]>`
     select
@@ -37,9 +49,11 @@ async function loadContext(input: { runId: string; agentId: string }): Promise<A
       r.input,
       r.resolved_provider_account_id,
       r.resolved_model,
+      r.user_message_id,
       a.id as agent_id,
       a.name as agent_name,
       a.owner_user_id as resource_owner_user_id,
+      r.status,
       v.spec
     from agent_runs r
     join agents a on a.id = r.agent_id
@@ -50,6 +64,29 @@ async function loadContext(input: { runId: string; agentId: string }): Promise<A
   `;
   const row = rows[0];
   if (!row) return null;
+
+  // The job is enqueued once for the initial run and again for each approval
+  // resume. Whether this invocation is a resume is a property of the run's
+  // steps, not the payload: an approval step that has been resolved approved
+  // means the external actions are still owed and must run before the model.
+  const stepRows = await sql<RunStepRow[]>`
+    select sequence_no, step_type, status, output
+    from agent_run_steps
+    where run_id = ${input.runId}
+    order by sequence_no asc
+  `;
+  const plan = planResume(
+    { id: input.runId, status: row.status as RunSnapshot["status"] },
+    stepRows.map<StepSnapshot>((step) => ({
+      sequenceNo: step.sequence_no,
+      stepType: step.step_type,
+      status: step.status as StepSnapshot["status"],
+      output: step.output as StepSnapshot["output"]
+    }))
+  );
+  const resume = plan.kind === "resume" && plan.approvalSequenceNo > 0
+    ? { approvalSequenceNo: plan.approvalSequenceNo, nextSequenceNo: plan.nextSequenceNo }
+    : undefined;
 
   const inputText = textOrNull(row.input?.text);
   if (!inputText) throw new Error(`Agent run ${input.runId} has no input text to execute`);
@@ -77,7 +114,11 @@ async function loadContext(input: { runId: string; agentId: string }): Promise<A
     resourceOwnerUserId: row.resource_owner_user_id,
     conversationId: row.conversation_id,
     spec: { ...row.spec, providerAccountId: specProviderAccountId, model: specModel },
-    inputText
+    inputText,
+    // New runs carry the id on the row. A legacy row (created before
+    // 0008) may only have the payload's copy; take whichever is present.
+    userMessageId: row.user_message_id ?? input.userMessageId ?? null,
+    ...(resume ? { resume } : {})
   };
 }
 
@@ -94,7 +135,8 @@ export function createAgentRunJobDeps(runtime: AgentRunDeps = createAgentRunDeps
       resourceOwnerUserId: context.resourceOwnerUserId,
       spec: context.spec,
       inputText: context.inputText,
-      signal
+      signal,
+      ...(context.resume ? { resume: context.resume } : {})
     }),
     // The answer belongs to the caller's conversation, so it is written as the
     // caller, not as the agent's owner.
@@ -104,7 +146,8 @@ export function createAgentRunJobDeps(runtime: AgentRunDeps = createAgentRunDeps
       userId: context.callerUserId,
       version: { agent_id: context.agentId, agent_name: context.agentName },
       status,
-      text
+      text,
+      userMessageId: context.userMessageId
     }),
     publicError: publicRunError
   };

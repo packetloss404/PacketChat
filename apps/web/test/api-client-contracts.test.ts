@@ -61,6 +61,18 @@ test("approval decisions use the approval endpoint and preserve the decision pay
   assert.deepEqual(result.approval, { id: "approval-1", status: "cancelled" });
 });
 
+test("provider binding toggles PATCH the account-scoped binding endpoint with the enabled flag", async () => {
+  const calls = mockFetchOnce({ providerAccountId: "account/1", bindingId: "binding 2", enabled: false });
+
+  const result = await apiClient.providers.updateBinding("account/1", "binding 2", false);
+
+  const call = firstCall(calls);
+  assert.equal(call.input, "/api/providers/accounts/account%2F1/bindings/binding%202");
+  assert.equal(call.init?.method, "PATCH");
+  assert.deepEqual(await jsonBody(call), { enabled: false });
+  assert.deepEqual(result, { providerAccountId: "account/1", bindingId: "binding 2", enabled: false });
+});
+
 test("admin usage preserves governance totals and recommendations", async () => {
   const calls = mockFetchOnce({
     summary: [],

@@ -1,31 +1,52 @@
 "use client";
 
-import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type KeyboardEvent as ReactKeyboardEvent, Suspense, type CSSProperties, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import type { ProviderId } from "@packetchat/contracts";
+import { useSearchParams } from "next/navigation";
+import { buildActivePath, type ChatTreeMessage, type ProviderId } from "@packetchat/contracts";
 import { getAccessToken } from "../../lib/auth-client";
-import { apiClient, type Conversation, type ConversationMessage, type ProviderAccount, type ProviderModelBinding } from "../../lib/api-client";
+import { apiClient, type ChatAttachmentUpload, type ChatRequestBody, type Conversation, type ConversationMessage, type ProviderAccount, type ProviderModelBinding } from "../../lib/api-client";
 import { Icon } from "../../components/icons";
 import { useToast } from "../../components/ui";
 import { renderMarkdown } from "../../lib/markdown";
+import {
+  artifactKindLabel,
+  buildArtifactMessageView,
+  buildSandboxedDocument,
+  type ArtifactViewModel
+} from "../../lib/artifacts/view-model";
+import { setChatHeader, useModelPickerRequest } from "../../lib/chat-header-store";
 
 const BOOKMARKS_KEY = "packetchat.chat.bookmarks";
 const PENDING_AGENT_STORAGE_KEY = "packetchat.chat.pendingAgent";
 const PENDING_PROMPT_STORAGE_KEY = "packetchat.chat.pendingPrompt";
 const LAST_CONVERSATION_STORAGE_KEY = "packetchat.lastConversationId";
+const DRAFT_STORAGE_KEY = "packetchat.chat.composerDraft";
 
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  parentMessageId: string | null;
   createdAt?: string;
 };
 
+type MessageUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+};
+
+type TurnRequest =
+  | { kind: "new"; content: string; parentMessageId: string | null; baseMessages: ChatMessage[]; attachmentIds?: string[] }
+  | { kind: "edit"; content: string; editMessageId: string; parentMessageId: string | null; baseMessages: ChatMessage[] }
+  | { kind: "regenerate"; assistantMessageId: string; baseMessages: ChatMessage[] };
+
 type StreamEvent =
-  | { type: "conversation"; conversationId: string; runId: string }
-  | { type: "message_start"; responseId: string }
+  | { type: "conversation"; conversationId: string; runId: string; userMessageId: string; assistantMessageId: string; parentMessageId: string | null }
+  | { type: "message_start"; responseId: string; messageId?: string }
   | { type: "text_delta"; text: string }
-  | { type: "message_end"; finishReason: string }
+  | { type: "message_end"; finishReason: string; usage?: { inputTokens?: number; outputTokens?: number; reasoningTokens?: number; searchQueries?: number }; messageId?: string }
+  | { type: "conversation_updated"; conversationId: string; activeLeafMessageId: string | null; assistantMessageId: string | null }
   | { type: "error"; error: { message?: string; code?: string } };
 
 type SpeechRecognitionLike = {
@@ -55,7 +76,7 @@ function token() {
 function normalizedMessages(messages: ChatMessage[]) {
   return messages.map((message) => ({
     role: message.role,
-    content: [{ type: "text", text: message.content }]
+    content: [{ type: "text" as const, text: message.content }]
   }));
 }
 
@@ -65,6 +86,18 @@ function textFromContent(content: unknown) {
     .map((part) => (part && typeof part === "object" && "type" in part && part.type === "text" && "text" in part ? String(part.text) : ""))
     .filter(Boolean)
     .join("\n");
+}
+
+function toChatMessages(rows: ConversationMessage[]): ChatMessage[] {
+  return rows
+    .filter((message) => message.role === "user" || message.role === "assistant")
+    .map((message) => ({
+      id: message.id,
+      role: message.role === "user" ? "user" : "assistant",
+      content: message.text || textFromContent(message.content),
+      parentMessageId: message.parentMessageId ?? null,
+      createdAt: message.createdAt ?? message.created_at
+    }));
 }
 
 function metadataRecord(value: unknown): Record<string, unknown> | null {
@@ -100,6 +133,21 @@ function greeting(hour: number) {
   return "evening";
 }
 
+function extractionStatusLabel(status: string): string {
+  switch (status) {
+    case "ready":
+      return "extraction ready";
+    case "unsupported":
+      return "text extraction unsupported";
+    case "empty":
+      return "no text extracted";
+    case "failed":
+      return "text extraction failed";
+    default:
+      return status ? `extraction status ${status}` : "extraction status unknown";
+  }
+}
+
 function formatTimestamp(iso?: string) {
   if (!iso) return "";
   const date = new Date(iso);
@@ -107,6 +155,85 @@ function formatTimestamp(iso?: string) {
   const hours = String(date.getHours()).padStart(2, "0");
   const minutes = String(date.getMinutes()).padStart(2, "0");
   return `${hours}:${minutes}`;
+}
+
+function createdValue(message: ChatMessage): number {
+  const value = message.createdAt ? Date.parse(message.createdAt) : NaN;
+  return Number.isNaN(value) ? 0 : value;
+}
+
+/**
+ * Agent-run conversations persist every message with a null parent, so a strict
+ * parent walk would render a single node. When no message has a parent we treat
+ * the conversation as a flat chronological thread instead.
+ */
+function isFlatThread(messages: ChatMessage[]): boolean {
+  return messages.length > 0 && messages.every((message) => !message.parentMessageId);
+}
+
+/**
+ * A legacy flat message is a null-parent message that nothing links to. Those
+ * are the preserved chronological prefix of a mixed thread, as opposed to a
+ * genuine branching root (which has children).
+ */
+function flatPrefixIds(messages: ChatMessage[]): Set<string> {
+  const hasChild = new Set(
+    messages.filter((message) => message.parentMessageId).map((message) => message.parentMessageId as string)
+  );
+  return new Set(
+    messages.filter((message) => !message.parentMessageId && !hasChild.has(message.id)).map((message) => message.id)
+  );
+}
+
+/**
+ * Temp optimistic ids are prefixed `local-` and are never valid on the server;
+ * sending one as a parent/edit id makes the API reject the next turn.
+ */
+function serverMessageId(id: string | null | undefined): string | null {
+  return id && !id.startsWith("local-") ? id : null;
+}
+
+function siblingsOf(messages: ChatMessage[], messageId: string): ChatMessage[] {
+  const target = messages.find((message) => message.id === messageId);
+  if (!target) return [];
+  return messages
+    .filter((message) => message.parentMessageId === target.parentMessageId)
+    .sort((a, b) => createdValue(a) - createdValue(b) || a.id.localeCompare(b.id));
+}
+
+function adjacentSibling(messages: ChatMessage[], messageId: string, direction: 1 | -1): ChatMessage | null {
+  const group = siblingsOf(messages, messageId);
+  const index = group.findIndex((message) => message.id === messageId);
+  if (index === -1) return null;
+  return group[index + direction] ?? null;
+}
+
+/** Follows the newest child chain from `startId` to the branch's active leaf. */
+function deepestLeaf(messages: ChatMessage[], startId: string): string {
+  const children = new Map<string, ChatMessage[]>();
+  for (const message of messages) {
+    if (!message.parentMessageId) continue;
+    const list = children.get(message.parentMessageId) ?? [];
+    list.push(message);
+    children.set(message.parentMessageId, list);
+  }
+  let currentId = startId;
+  const seen = new Set<string>([startId]);
+  for (let guard = 0; guard <= messages.length; guard += 1) {
+    const kids = children.get(currentId);
+    if (!kids || kids.length === 0) break;
+    const next = kids.reduce((latest, message) => (createdValue(message) >= createdValue(latest) ? message : latest));
+    if (seen.has(next.id)) break;
+    seen.add(next.id);
+    currentId = next.id;
+  }
+  return currentId;
+}
+
+function announcement(text: string) {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (!clean) return "Assistant finished responding.";
+  return clean.length > 140 ? `${clean.slice(0, 140)}…` : clean;
 }
 
 function loadBookmarkSet(): Set<string> {
@@ -139,8 +266,67 @@ function replaceConversationUrl(conversationId: string) {
   }
 }
 
-export default function ChatPage() {
+function readName(prefix: string, key: string): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(`${prefix}${key}`);
+  } catch {
+    return null;
+  }
+}
+
+// Dead localStorage keys written by Settings → General, now read here.
+function readGeneralPrefs() {
+  const bool = (key: string, fallback: boolean) => {
+    const raw = readName("packetchat.settings.general.", key);
+    if (raw === "1" || raw === "true") return true;
+    if (raw === "0" || raw === "false") return false;
+    return fallback;
+  };
+  const num = (key: string, fallback: number) => {
+    const raw = readName("packetchat.settings.general.", key);
+    if (raw === null || raw === "") return fallback;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+  return {
+    sendOnEnter: bool("sendOnEnter", true),
+    autosaveDrafts: bool("autosaveDrafts", true),
+    showTokenCounts: bool("showTokenCounts", false),
+    composerFontSize: num("composerFontSize", 14)
+  };
+}
+
+const UserGlyph = () => (
+  <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4 21a8 8 0 0 1 16 0" />
+  </svg>
+);
+
+const AssistantGlyph = () => (
+  <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M12 3l1.8 4.9L18.7 9.7l-4.9 1.8L12 16.4l-1.8-4.9L5.3 9.7l4.9-1.8z" />
+    <path d="M18.5 14.5l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9z" />
+  </svg>
+);
+
+const BranchPrevGlyph = () => (
+  <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <polyline points="15 18 9 12 15 6" />
+  </svg>
+);
+
+const BranchNextGlyph = () => (
+  <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <polyline points="9 18 15 12 9 6" />
+  </svg>
+);
+
+function ChatPage() {
   const toast = useToast();
+  const searchParams = useSearchParams();
+  const conversationParam = searchParams.get("conversation");
   const [accounts, setAccounts] = useState<ProviderAccount[]>([]);
   const [modelBindings, setModelBindings] = useState<ProviderModelBinding[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -150,22 +336,32 @@ export default function ChatPage() {
   const [model, setModel] = useState("");
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [activeLeafId, setActiveLeafId] = useState<string | null>(null);
+  const [usageByMessage, setUsageByMessage] = useState<Record<string, MessageUsage>>({});
   const [loadingAccounts, setLoadingAccounts] = useState(true);
   const [isStreaming, setIsStreaming] = useState(false);
   const [status, setStatus] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [displayName, setDisplayName] = useState("there");
   const [bookmarks, setBookmarks] = useState<Set<string>>(() => new Set());
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editingDraft, setEditingDraft] = useState("");
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [userEditDraft, setUserEditDraft] = useState("");
   const [speechSupported, setSpeechSupported] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [hour, setHour] = useState<number | null>(null);
   const [activeAgent, setActiveAgent] = useState<{ id: string; name: string } | null>(null);
+  const [sendOnEnter, setSendOnEnter] = useState(true);
+  const [autosaveDrafts, setAutosaveDrafts] = useState(true);
+  const [showTokenCounts, setShowTokenCounts] = useState(false);
+  const [composerFontSize, setComposerFontSize] = useState(14);
+  const [liveAnnouncement, setLiveAnnouncement] = useState("");
+  const [attachments, setAttachments] = useState<ChatAttachmentUpload[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedAccount = useMemo(() => accounts.find((account) => account.id === accountId), [accountId, accounts]);
   const selectedModelBindings = useMemo(
@@ -173,44 +369,74 @@ export default function ChatPage() {
     [accountId, modelBindings]
   );
   const providerMismatch = !!(selectedAccount && selectedAccount.provider !== provider);
-  const composerDisabled = isStreaming || loadingAccounts || !input.trim() || (!activeAgent && (!accountId || !model.trim() || providerMismatch));
-  const hasMessages = messages.length > 0;
-  const headerTitle = useMemo(() => {
-    const active = conversations.find((c) => c.id === conversationId);
-    if (activeAgent) return `${activeAgent.name} · agent`;
-    if (active?.title) return model ? `${active.title} · ${model}` : active.title;
-    return model ? `New chat · ${model}` : "New chat";
-  }, [activeAgent, conversations, conversationId, model]);
+  const activeConversation = useMemo(() => conversations.find((candidate) => candidate.id === conversationId) ?? null, [conversations, conversationId]);
+  const selectedModelBinding = useMemo(() => selectedModelBindings.find((binding) => binding.model === model) ?? null, [selectedModelBindings, model]);
+  const isFlat = useMemo(() => isFlatThread(messages), [messages]);
+  const flatPrefix = useMemo(() => flatPrefixIds(messages), [messages]);
+  // The shared `buildActivePath` owns both the flat and mixed-thread fallbacks.
+  // Adapt the optional `createdAt` to the contracts' required field, then map
+  // the returned tree messages back to the richer `ChatMessage` shape.
+  const activePath = useMemo(() => {
+    if (messages.length === 0) return [] as ChatMessage[];
+    const byId = new Map(messages.map((message) => [message.id, message]));
+    const tree: ChatTreeMessage[] = messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      text: message.content,
+      parentMessageId: message.parentMessageId,
+      createdAt: message.createdAt ?? ""
+    }));
+    return buildActivePath(tree, activeLeafId)
+      .map((message) => byId.get(message.id))
+      .filter((message): message is ChatMessage => Boolean(message));
+  }, [messages, activeLeafId]);
+  const lastAssistantId = useMemo(() => {
+    for (let index = activePath.length - 1; index >= 0; index -= 1) {
+      if (activePath[index].role === "assistant") return activePath[index].id;
+    }
+    return null;
+  }, [activePath]);
+
+  const hasSendableContent = activeAgent
+    ? input.trim().length > 0
+    : input.trim().length > 0 || attachments.length > 0;
+  const composerDisabled = isStreaming || isUploading || loadingAccounts || !hasSendableContent || (!activeAgent && (!accountId || !model.trim() || providerMismatch));
+  const hasMessages = activePath.length > 0;
+  const modelLabel = activeAgent ? "" : (selectedModelBinding?.display_name || model || "");
+  const headerTitle = activeAgent ? activeAgent.name : (activeConversation?.title ?? null);
 
   async function loadConversations() {
     const payload = await apiClient.conversations.list();
     setConversations(payload.conversations ?? []);
   }
 
+  const loadTree = useCallback(async (nextConversationId: string) => {
+    const payload = await apiClient.conversations.messages(nextConversationId);
+    setMessages(toChatMessages(payload.messages ?? []));
+    setActiveLeafId(payload.activeLeafMessageId ?? null);
+  }, []);
+
   const loadConversation = useCallback(async (nextConversationId: string) => {
     const [messagePayload, conversationPayload] = await Promise.all([
       apiClient.conversations.messages(nextConversationId),
       apiClient.conversations.list().catch(() => ({ conversations: [] as Conversation[] }))
     ]);
-    const restoredMessages = (messagePayload.messages ?? [])
-      .filter((message) => message.role === "user" || message.role === "assistant")
-      .map<ChatMessage>((message) => ({
-        id: message.id,
-        role: message.role === "user" ? "user" : "assistant",
-        content: message.text || textFromContent(message.content),
-        createdAt: message.created_at
-      }));
+    const restoredMessages = toChatMessages(messagePayload.messages ?? []);
     const agentMessage = [...(messagePayload.messages ?? [])].reverse().find((message) => {
       const metadata = metadataRecord(message.metadata);
       return typeof metadata?.agentId === "string";
     });
     const agentMetadata = metadataRecord(agentMessage?.metadata);
     setMessages(restoredMessages);
+    setActiveLeafId(messagePayload.activeLeafMessageId ?? null);
     setConversationId(nextConversationId);
     setConversations(conversationPayload.conversations ?? []);
     if (typeof agentMetadata?.agentId === "string") {
       setActiveAgent({ id: agentMetadata.agentId, name: typeof agentMetadata.agentName === "string" ? agentMetadata.agentName : "Agent" });
       setShowSettings(false);
+      // Attachments are not supported in agent chat, so drop any that were
+      // staged while a model conversation was active.
+      setAttachments([]);
     } else {
       setActiveAgent(null);
     }
@@ -221,14 +447,66 @@ export default function ChatPage() {
     }
   }, []);
 
+  // Reload whenever the `?conversation=` query changes, including client-side
+  // navigation between two conversations (which does not remount this page).
+  useEffect(() => {
+    if (!conversationParam || conversationParam === conversationId) return;
+    if (!token()) return;
+    void loadConversation(conversationParam).catch((error) => {
+      setStatus(error instanceof Error ? error.message : "Conversation link could not be loaded.");
+    });
+  }, [conversationParam, conversationId, loadConversation]);
+
   useEffect(() => {
     setHour(new Date().getHours());
     setBookmarks(loadBookmarkSet());
+    const prefs = readGeneralPrefs();
+    setSendOnEnter(prefs.sendOnEnter);
+    setAutosaveDrafts(prefs.autosaveDrafts);
+    setShowTokenCounts(prefs.showTokenCounts);
+    setComposerFontSize(prefs.composerFontSize);
+    if (prefs.autosaveDrafts) {
+      try {
+        const draft = window.localStorage.getItem(DRAFT_STORAGE_KEY);
+        if (draft) setInput(draft);
+      } catch {
+        // ignore storage errors
+      }
+    }
     if (typeof window !== "undefined") {
       const Ctor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
       setSpeechSupported(typeof Ctor === "function");
     }
   }, []);
+
+  // Persist the composer draft only while autosave is enabled.
+  useEffect(() => {
+    if (!autosaveDrafts || typeof window === "undefined") return;
+    try {
+      if (input) window.localStorage.setItem(DRAFT_STORAGE_KEY, input);
+      else window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+    } catch {
+      // ignore storage errors
+    }
+  }, [input, autosaveDrafts]);
+
+  // Drive the shared header with the real conversation title and model label.
+  useEffect(() => {
+    setChatHeader({ title: headerTitle, modelLabel: modelLabel || null });
+  }, [headerTitle, modelLabel]);
+
+  useEffect(() => {
+    return () => setChatHeader({ title: null, modelLabel: null });
+  }, []);
+
+  // The header's model button increments this counter; open the picker when it does.
+  const modelPickerRequest = useModelPickerRequest();
+  const initialPickerRequestRef = useRef(modelPickerRequest);
+  useEffect(() => {
+    if (modelPickerRequest === initialPickerRequestRef.current) return;
+    initialPickerRequestRef.current = modelPickerRequest;
+    setShowSettings(true);
+  }, [modelPickerRequest]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -268,6 +546,7 @@ export default function ChatPage() {
       .then((payload) => {
         const name = payload.draft.spec.name || payload.draft.name || "Agent";
         setActiveAgent({ id: agentId, name });
+        setAttachments([]);
         setShowSettings(false);
         setStatus(`Chatting with ${name}.`);
       })
@@ -278,6 +557,7 @@ export default function ChatPage() {
             const agent = payload.agents.find((item) => item.id === agentId);
             if (!agent) return;
             setActiveAgent({ id: agent.id, name: agent.name });
+            setAttachments([]);
             setShowSettings(false);
             setStatus(`Chatting with ${agent.name}.`);
           })
@@ -319,12 +599,8 @@ export default function ChatPage() {
         setModelBindings(providerPayload.modelBindings ?? []);
         setConversations(conversationPayload.conversations ?? []);
 
-        const deepConversationId = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("conversation") : null;
-        if (deepConversationId) {
-          void loadConversation(deepConversationId).catch((error) => {
-            setStatus(error instanceof Error ? error.message : "Conversation link could not be loaded.");
-          });
-        }
+        // The `?conversation=` deep link is loaded by the conversationParam
+        // effect, which also covers navigation between conversations.
 
         const me = meResponse?.user ?? meResponse;
         if (me?.displayName || me?.email) {
@@ -362,7 +638,7 @@ export default function ChatPage() {
     const el = transcriptRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages.length, isStreaming]);
+  }, [activePath.length, isStreaming]);
 
   useEffect(() => {
     return () => {
@@ -371,12 +647,10 @@ export default function ChatPage() {
       } catch {
         // ignore
       }
+      // Cancel any in-flight stream when the page unmounts.
+      abortRef.current?.abort();
     };
   }, []);
-
-  function updateAssistantMessage(id: string, updater: (content: string) => string) {
-    setMessages((current) => current.map((message) => (message.id === id ? { ...message, content: updater(message.content) } : message)));
-  }
 
   function handleAccountChange(nextAccountId: string) {
     setAccountId(nextAccountId);
@@ -386,74 +660,141 @@ export default function ChatPage() {
     setModel(binding?.model ?? "");
   }
 
-  async function sendContent(content: string, baseMessages: ChatMessage[]) {
+  async function runTurn(request: TurnRequest) {
+    if (isStreaming) return;
     const accessToken = token();
-    if (!content || isStreaming) return;
-    if (!accessToken) {
-      setStatus("You're signed out. Please sign in.");
-      return;
-    }
-    if (!activeAgent && !accountId) {
-      setStatus("Select an account before sending a message.");
-      return;
-    }
-    if (!activeAgent && !model.trim()) {
-      setStatus("Pick a model first.");
-      return;
-    }
-    if (!activeAgent && providerMismatch) {
-      setStatus("This account can't use that model.");
-      return;
+    if (!activeAgent) {
+      if (!accessToken) {
+        setStatus("You're signed out. Please sign in.");
+        return;
+      }
+      if (!accountId) {
+        setStatus("Select an account before sending a message.");
+        return;
+      }
+      if (!model.trim()) {
+        setStatus("Pick a model first.");
+        return;
+      }
+      if (providerMismatch) {
+        setStatus("This account can't use that model.");
+        return;
+      }
     }
 
     const now = new Date().toISOString();
-    const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content, createdAt: now };
-    const assistantMessage: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: "", createdAt: now };
-    const requestMessages = [...baseMessages, userMessage];
-    setMessages((current) => [...current, userMessage, assistantMessage]);
+    const previousActiveLeafId = activeLeafId;
+    const assistantTempId = `local-assistant-${crypto.randomUUID()}`;
+    let userTempId: string | null = null;
+    let requestMessages: ChatMessage[];
+
+    // A `local-*` parent is a leftover optimistic temp and must never reach the
+    // server; treat it as the root instead.
+    const safeParentId = serverMessageId(request.kind === "new" || request.kind === "edit" ? request.parentMessageId : null);
+
+    if (request.kind === "new" || request.kind === "edit") {
+      userTempId = `local-user-${crypto.randomUUID()}`;
+      requestMessages = [
+        ...request.baseMessages,
+        { id: userTempId, role: "user", content: request.content, parentMessageId: safeParentId, createdAt: now }
+      ];
+    } else {
+      requestMessages = request.baseMessages;
+    }
+
+    const assistantParentId = userTempId
+      ?? (request.kind === "regenerate"
+        ? serverMessageId(messages.find((message) => message.id === request.assistantMessageId)?.parentMessageId)
+        : null);
+
+    const optimistic: ChatMessage[] = [];
+    if (userTempId && (request.kind === "new" || request.kind === "edit")) {
+      optimistic.push({ id: userTempId, role: "user", content: request.content, parentMessageId: safeParentId, createdAt: now });
+    }
+    optimistic.push({ id: assistantTempId, role: "assistant", content: "", parentMessageId: assistantParentId, createdAt: now });
+
+    setMessages((current) => [...current, ...optimistic]);
+    setActiveLeafId(assistantTempId);
     setIsStreaming(true);
+    setLiveAnnouncement("");
+    setStatus("");
 
     const abortController = new AbortController();
     abortRef.current = abortController;
 
+    let assistantId = assistantTempId;
+    let userId = userTempId;
+    let streamConversationId = conversationId;
+    let conversationEventReceived = false;
+    const wasNewConversation = !conversationId;
+
+    // Drops the optimistic user/assistant nodes and restores the pre-send leaf.
+    const discardOptimistic = () => {
+      const localIds = new Set([assistantTempId, userTempId].filter((id): id is string => Boolean(id)));
+      setMessages((current) => current.filter((item) => !localIds.has(item.id)));
+      setActiveLeafId(previousActiveLeafId);
+    };
+
+    const notifyConversationsChanged = () => {
+      if (typeof window !== "undefined" && wasNewConversation) {
+        window.dispatchEvent(new Event("packetchat:conversations-changed"));
+      }
+    };
+
     try {
       if (activeAgent) {
-        const payload = await apiClient.agents.run(activeAgent.id, { inputText: content, conversationId: conversationId || undefined, conversation: true }) as {
-          outputText?: string;
-          error?: string;
-          status?: string;
-          conversationId?: string;
-        };
+        const payload = await apiClient.agents.run(activeAgent.id, {
+          inputText: request.kind === "regenerate" ? "" : request.content,
+          conversationId: conversationId || undefined,
+          conversation: true
+        }) as { outputText?: string; error?: string; status?: string; conversationId?: string };
         if (payload.error) throw new Error(payload.error);
         if (payload.conversationId) {
+          streamConversationId = payload.conversationId;
           setConversationId(payload.conversationId);
           replaceConversationUrl(payload.conversationId);
+          notifyConversationsChanged();
         }
-        updateAssistantMessage(assistantMessage.id, () => payload.outputText ?? "");
+        const outputText = payload.outputText ?? "";
+        setMessages((current) => current.map((message) => (message.id === assistantId ? { ...message, content: outputText } : message)));
+        setLiveAnnouncement(announcement(outputText));
+        if (streamConversationId) {
+          await loadTree(streamConversationId).catch(() => undefined);
+        } else {
+          // No conversation was persisted, so the optimistic `local-*` nodes can
+          // never be reconciled. Drop them instead of leaving a bogus parent id.
+          discardOptimistic();
+        }
         await loadConversations().catch(() => undefined);
         return;
       }
 
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${accessToken}`,
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({
-          conversationId: conversationId || undefined,
-          providerAccountId: accountId,
-          provider,
-          model: model.trim(),
-          stream: true,
-          messages: normalizedMessages(requestMessages)
-        }),
-        signal: abortController.signal
-      });
+      if (!accessToken) throw new Error("You're signed out. Please sign in.");
+
+      const body: ChatRequestBody = {
+        conversationId: conversationId || undefined,
+        providerAccountId: accountId,
+        provider,
+        model: model.trim(),
+        stream: true,
+        messages: normalizedMessages(requestMessages)
+      };
+      if (request.kind === "new") {
+        body.parentMessageId = serverMessageId(request.parentMessageId);
+        if (request.attachmentIds?.length) body.attachmentIds = request.attachmentIds;
+      } else if (request.kind === "edit") {
+        body.editMessageId = request.editMessageId;
+      } else {
+        body.regenerate = true;
+        body.parentMessageId = serverMessageId(request.assistantMessageId);
+      }
+
+      const response = await apiClient.chat.send(body, { signal: abortController.signal });
 
       if (!response.ok || !response.body) {
-        const payload = await response.json().catch(() => null);
-        throw new Error(payload?.error?.message ?? payload?.error ?? `Chat request failed with ${response.status}`);
+        const payload = await response.json().catch(() => null) as { error?: { message?: string } | string } | null;
+        const message = typeof payload?.error === "string" ? payload.error : payload?.error?.message;
+        throw new Error(message ?? `Chat request failed with ${response.status}`);
       }
 
       const reader = response.body.getReader();
@@ -470,17 +811,52 @@ export default function ChatPage() {
         for (const chunk of chunks) {
           for (const line of chunk.split("\n")) {
             if (!line.startsWith("data:")) continue;
-            const streamEvent = JSON.parse(line.slice(5).trim()) as StreamEvent;
+            let streamEvent: StreamEvent;
+            try {
+              streamEvent = JSON.parse(line.slice(5).trim()) as StreamEvent;
+            } catch {
+              continue;
+            }
+
             if (streamEvent.type === "conversation") {
+              conversationEventReceived = true;
+              streamConversationId = streamEvent.conversationId;
               setConversationId(streamEvent.conversationId);
               replaceConversationUrl(streamEvent.conversationId);
+              notifyConversationsChanged();
+              const idMap = new Map<string, string>();
+              if (userId) idMap.set(userId, streamEvent.userMessageId);
+              idMap.set(assistantId, streamEvent.assistantMessageId);
+              setMessages((current) => current.map((message) => ({
+                ...message,
+                id: idMap.get(message.id) ?? message.id,
+                parentMessageId: message.parentMessageId ? (idMap.get(message.parentMessageId) ?? message.parentMessageId) : message.parentMessageId
+              })));
+              setActiveLeafId((current) => (current ? idMap.get(current) ?? current : current));
+              userId = streamEvent.userMessageId;
+              assistantId = streamEvent.assistantMessageId;
             }
+
             if (streamEvent.type === "text_delta") {
-              updateAssistantMessage(assistantMessage.id, (current) => current + streamEvent.text);
+              setMessages((current) => current.map((message) => (message.id === assistantId ? { ...message, content: message.content + streamEvent.text } : message)));
             }
+
             if (streamEvent.type === "message_end") {
+              if (streamEvent.usage) {
+                const capturedUsage: MessageUsage = {
+                  inputTokens: streamEvent.usage.inputTokens,
+                  outputTokens: streamEvent.usage.outputTokens
+                };
+                const capturedId = assistantId;
+                setUsageByMessage((current) => ({ ...current, [capturedId]: capturedUsage }));
+              }
               setStatus("");
             }
+
+            if (streamEvent.type === "conversation_updated") {
+              if (streamEvent.activeLeafMessageId) setActiveLeafId(streamEvent.activeLeafMessageId);
+            }
+
             if (streamEvent.type === "error") {
               throw new Error(streamEvent.error.message ?? streamEvent.error.code ?? "Provider stream failed");
             }
@@ -488,13 +864,31 @@ export default function ChatPage() {
         }
       }
 
+      if (streamConversationId) await loadTree(streamConversationId).catch(() => undefined);
       await loadConversations().catch(() => undefined);
+      setLiveAnnouncement("Assistant response complete.");
     } catch (error) {
       if (abortController.signal.aborted) {
         setStatus("Response stopped.");
+        if (conversationEventReceived && streamConversationId) {
+          // The server persisted the partial turn and its post-abort active leaf,
+          // so reconcile with the authoritative tree instead of guessing a leaf.
+          await loadTree(streamConversationId).catch(() => undefined);
+        } else {
+          // Nothing was persisted before the abort: remove the optimistic
+          // `local-*` nodes and restore the previous leaf so the next send has a
+          // real parentMessageId rather than a dangling temp id.
+          discardOptimistic();
+        }
       } else {
         const message = publicChatError(error);
-        updateAssistantMessage(assistantMessage.id, (current) => current || message);
+        if (conversationEventReceived && streamConversationId) {
+          // The server kept whatever it persisted; drop the optimistic nodes and
+          // re-read the authoritative tree so the next turn has a valid parent.
+          await loadTree(streamConversationId).catch(() => undefined);
+        } else {
+          discardOptimistic();
+        }
         setStatus(message);
       }
     } finally {
@@ -506,33 +900,86 @@ export default function ChatPage() {
   function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const content = input.trim();
-    if (!content || isStreaming) return;
+    const attachmentIds = attachments.map((attachment) => attachment.attachmentId);
+    if (isStreaming || isUploading) return;
+    // Agent runs require text: an attachment-only submit would start an empty run.
+    if (!content && (activeAgent || attachmentIds.length === 0)) return;
     setInput("");
-    void sendContent(content, messages);
+    setAttachments([]);
+    const lastServerMessage = [...activePath].reverse().find((message) => !message.id.startsWith("local-"));
+    const parentMessageId = serverMessageId(activeLeafId) ?? (lastServerMessage ? lastServerMessage.id : null);
+    void runTurn({ kind: "new", content, parentMessageId, baseMessages: activePath, attachmentIds });
   }
 
-  function regenerate() {
-    if (isStreaming) return;
-    let lastUserIndex = -1;
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      if (messages[index].role === "user") {
-        lastUserIndex = index;
-        break;
+  async function handleAttachFiles(fileList: FileList | null) {
+    if (!fileList?.length) return;
+    setIsUploading(true);
+    const uploaded: ChatAttachmentUpload[] = [];
+    for (const file of Array.from(fileList)) {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("scope", "chat");
+      try {
+        const result = await apiClient.chat.uploadAttachment(form);
+        uploaded.push(result);
+      } catch (error) {
+        toast({ message: `Could not attach ${file.name}: ${error instanceof Error ? error.message : "upload failed"}`, variant: "error" });
       }
     }
-    if (lastUserIndex === -1) return;
-    const lastUser = messages[lastUserIndex];
-    const truncated = messages.slice(0, lastUserIndex);
-    setMessages(truncated);
-    void sendContent(lastUser.content, truncated);
+    if (uploaded.length > 0) setAttachments((current) => [...current, ...uploaded]);
+    setIsUploading(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function removeAttachment(attachmentId: string) {
+    setAttachments((current) => current.filter((attachment) => attachment.attachmentId !== attachmentId));
+  }
+
+  function submitUserEdit(message: ChatMessage) {
+    if (isStreaming) return;
+    // An optimistic temp has no server row to edit.
+    if (message.id.startsWith("local-")) return;
+    const content = userEditDraft.trim();
+    if (!content) return;
+    setEditingUserId(null);
+    setUserEditDraft("");
+    const index = activePath.findIndex((item) => item.id === message.id);
+    const baseMessages = index >= 0 ? activePath.slice(0, index) : [];
+    void runTurn({ kind: "edit", content, editMessageId: message.id, parentMessageId: serverMessageId(message.parentMessageId), baseMessages });
+  }
+
+  function submitRegenerate(message: ChatMessage) {
+    if (isStreaming || activeAgent) return;
+    const userIndex = message.parentMessageId ? activePath.findIndex((item) => item.id === message.parentMessageId) : -1;
+    const baseMessages = userIndex >= 0 ? activePath.slice(0, userIndex + 1) : activePath;
+    void runTurn({ kind: "regenerate", assistantMessageId: message.id, baseMessages });
+  }
+
+  function switchBranch(messageId: string, direction: 1 | -1) {
+    if (!conversationId || isStreaming) return;
+    const target = adjacentSibling(messages, messageId, direction);
+    if (!target) return;
+    const leaf = deepestLeaf(messages, target.id);
+    setActiveLeafId(leaf);
+    apiClient.conversations
+      .update(conversationId, { activeLeafMessageId: leaf })
+      .then(() => loadConversations())
+      .catch((error) => setStatus(publicChatError(error)));
   }
 
   function stopStreaming() {
     abortRef.current?.abort();
   }
 
-  function onTextareaKey(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+  function onTextareaKey(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    if (sendOnEnter) {
+      if (event.shiftKey) return;
+      event.preventDefault();
+      event.currentTarget.form?.requestSubmit();
+      return;
+    }
+    if (event.ctrlKey || event.metaKey) {
       event.preventDefault();
       event.currentTarget.form?.requestSubmit();
     }
@@ -595,24 +1042,15 @@ export default function ChatPage() {
     }
   }, [toast]);
 
-  const handleStartEdit = useCallback((message: ChatMessage) => {
-    setEditingId(message.id);
-    setEditingDraft(message.content);
+  const handleStartUserEdit = useCallback((message: ChatMessage) => {
+    setEditingUserId(message.id);
+    setUserEditDraft(message.content);
   }, []);
 
-  const handleCancelEdit = useCallback(() => {
-    setEditingId(null);
-    setEditingDraft("");
+  const handleCancelUserEdit = useCallback(() => {
+    setEditingUserId(null);
+    setUserEditDraft("");
   }, []);
-
-  const handleSaveEdit = useCallback(() => {
-    if (!editingId) return;
-    const next = editingDraft;
-    setMessages((current) => current.map((message) => (message.id === editingId ? { ...message, content: next } : message)));
-    setEditingId(null);
-    setEditingDraft("");
-    toast({ message: "Message updated locally", variant: "info" });
-  }, [editingDraft, editingId, toast]);
 
   const handleToggleBookmark = useCallback((id: string) => {
     setBookmarks((current) => {
@@ -631,7 +1069,41 @@ export default function ChatPage() {
   }, [toast]);
 
   const composerNode = (
-    <form className={`composer ${hasMessages ? "composer--float" : ""}`} onSubmit={sendMessage}>
+    <form
+      className={`composer ${hasMessages ? "composer--float" : ""}`}
+      style={{ "--composer-font-size": `${composerFontSize}px` } as CSSProperties}
+      onSubmit={sendMessage}
+    >
+      {attachments.length > 0 ? (
+        <div className="composer__attachments" role="group" aria-label="Attached files">
+          {attachments.map((attachment) => (
+            <span
+              key={attachment.attachmentId}
+              className="attach-chip"
+              title={attachment.extraction.status === "ready" ? attachment.fileName : `${attachment.fileName} (context unavailable)`}
+            >
+              <Icon.attach />
+              <span className="attach-chip__name">{attachment.fileName}</span>
+              <span className="sr-only">{extractionStatusLabel(attachment.extraction.status)}</span>
+              <button
+                type="button"
+                className="attach-chip__remove"
+                aria-label={`Remove ${attachment.fileName}`}
+                onClick={() => removeAttachment(attachment.attachmentId)}
+              >
+                <Icon.plus style={{ transform: "rotate(45deg)" }} />
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        hidden
+        onChange={(event) => void handleAttachFiles(event.target.files)}
+      />
       <textarea
         rows={1}
         placeholder={activeAgent ? `Message ${activeAgent.name}` : model ? `Message ${model}` : "Ask anything"}
@@ -673,6 +1145,22 @@ export default function ChatPage() {
           disabled={Boolean(activeAgent)}
         >
           <Icon.mixer />
+        </button>
+        <button
+          className="ib"
+          type="button"
+          title={
+            activeAgent
+              ? "Attachments are not available in agent chat"
+              : isUploading
+                ? "Uploading attachments..."
+                : "Attach files"
+          }
+          aria-label="Attach files"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={Boolean(activeAgent) || isStreaming || isUploading}
+        >
+          <Icon.attach />
         </button>
         <div className="spacer" />
         {isStreaming ? (
@@ -804,6 +1292,7 @@ export default function ChatPage() {
   if (!hasMessages) {
     return (
       <>
+        <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">{liveAnnouncement}</p>
         <div className="stage">
           <div className="greet">
             <span className="logo" aria-hidden="true" />
@@ -829,49 +1318,75 @@ export default function ChatPage() {
     );
   }
 
-  const lastAssistantId = useMemo(() => {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      if (messages[index].role === "assistant") return messages[index].id;
-    }
-    return null;
-  }, [messages]);
-
   return (
     <>
-      <div className="doc" ref={transcriptRef} role="log" aria-live="polite" aria-label={headerTitle}>
+      <div className="doc" ref={transcriptRef}>
         <div className="doc__wrap">
           {settingsNode}
-          {messages.map((message) => (
-            <Turn
-              key={message.id}
-              message={message}
-              assistantLabel={activeAgent?.name || model || "Assistant"}
-              isStreaming={isStreaming}
-              isBookmarked={bookmarks.has(message.id)}
-              isEditing={editingId === message.id}
-              canRegenerate={!isStreaming && message.role === "assistant" && message.id === lastAssistantId}
-              editingDraft={editingDraft}
-              onEditingDraftChange={setEditingDraft}
-              onCopy={handleCopy}
-              onStartEdit={handleStartEdit}
-              onCancelEdit={handleCancelEdit}
-              onSaveEdit={handleSaveEdit}
-              onToggleBookmark={handleToggleBookmark}
-              onRegenerate={regenerate}
-            />
-          ))}
-          {status && !isStreaming ? (
+          {activePath.map((message) => {
+            // Legacy flat messages (and their preserved prefix) never branch.
+            const isFlatMessage = isFlat || flatPrefix.has(message.id);
+            const siblings = isFlatMessage
+              ? [message]
+              : siblingsOf(messages, message.id).filter((sibling) => !flatPrefix.has(sibling.id));
+            const branch = !isFlatMessage && siblings.length > 1
+              ? {
+                  index: siblings.findIndex((sibling) => sibling.id === message.id) + 1,
+                  count: siblings.length,
+                  canPrev: siblings.findIndex((sibling) => sibling.id === message.id) > 0,
+                  canNext: siblings.findIndex((sibling) => sibling.id === message.id) < siblings.length - 1,
+                  onPrev: () => switchBranch(message.id, -1),
+                  onNext: () => switchBranch(message.id, 1)
+                }
+              : undefined;
+            return (
+              <Turn
+                key={message.id}
+                message={message}
+                assistantLabel={activeAgent?.name || model || "Assistant"}
+                isStreaming={isStreaming}
+                isBookmarked={bookmarks.has(message.id)}
+                isEditing={message.role === "user" && editingUserId === message.id}
+                canRegenerate={!activeAgent && !isStreaming && message.role === "assistant" && message.id === lastAssistantId}
+                editingDraft={userEditDraft}
+                onEditingDraftChange={setUserEditDraft}
+                onCopy={handleCopy}
+                onStartEdit={handleStartUserEdit}
+                onCancelEdit={handleCancelUserEdit}
+                onSaveEdit={() => submitUserEdit(message)}
+                onToggleBookmark={handleToggleBookmark}
+                onRegenerate={() => submitRegenerate(message)}
+                branch={branch}
+                usage={usageByMessage[message.id]}
+                showTokenCounts={showTokenCounts}
+              />
+            );
+          })}
+          {/* settingsNode renders its own status copy, so only surface it here
+              when the panel is closed to avoid a duplicate live region. */}
+          {!showSettings && status && !isStreaming ? (
             <p className={isErrorStatus(status) ? "error-state chat-status" : "notice chat-status"} role={isErrorStatus(status) ? "alert" : "status"}>
               {status}
             </p>
           ) : null}
         </div>
       </div>
+      {/* One live-region announcement per completed turn, never per token. */}
+      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">{liveAnnouncement}</p>
       {composerNode}
       {setupNotice}
     </>
   );
 }
+
+type BranchInfo = {
+  index: number;
+  count: number;
+  canPrev: boolean;
+  canNext: boolean;
+  onPrev: () => void;
+  onNext: () => void;
+};
 
 type TurnProps = {
   message: ChatMessage;
@@ -888,6 +1403,9 @@ type TurnProps = {
   onSaveEdit: () => void;
   onToggleBookmark: (id: string) => void;
   onRegenerate: () => void;
+  branch?: BranchInfo;
+  usage?: MessageUsage;
+  showTokenCounts: boolean;
 };
 
 function Turn({
@@ -904,95 +1422,348 @@ function Turn({
   onCancelEdit,
   onSaveEdit,
   onToggleBookmark,
-  onRegenerate
+  onRegenerate,
+  branch,
+  usage,
+  showTokenCounts
 }: TurnProps) {
   const isUser = message.role === "user";
-  const placeholder = isStreaming && !isUser && !message.content ? "…" : "";
+  const placeholder = isStreaming && !isUser && !message.content;
   const timestamp = formatTimestamp(message.createdAt);
-  const showTools = !isUser && !!message.content && !isStreaming;
-  const showRegenerate = canRegenerate && !isEditing && !isUser;
+  const showAssistantTools = !isUser && !!message.content && !isStreaming;
+  const showUserTools = isUser && !!message.content && !isStreaming;
+  const showRegenerate = canRegenerate;
 
   return (
-    <article className="turn">
+    <article className={`turn ${isUser ? "turn--user" : "turn--assistant"}`}>
       <div className="turn__head">
-        <div className={`av ${isUser ? "u" : "a"}`} aria-hidden="true">{isUser ? "You" : "AI"}</div>
+        <span className={`av ${isUser ? "av--user" : "av--assistant"}`} aria-hidden="true">
+          {isUser ? <UserGlyph /> : <AssistantGlyph />}
+        </span>
         <b>{isUser ? "You" : assistantLabel}</b>
         {timestamp ? (
           <>
-            <span>·</span>
-            <span suppressHydrationWarning>{timestamp}</span>
+            <span className="turn__sep" aria-hidden="true">·</span>
+            <time className="turn__time" dateTime={message.createdAt} suppressHydrationWarning>{timestamp}</time>
           </>
+        ) : null}
+        {showTokenCounts && usage ? (
+          <span className="turn__usage">
+            {usage.inputTokens ?? 0} in / {usage.outputTokens ?? 0} out
+          </span>
+        ) : null}
+        {branch ? (
+          <span className="turn__branch" role="group" aria-label={`Branches, showing ${branch.index} of ${branch.count}`}>
+            <button
+              className="ib turn__branch-btn"
+              type="button"
+              aria-label="Previous branch"
+              disabled={!branch.canPrev}
+              onClick={branch.onPrev}
+            >
+              <BranchPrevGlyph />
+            </button>
+            <span className="turn__branch-count" aria-hidden="true">{branch.index} of {branch.count}</span>
+            <button
+              className="ib turn__branch-btn"
+              type="button"
+              aria-label="Next branch"
+              disabled={!branch.canNext}
+              onClick={branch.onNext}
+            >
+              <BranchNextGlyph />
+            </button>
+          </span>
         ) : null}
       </div>
       {isEditing ? (
-        <div className="turn__body">
+        <div className="turn__body turn__body--editing">
           <textarea
             className="turn__edit"
             value={editingDraft}
             onChange={(event) => onEditingDraftChange(event.target.value)}
             rows={Math.min(12, Math.max(3, editingDraft.split("\n").length))}
-            aria-label="Edit message"
+            aria-label="Edit message and rerun"
           />
           <div className="turn__edit-actions">
-            <button type="button" className="ib" onClick={onSaveEdit} aria-label="Save edit">Save</button>
-            <button type="button" className="ib" onClick={onCancelEdit} aria-label="Cancel edit">Cancel</button>
+            <button type="button" className="button button--primary" onClick={onSaveEdit} disabled={!editingDraft.trim()}>
+              Save &amp; rerun
+            </button>
+            <button type="button" className="button button--ghost" onClick={onCancelEdit}>Cancel</button>
           </div>
         </div>
       ) : (
-        <div className="turn__body">{message.content ? renderMarkdown(message.content) : placeholder}</div>
+        <div className="turn__body">
+          {isUser ? (
+            message.content ? renderMarkdown(message.content) : null
+          ) : (
+            <AssistantBody content={message.content} placeholder={placeholder} />
+          )}
+        </div>
       )}
-      {!isEditing && (showTools || showRegenerate) ? (
-        <div className="turn__tools" role="group" aria-label="Assistant message actions">
-          <button className="ib" type="button" title="Copy" aria-label="Copy" onClick={() => onCopy(message.content)}>
+      {!isEditing && (showAssistantTools || showUserTools) ? (
+        <div className="turn__tools" role="group" aria-label={isUser ? "Your message actions" : "Assistant message actions"}>
+          <button className="ib" type="button" title="Copy" aria-label="Copy message" onClick={() => onCopy(message.content)}>
             <Icon.copy />
           </button>
-          <button className="ib" type="button" title="Edit" aria-label="Edit" onClick={() => onStartEdit(message)}>
-            <Icon.edit />
-          </button>
-          <button
-            className="ib"
-            type="button"
-            title={isBookmarked ? "Remove bookmark" : "Bookmark"}
-            aria-label={isBookmarked ? "Remove bookmark" : "Bookmark"}
-            aria-pressed={isBookmarked}
-            onClick={() => onToggleBookmark(message.id)}
-          >
-            {isBookmarked ? (
-              <svg width={16} height={16} viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-              </svg>
-            ) : (
-              <Icon.bookmark />
-            )}
-          </button>
-          {showRegenerate ? (
-            <button className="turn__tool--regenerate" type="button" title="Regenerate response" aria-label="Regenerate response" onClick={onRegenerate}>
-              <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-                <polyline points="21 3 21 9 15 9" />
-              </svg>
-              <span>Regenerate</span>
+          {isUser ? (
+            <button className="ib" type="button" title="Edit and rerun" aria-label="Edit and rerun" onClick={() => onStartEdit(message)}>
+              <Icon.edit />
             </button>
+          ) : (
+            <>
+              <button
+                className="ib"
+                type="button"
+                title={isBookmarked ? "Remove bookmark" : "Bookmark"}
+                aria-label={isBookmarked ? "Remove bookmark" : "Bookmark"}
+                aria-pressed={isBookmarked}
+                onClick={() => onToggleBookmark(message.id)}
+              >
+                {isBookmarked ? (
+                  <svg width={16} height={16} viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+                  </svg>
+                ) : (
+                  <Icon.bookmark />
+                )}
+              </button>
+              {showRegenerate ? (
+                <button className="turn__tool--regenerate" type="button" title="Regenerate response" aria-label="Regenerate response" onClick={onRegenerate}>
+                  <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                    <polyline points="21 3 21 9 15 9" />
+                  </svg>
+                  <span>Regenerate</span>
+                </button>
+              ) : null}
+            </>
+          )}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+/**
+ * Splits an assistant message into prose and artifact view models. Only called
+ * for assistant turns; user turns render through the plain markdown renderer.
+ * The artifact fences are stripped from the prose by `buildArtifactMessageView`
+ * so raw source is never shown twice.
+ */
+function AssistantBody({ content, placeholder }: { content: string; placeholder: boolean }) {
+  const view = useMemo(() => buildArtifactMessageView(content), [content]);
+
+  if (!content) {
+    return placeholder ? <span className="turn__thinking">…</span> : null;
+  }
+
+  return (
+    <>
+      {view.prose ? renderMarkdown(view.prose) : null}
+      {view.artifacts.length > 0 ? (
+        <div className="artifacts">
+          {view.artifacts.map((artifact, index) => (
+            <ArtifactCard key={`${artifact.identifier}-${index}`} view={artifact} />
+          ))}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function ArtifactWarnings({ view }: { view: ArtifactViewModel }) {
+  if (view.warnings.length === 0) return null;
+  return (
+    <ul className="artifact__warnings">
+      {view.warnings.map((warning, index) => (
+        <li key={index}>{warning}</li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * Renders a single artifact according to its presentation. HTML/SVG always go
+ * through a sandboxed `srcDoc` iframe; markdown goes through the existing safe
+ * React markdown renderer; mermaid/react stay inert `<pre>` data.
+ */
+function ArtifactPreview({ view }: { view: ArtifactViewModel }) {
+  if (view.presentation === "iframe") {
+    return (
+      <iframe
+        className="artifact__frame"
+        title={`${view.title} preview`}
+        sandbox={view.iframeSandbox}
+        srcDoc={buildSandboxedDocument(view)}
+        referrerPolicy="no-referrer"
+        loading="lazy"
+      />
+    );
+  }
+  if (view.presentation === "markdown") {
+    return <div className="artifact__markdown">{renderMarkdown(view.content)}</div>;
+  }
+  if (view.presentation === "code") {
+    return (
+      <pre className="artifact__code">
+        <code>{view.content}</code>
+      </pre>
+    );
+  }
+  return <p className="artifact__unsupported">This artifact type is not supported and was not rendered.</p>;
+}
+
+function ArtifactCard({ view }: { view: ArtifactViewModel }) {
+  const [open, setOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const previewId = useId();
+  const expandRef = useRef<HTMLButtonElement | null>(null);
+  const presentable = view.presentation !== "unsupported";
+
+  const closePanel = useCallback(() => {
+    setPanelOpen(false);
+    // Return focus to the control that opened the panel.
+    expandRef.current?.focus();
+  }, []);
+
+  return (
+    <section
+      className={`artifact ${open ? "artifact--open" : "artifact--collapsed"}`}
+      aria-label={`${artifactKindLabel(view.kind)} artifact: ${view.title}`}
+    >
+      <div className="artifact__head">
+        <span className="artifact__badge">{artifactKindLabel(view.kind)}</span>
+        <span className="artifact__title" title={view.type}>{view.title}</span>
+        <span className="artifact__head-spacer" />
+        {presentable ? (
+          <span className="artifact__actions">
+            <button
+              type="button"
+              className="artifact__btn"
+              aria-expanded={open}
+              aria-controls={previewId}
+              onClick={() => setOpen((value) => !value)}
+            >
+              {open ? "Close" : "Open"}
+            </button>
+            <button
+              ref={expandRef}
+              type="button"
+              className="artifact__btn artifact__btn--primary"
+              aria-haspopup="dialog"
+              onClick={() => setPanelOpen(true)}
+            >
+              Expand
+            </button>
+          </span>
+        ) : (
+          <span className="artifact__note">Not rendered</span>
+        )}
+      </div>
+      <ArtifactWarnings view={view} />
+      {open && presentable ? (
+        <div className="artifact__preview" id={previewId}>
+          <ArtifactPreview view={view} />
+          {view.presentation === "code" ? (
+            <p className="artifact__note">Inert data — never executed.</p>
           ) : null}
         </div>
       ) : null}
-      <style jsx>{`
-        .turn__edit {
-          width: 100%;
-          font: inherit;
-          color: inherit;
-          background: rgba(127, 127, 127, 0.08);
-          border: 1px solid rgba(127, 127, 127, 0.25);
-          border-radius: 8px;
-          padding: 10px 12px;
-          resize: vertical;
+      {panelOpen && presentable ? <ArtifactPanel view={view} onClose={closePanel} /> : null}
+    </section>
+  );
+}
+
+/**
+ * Larger artifact view. Mirrors the inline dialog pattern used elsewhere:
+ * `role="dialog"` + `aria-modal`, backdrop click closes, Esc closes, focus is
+ * moved into the dialog and trapped there, then restored on close.
+ */
+function ArtifactPanel({ view, onClose }: { view: ArtifactViewModel; onClose: () => void }) {
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    closeRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const node = dialogRef.current;
+      if (!node) return;
+      const focusable = node.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey) {
+        if (active === first || !node.contains(active)) {
+          event.preventDefault();
+          last.focus();
         }
-        .turn__edit-actions {
-          display: flex;
-          gap: 8px;
-          margin-top: 8px;
-        }
-      `}</style>
-    </article>
+      } else if (active === last || !node.contains(active)) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  return (
+    <div
+      className="artifact-panel"
+      role="presentation"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        ref={dialogRef}
+        className="artifact-panel__dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${artifactKindLabel(view.kind)} artifact: ${view.title}`}
+      >
+        <header className="artifact-panel__head">
+          <span className="artifact__badge">{artifactKindLabel(view.kind)}</span>
+          <h2 className="artifact-panel__title">{view.title}</h2>
+          <span className="artifact__head-spacer" />
+          <button
+            ref={closeRef}
+            type="button"
+            className="artifact__btn artifact__btn--icon"
+            aria-label="Close artifact"
+            title="Close"
+            onClick={onClose}
+          >
+            <Icon.plus style={{ transform: "rotate(45deg)" }} />
+          </button>
+        </header>
+        <ArtifactWarnings view={view} />
+        <div className="artifact-panel__body">
+          <ArtifactPreview view={view} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// useSearchParams needs a Suspense boundary during prerender; the chat page
+// uses it to react to `?conversation=` changes without remounting.
+export default function ChatPageRoute() {
+  return (
+    <Suspense fallback={null}>
+      <ChatPage />
+    </Suspense>
   );
 }

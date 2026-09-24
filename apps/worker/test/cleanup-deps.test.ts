@@ -96,8 +96,54 @@ test("listExpired only selects unreferenced attachments", async () => {
   assert.match(query.text, /from attachments as a/);
   assert.match(query.text, /a\.conversation_id is null/);
   assert.match(query.text, /a\.message_id is null/);
+  assert.match(query.text, /a\.metadata->>'purpose' is distinct from 'chat_attachment'/);
   assert.match(query.text, /not exists \( select 1 from knowledge_documents kd where kd\.attachment_id = a\.id \)/);
   assert.deepEqual(query.values, [cutoff, "processing", 5000]);
+});
+
+test("a referenced chat attachment is not selected or deleted while a true orphan is", async () => {
+  // Two ownerless attachments past the cutoff. `chat-1` only has a message
+  // metadata reference, so its conversation_id/message_id are null. The fake
+  // honours the generated predicate: it spares the chat attachment only when
+  // the query actually carries the purpose guard, so removing the guard makes
+  // this test fail on both the list and the delete.
+  const fixture = [
+    {
+      id: "chat-1",
+      bucket: "uploads",
+      object_key: "chat-key",
+      conversation_id: null,
+      message_id: null,
+      status: "ready",
+      purpose: "chat_attachment",
+      created_at: new Date("2026-01-01T00:00:00.000Z")
+    },
+    {
+      id: "orphan-1",
+      bucket: "uploads",
+      object_key: "orphan-key",
+      conversation_id: null,
+      message_id: null,
+      status: "ready",
+      purpose: null,
+      created_at: new Date("2026-01-02T00:00:00.000Z")
+    }
+  ];
+  const guardPresent = (query: Recorded) => query.text.includes("a.metadata->>'purpose' is distinct from 'chat_attachment'");
+
+  const fake = createFakeSql((query) => {
+    const rows = fixture.filter((row) => !(guardPresent(query) && row.purpose === "chat_attachment"));
+    if (query.text.startsWith("delete")) return rows.map((row) => ({ id: row.id }));
+    if (query.text.includes("select a.id, a.created_at")) return rows.map((row) => ({ id: row.id, created_at: row.created_at }));
+    return rows.map((row) => ({ id: row.id, bucket: row.bucket, object_key: row.object_key }));
+  });
+
+  const deps = createCleanupDeps(fake.sql, async () => {});
+  const listed = await deps.listExpired("orphan-attachments", new Date("2026-06-01T00:00:00.000Z"));
+  assert.deepEqual(listed.map((record) => record.id), ["orphan-1"]);
+
+  const deleted = await deps.deleteByIds("orphan-attachments", ["chat-1", "orphan-1"]);
+  assert.equal(deleted, 1);
 });
 
 test("deleteByIds is a no-op for an empty id list", async () => {
@@ -167,8 +213,13 @@ test("deleteByIds re-checks the orphan predicate when deleting attachments", asy
   assert.match(query.text, /delete from attachments as a/);
   assert.match(query.text, /a\.conversation_id is null/);
   assert.match(query.text, /a\.message_id is null/);
+  assert.match(query.text, /a\.metadata->>'purpose' is distinct from 'chat_attachment'/);
   assert.match(query.text, /not exists \( select 1 from knowledge_documents kd where kd\.attachment_id = a\.id \)/);
   assert.deepEqual(boundScalars(query), ["processing"]);
+
+  // The candidate select must carry the same guard as the final delete.
+  const candidateSelect = fake.calls[fake.calls.length - 2]!;
+  assert.match(candidateSelect.text, /a\.metadata->>'purpose' is distinct from 'chat_attachment'/);
 });
 
 test("the storage object is purged before the attachment row is deleted", async () => {

@@ -78,6 +78,13 @@ function compactId(value?: string | null) {
   return value ? value.slice(0, 8) : "unknown";
 }
 
+function relevanceFromScore(score?: number | null): { label: string; tone: "success" | "info" | "warning" } {
+  if (typeof score !== "number" || !Number.isFinite(score)) return { label: "Unknown", tone: "warning" };
+  if (score >= 0.7) return { label: "High", tone: "success" };
+  if (score >= 0.4) return { label: "Medium", tone: "info" };
+  return { label: "Low", tone: "warning" };
+}
+
 export function KnowledgeManager() {
   const toast = useToast();
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
@@ -407,10 +414,10 @@ export function KnowledgeManager() {
   }
 
   const dropZoneStyle = {
-    border: dragActive ? "2px dashed rgb(217, 119, 87)" : "2px dashed rgba(148, 163, 184, 0.45)",
+    border: dragActive ? "1px dashed var(--accent)" : "1px dashed var(--line-2)",
     borderRadius: 12,
     padding: "16px",
-    background: dragActive ? "rgba(217, 119, 87, 0.08)" : "rgba(148, 163, 184, 0.04)",
+    background: dragActive ? "var(--accent-soft)" : "var(--bg-3)",
     transition: "background 120ms ease, border-color 120ms ease",
     display: "flex",
     flexDirection: "column" as const,
@@ -467,8 +474,8 @@ export function KnowledgeManager() {
           {!selectedKb ? (
             <EmptyState title="Select a knowledge base" description="Choose a base from the library or create a new one." />
           ) : (
-            <>
-              <section className="card knowledge-summary">
+            <div className="grid knowledge-detail" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))" }}>
+              <section className="card knowledge-summary grid__full" aria-label={`Overview for ${selectedKb.name}`}>
                 <div className="panel-title">
                   <div>
                     <div className="eyebrow">Selected base</div>
@@ -598,7 +605,7 @@ export function KnowledgeManager() {
                 </div>
               </section>
 
-              <section className="card knowledge-search">
+              <section className="card knowledge-search grid__full" aria-label={`Retrieval for ${selectedKb.name}`}>
                 <div className="panel-title">
                   <div>
                     <div className="eyebrow">Retrieval</div>
@@ -641,31 +648,26 @@ export function KnowledgeManager() {
                     const objectKey = metadataRecordValue(source?.metadata, "objectKey");
                     const chunkCount = metadataRecordValue(source?.metadata, "chunkCount");
                     const sourceName = source?.fileName ?? source?.name ?? result.title;
+                    const relevance = relevanceFromScore(result.score);
+                    const matchedTerms = result.matchedTerms ?? [];
 
                     return (
                       <article key={result.chunkId} className="knowledge-search-result">
                         <strong>{result.title}</strong>
                         <p>{result.snippet}</p>
                         <div className="knowledge-score-row">
-                          <span>{result.citation}</span>
-                          <span>score {result.score}</span>
-                          <span>lexical {result.lexicalScore ?? 0}</span>
-                          <span>semantic {result.semanticScore ?? 0}</span>
-                          {result.coverageScore !== undefined ? <span>coverage {result.coverageScore}</span> : null}
-                          {result.embeddingStatus ? <span>{result.embeddingStatus}</span> : null}
+                          <StatusBadge tone={relevance.tone}>{`${relevance.label} relevance`}</StatusBadge>
+                          {result.citation ? <span>{result.citation}</span> : null}
                         </div>
+                        {matchedTerms.length ? (
+                          <div className="knowledge-debug-chip-row" aria-label="Matched terms">
+                            {matchedTerms.map((term) => <span key={term} className="knowledge-debug-chip">{term}</span>)}
+                          </div>
+                        ) : null}
+                        {result.explanation ? <p className="muted" style={{ fontSize: 13 }}>{result.explanation}</p> : null}
                         <details className="knowledge-result-debug">
-                          <summary>Why this result</summary>
+                          <summary>Technical details</summary>
                           <div className="knowledge-result-debug__grid">
-                            <div className="knowledge-result-debug__section">
-                              <span className="eyebrow">Why</span>
-                              <p>{result.explanation ?? "No explanation returned."}</p>
-                              {result.matchedTerms?.length ? (
-                                <div className="knowledge-debug-chip-row" aria-label="Matched terms">
-                                  {result.matchedTerms.map((term) => <span key={term} className="knowledge-debug-chip">{term}</span>)}
-                                </div>
-                              ) : null}
-                            </div>
                             <div className="knowledge-result-debug__section">
                               <span className="eyebrow">Source</span>
                               <span><strong>Citation</strong> {result.citation}</span>
@@ -692,6 +694,11 @@ export function KnowledgeManager() {
                               <span><strong>Coverage</strong> {formatDebugScore(result.coverageScore)}</span>
                               {chunkCount ? <span><strong>Document chunks</strong> {chunkCount}</span> : null}
                             </div>
+                            <div className="knowledge-result-debug__section">
+                              <span className="eyebrow">Identifiers</span>
+                              <span><strong>Document</strong> {result.documentId}</span>
+                              <span><strong>Chunk</strong> {result.chunkId}</span>
+                            </div>
                           </div>
                         </details>
                       </article>
@@ -699,7 +706,7 @@ export function KnowledgeManager() {
                   })}
                 </div>
               </section>
-            </>
+            </div>
           )}
         </main>
       </div>

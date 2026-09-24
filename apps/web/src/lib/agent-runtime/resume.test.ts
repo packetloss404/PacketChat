@@ -5,7 +5,7 @@ import {
   computeResumeState,
   type RunSnapshot,
   type StepSnapshot
-} from "./resume";
+} from "@packetchat/agent-runtime";
 
 test("computeResumeState halts when run status is terminal", () => {
   const run: RunSnapshot = { id: "run-1", status: "completed" };

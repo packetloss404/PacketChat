@@ -104,6 +104,56 @@ test("bindings with a null catalog id are exempt, as the partial index intends",
   assert.equal(count, "2");
 });
 
+test("a binding's enabled flag toggles and gates runtime resolution", skipWithoutDatabase, async () => {
+  const sql = db!.sql;
+  const { providerAccountId } = await seedProviderAccount(sql);
+  const catalogId = await seedCatalogModel(sql, "openai-compatible", `toggle-${Date.now()}`);
+
+  const [binding] = await sql<{ id: string }[]>`
+    insert into model_account_bindings (provider_account_id, model_catalog_id, provider_model_ref)
+    values (${providerAccountId}, ${catalogId}, '{"id":"toggle-me"}'::jsonb)
+    returning id
+  `;
+
+  // The exact statement the binding-toggle endpoint runs, scoped to its account.
+  const [updated] = await sql<{ enabled: boolean }[]>`
+    update model_account_bindings
+    set enabled = false, updated_at = now()
+    where id = ${binding!.id} and provider_account_id = ${providerAccountId}
+    returning enabled
+  `;
+  assert.equal(updated!.enabled, false, "the toggle must persist disabled");
+
+  // getEnabledModelBindingForRuntime's predicate: account enabled AND binding enabled.
+  const disabledRuntime = await sql<{ id: string }[]>`
+    select mab.id
+    from model_account_bindings mab
+    join provider_accounts pa on pa.id = mab.provider_account_id
+    where mab.id = ${binding!.id}
+      and pa.status = 'enabled'
+      and mab.enabled = true
+  `;
+  assert.equal(disabledRuntime.length, 0, "a disabled binding must not be routable");
+
+  const [reenabled] = await sql<{ enabled: boolean }[]>`
+    update model_account_bindings
+    set enabled = true, updated_at = now()
+    where id = ${binding!.id} and provider_account_id = ${providerAccountId}
+    returning enabled
+  `;
+  assert.equal(reenabled!.enabled, true, "the toggle must persist enabled again");
+
+  const enabledRuntime = await sql<{ id: string }[]>`
+    select mab.id
+    from model_account_bindings mab
+    join provider_accounts pa on pa.id = mab.provider_account_id
+    where mab.id = ${binding!.id}
+      and pa.status = 'enabled'
+      and mab.enabled = true
+  `;
+  assert.equal(enabledRuntime.length, 1, "a re-enabled binding must be routable again");
+});
+
 test("0005 collapses pre-existing duplicates without disabling an enabled model", skipWithoutDatabase, async () => {
   const sql = db!.sql;
   const { providerAccountId } = await seedProviderAccount(sql);
