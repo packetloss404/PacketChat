@@ -13,7 +13,7 @@ The frontend is a v3 LibreChat-style shell — three columns (left rail, main, c
 - Forced password-reset accounts cannot mint normal sessions until the password is changed.
 - App-wide provider accounts, managed by admins at `/admin/providers` and browsed by everyone at `/providers`. Settings → API Keys links there instead of storing local provider keys.
 - Admin release-readiness surfaces for usage governance, audit events, operations health, pending approvals, and persisted agent run history.
-- Runtime provider adapters for OpenAI-compatible, Azure OpenAI, Anthropic, Perplexity, and MiniMax. Google is not a V1 runtime provider yet; any Google labels in the Models UI are forward-looking/custom-model metadata only.
+- Runtime provider adapters for OpenAI-compatible, Azure OpenAI, Anthropic, Perplexity, and MiniMax. Google is not a V1 runtime provider yet.
 - Custom provider base URLs are validated before save and again before runtime use. Local OpenAI-compatible endpoints are allowed for tools such as Ollama / LM Studio / vLLM; hosted providers must not target loopback, private, link-local, or reserved network addresses.
 - Postgres, Redis, and MinIO as durable / runtime dependencies.
 
@@ -44,47 +44,40 @@ See `docs/git-workflow.md` for the branch, commit, and pull-request workflow.
 | --- | --- | --- |
 | `/` | Welcome dashboard with quick actions, system status (`/api/healthz`), Resume-last-chat | ✅ |
 | `/login` | Local password login, invite acceptance, password-reset completion | ✅ |
-| `/chat` | Empty-state greet + pill composer; transcript with turn copy / inline edit / bookmark; SSE streaming for normal chat; `?conversation=<id>` restores transcripts; `?prompt=<id>` opens a prompt in the composer; `?agent=<id>` runs published single-pass augmented agents with chat persistence; per-message timestamps; speech-recognition mic when supported | ✅ |
-| `/agents` | Library grid with deterministic avatars + Create / Browse / Search / Sort / Pin; Create modal (scratch or template); builder with provider/model/parameters, file search, file context, artifact instructions, OpenAPI actions, pre-run agent context, supported tools, ACL sharing, manual runs, and persisted run history with steps/events/usage for published single-pass augmented agents | ✅ |
+| `/chat` | Empty-state greet + pill composer; restyled transcript with turn copy, markdown rendering (tables, blockquotes, images, hr, nested lists), and active-path / branch navigation; user edit-and-rerun and assistant regenerate **persist** as new sibling branches; the header shows the conversation title and model label; reads and applies the General preferences (send-on-Enter, draft autosave, token counts, composer font size); bookmarks are stored in localStorage only and are not server-backed; left rail supports conversation search, rename, archive, delete, and export (md/json/txt); SSE streaming for normal chat; `?conversation=<id>` restores transcripts; `?prompt=<id>` opens a prompt in the composer; `?agent=<id>` runs published single-pass augmented agents with chat persistence; per-message timestamps; speech-recognition mic when supported | ✅ |
+| `/agents` | Library grid with deterministic avatars + Create / Search / Sort / Pin; Create modal (scratch or template); builder with provider/model/parameters, file search, file context, artifact instructions, OpenAPI actions, pre-run agent context, supported tools, ACL sharing, manual runs, and persisted run history with steps/events/usage for published single-pass augmented agents | ✅ |
 | `/providers` | Read-only model library — synced model bindings, pricing coverage, and capability metadata for every app-wide provider account. Runtime provider IDs are limited to OpenAI-compatible, Azure OpenAI, Anthropic, Perplexity, and MiniMax. | ✅ |
-| `/admin/providers` | Admin-only provider and key governance — add/edit/delete app-wide provider accounts, rotate keys, enable/disable, set the default route, connection test, and model sync. | ✅ |
+| `/admin/providers` | Admin-only provider and key governance — add/edit/delete app-wide provider accounts, rotate keys, enable/disable, set the default route, connection test, and model sync. Operator HTTPS-proxy URL / OpenAI Organization ID and manual custom-model registration were **not** added: the backend has no field or endpoint for them, so they are intentionally absent rather than faked client-side. | ✅ |
 | `/projects` | User-owned project workspaces with reusable instructions, default-model readiness, linked chat counts, create/edit/delete, and workspace search | ✅ |
 | `/prompts` | Prompt Library — Add prompt modal, Browse-templates modal that creates real prompts, search + tag filter + Title / Recently-updated sort, list/grid views, star favorites (localStorage), Use in chat opens the body in the chat composer | ✅ |
 | `/knowledge` | Knowledge bases — create, edit, archive, delete; drag-drop file upload with type-filtered accept; documents list with rename / delete; reembed with detailed counts; Enter-to-search retrieval plus per-result debug details for score, matched terms, source, freshness, and embedding metadata | ✅ |
-| `/plugins` | Pending integrations — `Perplexity Search`, `Deep Research`, `GPT Image Editor`, `PDF Summarizer`, `Voice Mode` — each with a Join-waitlist email modal (prefilled from `/api/auth/me`), plus a Request-a-plugin form. All persisted to localStorage. | ✅ (UX) |
-| `/plugins/marketplace` | Coming-soon splash with orbital SVG art and three teaser agent cards (`Save interest`) | ✅ (UX, local only) |
 | `/approvals` | User approval queue for pending agent action checkpoints, approve/reject decisions, and recent safe action activity | ✅ |
 | `/admin/users` | Admin-only user management, invite links, password reset links | ✅ |
 | `/admin/usage` | Usage governance with daily/user/provider/model totals, recent records, estimated/unknown-cost flags, monthly run-rate projection, and chargeback warnings | ✅ |
 | `/admin/audit` | Admin audit log with actor/action/outcome/target/IP/user-agent/metadata filters and action summaries | ✅ |
 | `/admin/operations` | Operations health for provider accounts, model bindings, knowledge ingestion, seven-day agent runs, job failures, and recent provider audit signals | ✅ |
 | `/admin/approvals` | Admin shortcut into the actionable approval queue for pending agent approval steps across users and agents | ✅ |
-| `/settings` | Account & Data (server-backed storage status / local preference backup / provider-account link / License Key), Preferences (General / Appearance / Keyboard Shortcuts / Text-to-speech / Voice Input), Advanced (MCP drafts / local internal prompt draft / Extensions / Proxy & Org ID drafts) | ✅ (mixed wired + draft UI) |
+| `/settings` | Account & Data (server-backed storage description, backup guidance, and an API Keys section linking to the app-wide provider accounts) and Preferences (General, Appearance/theme, informational Keyboard Shortcuts). The Cloud Sync, License Key, Text-to-speech, Voice Input, MCP, Internal Prompts, Extensions, and Proxy & Org ID stub sections were removed. Appearance uses the same persisted theme implementation as the account-popover toggle. General preferences persist to localStorage and are read and applied by `/chat` (send-on-Enter, draft autosave, token counts, composer font size). | ✅ (local preferences) |
 | `/not-found`, `/global-error` | Themed error surfaces | ✅ |
 
 ## Account popover
 
-Click the avatar / display name in the left-rail footer to open the account drop-up:
+Click the avatar / display name in the left-rail footer to open the account drop-up. It contains exactly three entries:
 
-- **Manage sync status** — placeholder, marked coming-soon.
 - **Change password** — opens a modal that calls `POST /api/auth/change-password`, verifies the current password, applies the policy, and revokes all other sessions while keeping the current one alive.
 - **API Keys** — link to `/settings` → API Keys.
-- **Help & Information** — placeholder toast.
-- **packetloss404 GitHub** — opens `https://github.com/packetloss404`.
-- Footer: Fifty Eleven LLC ©, Contact / Privacy / Terms / FAQs / Docs (placeholder anchors), region chip, light/dark theme toggle that flips a `.light` class on `<html>`.
+- **GitHub** — opens `https://github.com/packetloss404`.
+- Footer: Fifty Eleven LLC © 2026 and a theme toggle. The toggle and Settings → Appearance share one persisted implementation that stores `packetchat.settings.appearance.theme` and applies `.light` to `<html>` only; `app/layout.tsx` runs a pre-hydration script that reads the same key before paint.
 
 The settings gear (next to the popover trigger) routes to `/settings`.
 
 ## Right-rail drawers
 
-The 48-px right rail expands a 320-px panel when an icon is selected. Each drawer reads/writes localStorage so values survive reloads:
+The 48-px right rail expands a 320-px panel when an icon is selected. There are exactly three drawers — Memories, Parameters, and Bookmarks — each reading/writing localStorage so values survive reloads. None of them is consumed by chat or agent runs yet:
 
-- **Prompts** — link to `/prompts`.
 - **Memories** — local listing + add-memory textarea (`packetchat.memories`), empty by default.
-- **Parameters** — temperature, top-p, max output tokens, system prompt + Reset (`packetchat.parameters`).
-- **Attach Files** — drop zone + file list with sizes; uploads not yet sent through the chat API.
-- **Bookmarks** — reads `packetchat.chat.bookmarks` written by the chat-turn bookmark button.
-- **MCP Drafts** — local draft toggles per MCP server (`packetchat.mcp.connections`); runtime MCP is not wired.
+- **Parameters** — temperature, top-p, max tokens, system prompt + Reset (`packetchat.parameters`); these are not sent with chat requests.
+- **Bookmarks** — reads `packetchat.chat.bookmarks` written by the chat-turn bookmark button (localStorage only, not server-backed).
 
 `Esc` closes the drawer.
 
@@ -100,20 +93,20 @@ The 48-px right rail expands a 320-px panel when an icon is selected. Each drawe
 - Runtime model use is checked against enabled model bindings for chat and agent runs.
 - Worker background queues: file ingestion, provider-sync model discovery, queue-durable agent runs, and scheduled retention cleanup. A provider-sync job is enqueued when an admin creates a provider account or runs a model sync; the worker registers a daily cleanup schedule on boot. Cadence, retention windows, the manual trigger, and known limitations are in `docs/runbooks/worker-queues.md`.
 - Provider-account toggles persist via the existing `providers.updateAccount` path (account-level granularity; the backend has no per-binding toggle yet).
-- Speech Synthesis voice picker enumerates real `window.speechSynthesis` voices; chat reply playback is not wired yet.
-- Theme toggle, font-size slider, and most preferences in `/settings` write through to `localStorage` under `packetchat.settings.<section>.<key>`.
+- Theme in `/settings` → Appearance and the account-popover toggle share one persisted implementation (`packetchat.settings.appearance.theme`) that toggles `.light` on `<html>`; a pre-hydration script in `app/layout.tsx` applies the stored choice before paint to avoid a dark flash. The header model pill renders the conversation title and model label published through `apps/web/src/lib/chat-header-store.ts` (a store the chat page drives; clicking the pill calls `requestModelPicker()`), falling back to the route title. The General preferences (autosave drafts, send on Enter, token counts, composer font size) persist to `localStorage` under `packetchat.settings.general.<key>` and are read and applied by the chat page; no agent-run path reads them.
 
 **Stubbed (UI-complete, backend pending):**
 
-- Cloud sync — local-backup export works; cloud connect is gated to a future Fifty Eleven LLC account flow.
-- License Key activation — accepts input but the validation service isn't connected.
-- Plugin install / waitlist — interest and requests persist locally only; no notification backend.
-- Internal prompts, proxy values, and MCP server entries — stored as local drafts only; chat and agents do not consume them yet.
-- Marketplace install — UI only.
-- File attachments in chat — picked file shows but isn't uploaded.
-- Custom models — saved to localStorage; there is no backend endpoint for registering them.
-- Per-binding model toggle — not exposed by the backend; account-level toggle is what fires.
-- Code interpreter and MCP tools — visible in the builder as unavailable until their runtimes are configured.
+- Per-binding model toggle — not exposed by the backend; the account-level toggle is what fires.
+- Code interpreter and MCP tools — visible in the agent builder as unavailable until their runtimes are configured.
+
+**Known gaps (private-first scope):**
+
+- Bookmarks are stored in `localStorage` only and are not server-backed.
+- In-chat file attachments are not implemented. There is no chat file picker: `POST /api/files/upload` requires a `knowledgeBaseId`, so uploads only happen from a Knowledge base.
+- Retrieval uses a local-embedding fallback plus lexical scoring (`apps/web/src/app/api/knowledge/[knowledgeBaseId]/search/route.ts`), not a production embedding/vector store.
+- Right-rail Memories/Parameters/Bookmarks persist locally and are not consumed by chat or agent runs (the General preferences are, via the chat page).
+- Agent-run conversations are persisted flat (every message has a null parent), so the chat page falls back to a chronological thread for them instead of a strict parent walk; branching applies to normal chat only.
 
 ## Deployment Notes
 
