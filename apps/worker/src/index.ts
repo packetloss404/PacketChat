@@ -9,7 +9,16 @@ import { createProviderSyncDeps } from "./provider-sync-deps";
 import { MAX_RUN_EXECUTION_MS } from "@packetchat/agent-runtime";
 import { getConfig } from "@packetchat/config";
 import { checkDatabase, getSql } from "@packetchat/db";
-import { checkObjectStorage, createLocalEmbedding, downloadObject, extractSupportedText, LOCAL_EMBEDDING_VERSION, MAX_EXTRACTED_TEXT_CHARS } from "@packetchat/files";
+import {
+  checkObjectStorage,
+  createLocalEmbedding,
+  downloadObject,
+  extractSupportedText,
+  LOCAL_EMBEDDING_MODEL,
+  LOCAL_EMBEDDING_PROFILE,
+  LOCAL_EMBEDDING_VERSION,
+  MAX_EXTRACTED_TEXT_CHARS
+} from "@packetchat/files";
 import { checkRedis } from "@packetchat/jobs";
 import { logger } from "@packetchat/observability";
 import { writeFile } from "node:fs/promises";
@@ -210,7 +219,10 @@ async function ingestFile(jobData: FileIngestionJob) {
     if (chunks.length === 0) throw new Error("No text content could be extracted from this file");
     const extractionMetadata = {
       detectedType: extracted.detectedType,
+      embeddingModel: LOCAL_EMBEDDING_MODEL,
       embeddingVersion: LOCAL_EMBEDDING_VERSION,
+      embeddingKind: LOCAL_EMBEDDING_PROFILE.kind,
+      embeddingNeuralSemantic: LOCAL_EMBEDDING_PROFILE.neuralSemantic,
       ...(extracted.truncated ? { extractionTruncated: true, extractionLimitChars: MAX_EXTRACTED_TEXT_CHARS } : {})
     };
 

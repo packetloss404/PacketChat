@@ -1,15 +1,17 @@
 import { authenticateRequest } from "@packetchat/auth";
 import { getSql } from "@packetchat/db";
-import { cosineSimilarity, createLocalEmbedding, parseLocalEmbedding } from "@packetchat/files";
+import {
+  analyzeLocalText,
+  LOCAL_EMBEDDING_PROFILE,
+  LOCAL_RETRIEVAL_STRATEGY,
+  parseLocalEmbedding,
+  rankLocalHybridResults
+} from "@packetchat/files";
 import { jsonError, jsonOk } from "../../../../../lib/http";
 
 const MAX_LIMIT = 50;
 const MAX_OFFSET = 5_000;
 const MAX_CANDIDATES = 2_000;
-
-function termsFor(text: string) {
-  return text.toLowerCase().match(/[a-z0-9_]{2,}/g) ?? [];
-}
 
 function snippetFor(content: string, terms: string[]) {
   const lower = content.toLowerCase();
@@ -34,9 +36,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ kno
   const candidateLimit = Math.min(Math.max(Number(body?.candidateLimit) || MAX_CANDIDATES, limit + offset, 100), MAX_CANDIDATES);
   if (!query) return jsonError("query is required", 400);
 
-  const terms = [...new Set(termsFor(query))];
+  const queryAnalysis = analyzeLocalText(query);
+  const terms = queryAnalysis.uniqueTerms;
+  const queryConceptCount = queryAnalysis.uniqueCanonicalTerms.length;
   if (terms.length === 0) return jsonError("query must contain searchable terms", 400);
-  const queryEmbedding = createLocalEmbedding(query);
 
   const sql = getSql();
   const knowledgeBases = await sql<{ id: string }[]>`
@@ -90,66 +93,31 @@ export async function POST(request: Request, { params }: { params: Promise<{ kno
     where kd.knowledge_base_id = ${knowledgeBaseId}
       and kd.owner_user_id = ${user.id}
       and kd.ingest_status = 'ready'
-      and exists (
-        select 1
-        from unnest(${terms}::text[]) as search_terms(term)
-        where lower(kc.content) like '%' || search_terms.term || '%'
-           or lower(kd.title) like '%' || search_terms.term || '%'
-      )
-    order by kd.created_at desc, kc.chunk_index asc
-    limit ${candidateLimit}
+    order by kd.updated_at desc, kd.id asc, kc.chunk_index asc, kc.id asc
+    limit ${candidateLimit + 1}
   `;
+
+  const candidateSetTruncated = chunks.length > candidateLimit;
+  const candidates = chunks.slice(0, candidateLimit);
 
   let missingEmbeddingCount = 0;
   let outdatedEmbeddingCount = 0;
   let invalidEmbeddingCount = 0;
 
-  const rankedResults = chunks
-    .map((chunk) => {
-      const content = chunk.content.toLowerCase();
-      const title = chunk.title.toLowerCase();
-      let lexicalScore = 0;
-      let matchedTerms = 0;
-      let contentHitTotal = 0;
-      let titleHitTotal = 0;
-      for (const term of terms) {
-        const contentHits = content.split(term).length - 1;
-        const titleHits = title.split(term).length - 1;
-        if (contentHits > 0 || titleHits > 0) matchedTerms += 1;
-        contentHitTotal += contentHits;
-        titleHitTotal += titleHits;
-        lexicalScore += contentHits + titleHits * 3;
-      }
-      const parsedEmbedding = parseLocalEmbedding(chunk.embedding);
-      if (!parsedEmbedding.embedding) {
-        if (parsedEmbedding.reason === "missing") missingEmbeddingCount += 1;
-        if (parsedEmbedding.reason === "outdated") outdatedEmbeddingCount += 1;
-        if (parsedEmbedding.reason === "invalid") invalidEmbeddingCount += 1;
-      }
-      const matchedTermList = terms.filter((term) => content.includes(term) || title.includes(term));
-      return {
-        chunk,
-        lexicalScore,
-        matchedTerms,
-        contentHitTotal,
-        titleHitTotal,
-        matchedTermList,
-        semanticScore: parsedEmbedding.embedding ? Math.max(0, cosineSimilarity(parsedEmbedding.embedding, queryEmbedding)) : 0,
-        embeddingStatus: parsedEmbedding.embedding ? "current" : parsedEmbedding.reason ?? "invalid"
-      };
-    })
-    .filter((result) => result.lexicalScore > 0 || result.semanticScore > 0)
-    .map((result) => ({
-      ...result,
-      lexicalNormalized: Math.min(1, Math.log1p(result.lexicalScore) / Math.log1p(terms.length * 4)),
-      coverageScore: result.matchedTerms / terms.length
-    }))
-    .map((result) => ({
-      ...result,
-      score: result.lexicalNormalized * 0.4 + result.coverageScore * 0.2 + result.semanticScore * 0.4
-    }))
-    .sort((a, b) => b.score - a.score)
-    .map(({ chunk, score, lexicalScore, semanticScore, coverageScore, embeddingStatus, matchedTermList, contentHitTotal, titleHitTotal }, index) => {
+  for (const chunk of candidates) {
+    const parsedEmbedding = parseLocalEmbedding(chunk.embedding);
+    if (parsedEmbedding.embedding) continue;
+    if (parsedEmbedding.reason === "missing") missingEmbeddingCount += 1;
+    if (parsedEmbedding.reason === "outdated") outdatedEmbeddingCount += 1;
+    if (parsedEmbedding.reason === "invalid") invalidEmbeddingCount += 1;
+  }
+
+  const rankedResults = rankLocalHybridResults(query, candidates.map((chunk) => ({
+    value: chunk,
+    title: chunk.title,
+    content: chunk.content,
+    embedding: chunk.embedding
+  }))).map(({ value: chunk, score, lexicalScore, relatednessScore, coverageScore, phraseScore, embeddingStatus, matchedTerms }, index) => {
       const sourceMetadata = chunk.source_metadata && typeof chunk.source_metadata === "object" ? chunk.source_metadata : {};
       const chunkMetadata = chunk.chunk_metadata && typeof chunk.chunk_metadata === "object" ? chunk.chunk_metadata : {};
       const embeddingMetadata = chunk.embedding && typeof chunk.embedding === "object" && !Array.isArray(chunk.embedding) ? chunk.embedding as Record<string, unknown> : {};
@@ -171,11 +139,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ kno
         title: chunk.title,
         mimeType: chunk.mime_type,
         score: Number(score.toFixed(4)),
-        lexicalScore,
-        semanticScore: Number(semanticScore.toFixed(4)),
+        lexicalScore: Number(lexicalScore.toFixed(4)),
+        relatednessScore: Number(relatednessScore.toFixed(4)),
         coverageScore: Number(coverageScore.toFixed(4)),
+        phraseScore: Number(phraseScore.toFixed(4)),
         embeddingStatus,
-        matchedTerms: matchedTermList,
+        matchedTerms,
         source: {
           name: sourceName,
           fileName: chunk.file_name,
@@ -204,10 +173,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ kno
         },
         explanation: [
           `Citation ${citation}`,
-          `Matched ${matchedTermList.length}/${terms.length} query terms${matchedTermList.length ? `: ${matchedTermList.join(", ")}` : ""}`,
-          `Rank #${index + 1} with lexical ${lexicalScore} from ${titleHitTotal} title hits and ${contentHitTotal} content hits`,
-          `semantic ${Number(semanticScore.toFixed(4))}`,
+          `Matched ${matchedTerms.length}/${queryConceptCount} query concepts${matchedTerms.length ? `: ${matchedTerms.join(", ")}` : ""}`,
+          `Rank #${index + 1} with BM25 ${Number(lexicalScore.toFixed(4))}`,
+          `local relatedness ${Number(relatednessScore.toFixed(4))}`,
           `coverage ${Number(coverageScore.toFixed(4))}`,
+          `phrase ${Number(phraseScore.toFixed(4))}`,
           `embedding ${embeddingStatus}`
         ].join(" | "),
         snippet: snippetFor(chunk.content, terms),
@@ -230,9 +200,22 @@ export async function POST(request: Request, { params }: { params: Promise<{ kno
       offset,
       total: rankedResults.length,
       hasMore: offset + limit < rankedResults.length,
-      candidateLimit
+      candidateLimit,
+      candidatesScanned: candidates.length,
+      candidateSetTruncated
+    },
+    ranking: {
+      strategy: LOCAL_RETRIEVAL_STRATEGY,
+      mode: "private-local-hybrid",
+      neuralSemantic: LOCAL_EMBEDDING_PROFILE.neuralSemantic,
+      capabilities: LOCAL_EMBEDDING_PROFILE.capabilities,
+      candidateSetTruncated
     },
     embeddings: {
+      model: LOCAL_EMBEDDING_PROFILE.model,
+      version: LOCAL_EMBEDDING_PROFILE.version,
+      dimensions: LOCAL_EMBEDDING_PROFILE.dimensions,
+      kind: LOCAL_EMBEDDING_PROFILE.kind,
       fallback: missingEmbeddingCount + outdatedEmbeddingCount + invalidEmbeddingCount > 0,
       missing: missingEmbeddingCount,
       outdated: outdatedEmbeddingCount,

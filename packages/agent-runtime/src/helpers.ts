@@ -128,7 +128,9 @@ export function runFailureStatus(message: string): RunFailureStatus {
 }
 
 export function throwIfAborted(signal: AbortSignal | undefined) {
-  if (signal?.aborted) throw new Error("Agent run cancelled");
+  if (!signal?.aborted) return;
+  if (signal.reason instanceof Error && signal.reason.name !== "AbortError") throw signal.reason;
+  throw new Error("Agent run cancelled");
 }
 
 export function timeoutSignal(timeoutMs: number, parent?: AbortSignal) {

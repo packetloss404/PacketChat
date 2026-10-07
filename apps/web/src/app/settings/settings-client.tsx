@@ -30,15 +30,30 @@ const groups: SectionGroup[] = [
     ]
   }
 ];
+const sectionIds = groups.flatMap((group) => group.items.map((item) => item.id));
 
 export function SettingsClient() {
   const [active, setActive] = useState<SectionId>("data");
 
+  function onTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, current: SectionId) {
+    if (!["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const currentIndex = sectionIds.indexOf(current);
+    let nextIndex = currentIndex;
+    if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = sectionIds.length - 1;
+    else if (event.key === "ArrowDown" || event.key === "ArrowRight") nextIndex = (currentIndex + 1) % sectionIds.length;
+    else nextIndex = (currentIndex - 1 + sectionIds.length) % sectionIds.length;
+    const next = sectionIds[nextIndex];
+    setActive(next);
+    window.requestAnimationFrame(() => document.getElementById(`settings-tab-${next}`)?.focus());
+  }
+
   return (
     <div className="settings">
-      <aside className="settings__rail" aria-label="Settings sections">
+      <aside className="settings__rail" aria-label="Settings sections" role="tablist">
         {groups.map((group) => (
-          <div className="settings__group" key={group.label}>
+          <div className="settings__group" key={group.label} role="presentation">
             <div className="settings__group-label">{group.label}</div>
             {group.items.map((item) => (
               <button
@@ -46,7 +61,12 @@ export function SettingsClient() {
                 type="button"
                 className={`settings__rail-item ${active === item.id ? "on" : ""}`}
                 onClick={() => setActive(item.id)}
-                aria-current={active === item.id ? "page" : undefined}
+                onKeyDown={(event) => onTabKeyDown(event, item.id)}
+                id={`settings-tab-${item.id}`}
+                role="tab"
+                aria-selected={active === item.id}
+                aria-controls={`settings-panel-${item.id}`}
+                tabIndex={active === item.id ? 0 : -1}
               >
                 <span className="settings__rail-icon" aria-hidden="true">{item.icon}</span>
                 <span>{item.label}</span>
@@ -180,32 +200,9 @@ function Switch({
       aria-checked={checked}
       aria-label={ariaLabel}
       onClick={() => onChange(!checked)}
-      style={{
-        position: "relative",
-        width: 38,
-        height: 22,
-        borderRadius: 999,
-        border: "1px solid var(--border, rgba(255,255,255,0.16))",
-        background: checked ? "var(--accent, #4b8ad6)" : "rgba(255,255,255,0.08)",
-        cursor: "pointer",
-        transition: "background 120ms ease",
-        padding: 0,
-        flexShrink: 0
-      }}
+      className="settings-switch"
     >
-      <span
-        style={{
-          position: "absolute",
-          top: 2,
-          left: checked ? 18 : 2,
-          width: 16,
-          height: 16,
-          borderRadius: "50%",
-          background: "#fff",
-          transition: "left 140ms ease",
-          boxShadow: "0 1px 3px rgba(0,0,0,0.3)"
-        }}
-      />
+      <span className="settings-switch__thumb" aria-hidden="true" />
     </button>
   );
 }
@@ -220,25 +217,16 @@ function Row({
   control: React.ReactNode;
 }) {
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: 16,
-        padding: "12px 0",
-        borderBottom: "1px solid rgba(255,255,255,0.06)"
-      }}
-    >
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontWeight: 500 }}>{title}</div>
+    <div className="settings-row">
+      <div className="settings-row__copy">
+        <div className="settings-row__title">{title}</div>
         {description ? (
-          <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
+          <div className="settings-row__description">
             {description}
           </div>
         ) : null}
       </div>
-      <div style={{ flexShrink: 0 }}>{control}</div>
+      <div className="settings-row__control">{control}</div>
     </div>
   );
 }
@@ -249,14 +237,14 @@ function Row({
 
 function AppDataSection() {
   return (
-    <section className="settings__section">
+    <section className="settings__section" id="settings-panel-data" role="tabpanel" aria-labelledby="settings-tab-data" tabIndex={0}>
       <h1>App Data &amp; Storage</h1>
-      <p className="muted" style={{ margin: 0 }}>
+      <p className="settings__intro">
         Chats, prompts, projects, provider accounts, knowledge metadata, and usage records live in the PacketChat server database. Uploaded files live in object storage. Browser storage is only used for UI preferences and local preview drafts.
       </p>
 
       <h2>Backups</h2>
-      <p className="muted" style={{ margin: 0 }}>
+      <p className="settings__intro">
         Operators should use the backup and restore scripts documented in <code>docs/runbooks/backup-restore.md</code>. This page does not delete or export server data.
       </p>
 
@@ -278,9 +266,9 @@ function AppDataSection() {
 
 function ApiKeysSection() {
   return (
-    <section className="settings__section apikeys">
+    <section className="settings__section apikeys" id="settings-panel-apikeys" role="tabpanel" aria-labelledby="settings-tab-apikeys" tabIndex={0}>
       <h1>API Keys</h1>
-      <p className="muted" style={{ margin: 0 }}>
+      <p className="settings__intro">
         Provider credentials are encrypted server-side as provider accounts. Provider keys are app-wide and managed by administrators.
       </p>
 
@@ -292,12 +280,12 @@ function ApiKeysSection() {
 
       <details className="apikeys__troubleshoot">
         <summary>API key not working?</summary>
-        <p className="muted" style={{ marginTop: 8 }}>
+        <p className="settings__details-copy">
           Use the Models page to test the account. Double-check that the key is enabled, the base URL is correct, billing has headroom, and the selected model or Azure deployment exists.
         </p>
       </details>
 
-      <p style={{ textAlign: "center", marginTop: 4 }}>
+      <p className="settings__centered-link">
         <a className="settings__link settings__link--inline" href="https://openrouter.ai/docs/quick-start" target="_blank" rel="noreferrer">
           → Using OpenRouter? See instructions here
         </a>
@@ -333,9 +321,9 @@ function GeneralSection() {
   };
 
   return (
-    <section className="settings__section">
+    <section className="settings__section" id="settings-panel-general" role="tabpanel" aria-labelledby="settings-tab-general" tabIndex={0}>
       <h1>General</h1>
-      <p className="muted" style={{ margin: 0 }}>
+      <p className="settings__intro">
         Tweak day-to-day composer behavior. All preferences are stored locally.
       </p>
 
@@ -358,7 +346,7 @@ function GeneralSection() {
       </div>
 
       <h2>Composer font size</h2>
-      <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "8px 0" }}>
+      <div className="settings-range">
         <input
           type="range"
           min={13}
@@ -367,11 +355,11 @@ function GeneralSection() {
           value={fontSize}
           onChange={(e) => setFontSize(Number(e.target.value))}
           aria-label="Composer font size"
-          style={{ flex: 1, maxWidth: 320 }}
+          aria-valuetext={`${fontSize} pixels`}
         />
-        <span style={{ minWidth: 48, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+        <output className="settings-range__value">
           {fontSize}px
-        </span>
+        </output>
       </div>
 
       <div className="settings__button-row">
@@ -391,31 +379,21 @@ function AppearanceSection() {
   const theme = useTheme();
 
   return (
-    <section className="settings__section">
+    <section className="settings__section" id="settings-panel-appearance" role="tabpanel" aria-labelledby="settings-tab-appearance" tabIndex={0}>
       <h1>Appearance</h1>
-      <p className="muted" style={{ margin: 0 }}>
+      <p className="settings__intro">
         Theme changes apply immediately and are stored in this browser.
       </p>
 
       <h2>Theme</h2>
-      <div role="radiogroup" aria-label="Theme" style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+      <div className="settings-theme-options" role="radiogroup" aria-label="Theme">
         {(["dark", "light"] as const).map((opt) => {
           const checked = theme === opt;
           return (
             <label
               key={opt}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "10px 14px",
-                border: "1px solid rgba(255,255,255,0.12)",
-                borderRadius: 8,
-                cursor: "pointer",
-                background: checked ? "rgba(75,138,214,0.12)" : "transparent",
-                borderColor: checked ? "var(--accent, #4b8ad6)" : "rgba(255,255,255,0.12)",
-                minWidth: 140
-              }}
+              className="settings-theme-option"
+              data-selected={checked ? "true" : undefined}
             >
               <input
                 type="radio"
@@ -424,7 +402,7 @@ function AppearanceSection() {
                 checked={checked}
                 onChange={() => setTheme(opt)}
               />
-              <span style={{ textTransform: "capitalize" }}>{opt}</span>
+              <span>{opt === "dark" ? "Dark" : "Light"}</span>
             </label>
           );
         })}
@@ -443,48 +421,39 @@ const SHORTCUTS: Array<{ keys: string[]; action: string }> = [
 
 function ShortcutsSection() {
   return (
-    <section className="settings__section">
+    <section className="settings__section" id="settings-panel-shortcuts" role="tabpanel" aria-labelledby="settings-tab-shortcuts" tabIndex={0}>
       <h1>Keyboard Shortcuts</h1>
-      <p className="muted" style={{ margin: 0 }}>
+      <p className="settings__intro">
         This is the keyboard shortcut available today.
       </p>
 
-      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 8 }}>
+      <div className="settings-shortcuts-wrap">
+      <table className="settings-shortcuts">
         <thead>
-          <tr style={{ textAlign: "left", borderBottom: "1px solid rgba(255,255,255,0.12)" }}>
-            <th style={{ padding: "10px 12px", fontWeight: 600, fontSize: 13 }}>Shortcut</th>
-            <th style={{ padding: "10px 12px", fontWeight: 600, fontSize: 13 }}>Action</th>
+          <tr>
+            <th>Shortcut</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
           {SHORTCUTS.map((s) => (
-            <tr key={s.action} style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-              <td style={{ padding: "10px 12px" }}>
+            <tr key={s.action}>
+              <td>
                 {s.keys.map((k, i) => (
                   <span key={`${s.action}-${k}-${i}`}>
-                    <kbd
-                      style={{
-                        display: "inline-block",
-                        padding: "2px 8px",
-                        margin: "0 2px",
-                        border: "1px solid rgba(255,255,255,0.18)",
-                        borderRadius: 4,
-                        background: "rgba(255,255,255,0.05)",
-                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                        fontSize: 12
-                      }}
-                    >
+                    <kbd className="settings-shortcuts__key">
                       {k}
                     </kbd>
-                    {i < s.keys.length - 1 ? <span style={{ opacity: 0.5 }}> + </span> : null}
+                    {i < s.keys.length - 1 ? <span className="settings-shortcuts__separator"> + </span> : null}
                   </span>
                 ))}
               </td>
-              <td style={{ padding: "10px 12px", fontSize: 14 }}>{s.action}</td>
+              <td>{s.action}</td>
             </tr>
           ))}
         </tbody>
       </table>
+      </div>
     </section>
   );
 }

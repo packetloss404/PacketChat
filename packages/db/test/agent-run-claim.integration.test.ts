@@ -62,9 +62,13 @@ async function claim(runId: string) {
   const rows = await db!.sql<{ claimed: number; status: string | null }[]>`
     with claimed as (
       update agent_runs
-      set status = 'running', started_at = now()
+      set status = 'running',
+          started_at = now(),
+          heartbeat_at = now(),
+          lease_expires_at = now() + interval '30 seconds'
       where id = ${runId}
         and status in ('queued', 'preparing')
+        and cancel_requested_at is null
       returning id
     )
     select
@@ -128,11 +132,27 @@ test("claiming a queued run takes it and starts the clock", skipWithoutDatabase,
   const result = await claim(runId);
 
   assert.equal(result.claimed, 1);
-  const [row] = await db!.sql<{ status: string; started_at: string | null }[]>`
-    select status, started_at from agent_runs where id = ${runId}
+  const [row] = await db!.sql<{ status: string; started_at: string | null; heartbeat_at: string | null; lease_expires_at: string | null }[]>`
+    select status, started_at, heartbeat_at, lease_expires_at from agent_runs where id = ${runId}
   `;
   assert.equal(row!.status, "running");
   assert.notEqual(row!.started_at, null, "the reconcile clock starts at execution, not at creation");
+  assert.notEqual(row!.heartbeat_at, null, "the executor records liveness when it claims the run");
+  assert.notEqual(row!.lease_expires_at, null, "the executor owns a short recovery lease");
+});
+
+test("a cancellation request makes a queued run permanently unclaimable", skipWithoutDatabase, async () => {
+  const { runId } = await seedRun("queued", { providerAccountId: randomUUID(), model: "m" });
+  await db!.sql`
+    update agent_runs
+    set status = 'cancelled', cancel_requested_at = now(), ended_at = now()
+    where id = ${runId}
+  `;
+
+  const result = await claim(runId);
+
+  assert.equal(result.claimed, 0);
+  assert.equal(result.status, "cancelled");
 });
 
 test("a second claim of the same run is refused and reports what it found", skipWithoutDatabase, async () => {

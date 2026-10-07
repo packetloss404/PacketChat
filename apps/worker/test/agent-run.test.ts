@@ -154,15 +154,13 @@ test("a failure to record the outcome does not mask the original failure", async
 test("the execution cap aborts the run and fails the job", async () => {
   const { deps, recorded } = makeDeps({
     execute: ({ signal }) => new Promise((_resolve, reject) => {
-      signal.addEventListener("abort", () => reject(new Error("Agent run cancelled")));
+      signal.addEventListener("abort", () => reject(signal.reason));
     })
   });
 
-  await assert.rejects(runAgentRunJob(job, deps, { maxRunMs: 1 }), /Agent run cancelled/);
-  assert.equal(recorded[0]?.text, "Error: Agent run cancelled");
-  // executeRun would have written "cancelled" on the run row; the conversation
-  // message must agree instead of a blanket "failed".
-  assert.equal(recorded[0]?.status, "cancelled");
+  await assert.rejects(runAgentRunJob(job, deps, { maxRunMs: 1 }), /Agent run timed out/);
+  assert.equal(recorded[0]?.text, "Error: Agent run timed out");
+  assert.equal(recorded[0]?.status, "timed_out");
 });
 
 test("the payload's user message id is handed to the context loader", async () => {

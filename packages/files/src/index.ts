@@ -105,12 +105,23 @@ export async function deleteObject(bucket: string, key: string): Promise<void> {
   await getS3Client().send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 }
 
-export const LOCAL_EMBEDDING_MODEL = "packetchat-local-hash";
-export const LOCAL_EMBEDDING_DIMENSIONS = 128;
-export const LOCAL_EMBEDDING_SCHEMA_VERSION = 2;
+export const LOCAL_EMBEDDING_MODEL = "packetchat-local-feature-hash";
+export const LOCAL_EMBEDDING_DIMENSIONS = 256;
+export const LOCAL_EMBEDDING_SCHEMA_VERSION = 3;
 export const LOCAL_EMBEDDING_VERSION = `${LOCAL_EMBEDDING_MODEL}-v${LOCAL_EMBEDDING_SCHEMA_VERSION}`;
-// Embeddings remain JSONB for now: the local stack cannot assume pgvector is installed
-// in every Postgres target, and this deterministic model is intentionally small.
+export const LOCAL_RETRIEVAL_STRATEGY = "packetchat-local-hybrid-v3";
+export const LOCAL_EMBEDDING_PROFILE = {
+  model: LOCAL_EMBEDDING_MODEL,
+  version: LOCAL_EMBEDDING_VERSION,
+  dimensions: LOCAL_EMBEDDING_DIMENSIONS,
+  kind: "local-feature-hash",
+  neuralSemantic: false,
+  capabilities: ["bm25", "exact terms", "phrases", "word stems", "concept aliases", "character similarity"]
+} as const;
+// Vectors remain JSONB so private deployments do not require pgvector or an
+// external embedding service. This is an explicitly non-neural local feature
+// model: it improves fuzzy and related-term recall, but does not claim general
+// semantic understanding.
 export const MAX_EXTRACTED_TEXT_CHARS = 1_000_000;
 export const MAX_PDF_TEXT_PAGES = 100;
 const MAX_TEXT_DECODE_BYTES = MAX_EXTRACTED_TEXT_CHARS * 4;
@@ -138,6 +149,8 @@ export type LocalEmbedding = {
   vector: number[];
   normalized: true;
   createdAt: string;
+  algorithm?: string;
+  features?: string[];
 };
 
 export type ParsedLocalEmbedding = {
@@ -202,19 +215,116 @@ function fnv1a(text: string): number {
   return hash >>> 0;
 }
 
-function embeddingTerms(text: string) {
-  return text.toLowerCase().match(/[a-z0-9_]{2,}/g) ?? [];
+const STOP_WORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "by", "can", "could", "did", "do", "does", "for", "from", "how", "i", "in", "is", "it", "of", "on", "or", "should", "that", "the", "this", "to", "was", "what", "when", "where", "which", "who", "why", "with", "would"
+]);
+
+const CONCEPT_GROUPS = {
+  auth: ["auth", "authenticate", "authentication", "authorization", "credential", "credentials", "login", "logins", "signin", "signon"],
+  issue: ["bug", "bugs", "defect", "defects", "error", "errors", "fail", "failed", "failing", "failure", "failures", "problem", "problems"],
+  deploy: ["deploy", "deployed", "deploying", "deployment", "deployments", "release", "released", "releases", "rollout", "ship", "shipping"],
+  cost: ["bill", "billing", "cost", "costs", "expense", "expenses", "price", "prices", "pricing"],
+  remove: ["archive", "archival", "delete", "deleted", "deletion", "remove", "removed", "removal"],
+  create: ["add", "added", "adding", "create", "created", "creation", "new"],
+  search: ["find", "finding", "lookup", "retrieve", "retrieval", "search", "searched"],
+  document: ["attachment", "attachments", "doc", "docs", "document", "documents", "file", "files"],
+  performance: ["fast", "faster", "lag", "latency", "performance", "slow", "slower", "speed"],
+  access: ["access", "permission", "permissions", "role", "roles", "security", "secure"],
+  account: ["account", "accounts", "member", "members", "user", "users"],
+  password: ["passcode", "password", "passwords", "secret"],
+  configure: ["config", "configuration", "configure", "configured", "preference", "preferences", "setting", "settings"]
+} as const;
+
+const CONCEPT_ALIASES = new Map<string, string>();
+for (const [concept, aliases] of Object.entries(CONCEPT_GROUPS)) {
+  for (const alias of aliases) CONCEPT_ALIASES.set(alias, concept);
+}
+
+function normalizedText(text: string) {
+  return text.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+function rawTerms(text: string) {
+  return normalizedText(text).match(/[a-z0-9_]{2,}/g) ?? [];
+}
+
+function stemTerm(term: string) {
+  if (term.length <= 3) return term;
+  if (term.endsWith("ies") && term.length > 4) return `${term.slice(0, -3)}y`;
+  if (term.endsWith("ing") && term.length > 5) {
+    const stem = term.slice(0, -3);
+    return /(.)\1$/.test(stem) ? stem.slice(0, -1) : stem;
+  }
+  if (term.endsWith("ed") && term.length > 4) {
+    const stem = term.slice(0, -2);
+    return /(.)\1$/.test(stem) ? stem.slice(0, -1) : stem;
+  }
+  if (term.endsWith("ments") && term.length > 7) return term.slice(0, -5);
+  if (term.endsWith("ment") && term.length > 6) return term.slice(0, -4);
+  if (term.endsWith("ness") && term.length > 6) return term.slice(0, -4);
+  if (term.endsWith("s") && !term.endsWith("ss") && term.length > 4) return term.slice(0, -1);
+  return term;
+}
+
+function canonicalTerm(term: string) {
+  const stem = stemTerm(term);
+  return CONCEPT_ALIASES.get(term) ?? CONCEPT_ALIASES.get(stem) ?? stem;
+}
+
+export type LocalTextAnalysis = {
+  terms: string[];
+  canonicalTerms: string[];
+  uniqueTerms: string[];
+  uniqueCanonicalTerms: string[];
+};
+
+export function analyzeLocalText(text: string): LocalTextAnalysis {
+  const terms = rawTerms(text).filter((term) => !STOP_WORDS.has(term));
+  const canonicalTerms = terms.map(canonicalTerm);
+  return {
+    terms,
+    canonicalTerms,
+    uniqueTerms: [...new Set(terms)],
+    uniqueCanonicalTerms: [...new Set(canonicalTerms)]
+  };
+}
+
+function addFeature(features: Map<string, number>, feature: string, weight: number) {
+  features.set(feature, (features.get(feature) ?? 0) + weight);
+}
+
+function termTrigrams(term: string) {
+  if (term.length < 4) return [];
+  const bounded = `^${term}$`;
+  const trigrams: string[] = [];
+  for (let index = 0; index <= bounded.length - 3; index += 1) trigrams.push(bounded.slice(index, index + 3));
+  return trigrams;
 }
 
 export function createLocalEmbedding(text: string): LocalEmbedding {
   const vector = Array.from({ length: LOCAL_EMBEDDING_DIMENSIONS }, () => 0);
-  const terms = embeddingTerms(text);
+  const analysis = analyzeLocalText(text);
+  const features = new Map<string, number>();
 
-  for (const term of terms) {
-    const hash = fnv1a(term);
+  for (let index = 0; index < analysis.terms.length; index += 1) {
+    const term = analysis.terms[index]!;
+    const stem = stemTerm(term);
+    const canonical = analysis.canonicalTerms[index]!;
+    addFeature(features, `term:${term}`, 1.8);
+    if (stem !== term) addFeature(features, `stem:${stem}`, 1.1);
+    if (canonical !== term) addFeature(features, `concept:${canonical}`, 1.6);
+    for (const trigram of termTrigrams(term)) addFeature(features, `char3:${trigram}`, 0.18);
+
+    if (index > 0) {
+      addFeature(features, `bigram:${analysis.canonicalTerms[index - 1]}:${canonical}`, 1.2);
+    }
+  }
+
+  for (const [feature, accumulatedWeight] of features) {
+    const hash = fnv1a(feature);
     const index = hash % LOCAL_EMBEDDING_DIMENSIONS;
     const sign = hash & 0x80000000 ? -1 : 1;
-    vector[index] += sign;
+    vector[index] += sign * Math.log1p(accumulatedWeight);
   }
 
   const magnitude = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
@@ -231,30 +341,138 @@ export function createLocalEmbedding(text: string): LocalEmbedding {
     dimensions: LOCAL_EMBEDDING_DIMENSIONS,
     vector,
     normalized: true,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    algorithm: "signed-feature-hashing",
+    features: ["terms", "stems", "concept-aliases", "character-trigrams", "bigrams"]
   };
+}
+
+export type LocalHybridCandidate<T> = {
+  value: T;
+  title: string;
+  content: string;
+  embedding: unknown;
+};
+
+export type LocalHybridRanking<T> = {
+  value: T;
+  score: number;
+  lexicalScore: number;
+  lexicalNormalized: number;
+  relatednessScore: number;
+  coverageScore: number;
+  phraseScore: number;
+  embeddingStatus: "current" | "missing" | "invalid" | "outdated";
+  matchedTerms: string[];
+};
+
+function countTerms(terms: string[]) {
+  const counts = new Map<string, number>();
+  for (const term of terms) counts.set(term, (counts.get(term) ?? 0) + 1);
+  return counts;
+}
+
+function includesSequence(haystack: string[], needle: string[]) {
+  if (needle.length === 0 || needle.length > haystack.length) return false;
+  outer: for (let start = 0; start <= haystack.length - needle.length; start += 1) {
+    for (let index = 0; index < needle.length; index += 1) {
+      if (haystack[start + index] !== needle[index]) continue outer;
+    }
+    return true;
+  }
+  return false;
+}
+
+export function rankLocalHybridResults<T>(query: string, candidates: LocalHybridCandidate<T>[]): LocalHybridRanking<T>[] {
+  const queryAnalysis = analyzeLocalText(query);
+  if (queryAnalysis.uniqueCanonicalTerms.length === 0 || candidates.length === 0) return [];
+  const queryEmbedding = createLocalEmbedding(query);
+  const displayTermByConcept = new Map<string, string>();
+  for (let index = 0; index < queryAnalysis.canonicalTerms.length; index += 1) {
+    const concept = queryAnalysis.canonicalTerms[index]!;
+    if (!displayTermByConcept.has(concept)) displayTermByConcept.set(concept, queryAnalysis.terms[index]!);
+  }
+  const analyzed = candidates.map((candidate, originalIndex) => {
+    const content = analyzeLocalText(candidate.content);
+    const title = analyzeLocalText(candidate.title);
+    return { candidate, originalIndex, content, title, contentCounts: countTerms(content.canonicalTerms), titleCounts: countTerms(title.canonicalTerms) };
+  });
+  const documentFrequency = new Map<string, number>();
+  for (const term of queryAnalysis.uniqueCanonicalTerms) {
+    documentFrequency.set(term, analyzed.filter((item) => item.contentCounts.has(term) || item.titleCounts.has(term)).length);
+  }
+  const averageLength = analyzed.reduce((sum, item) => sum + Math.max(1, item.content.canonicalTerms.length), 0) / analyzed.length;
+  const k1 = 1.2;
+  const b = 0.75;
+
+  const scored = analyzed.map((item) => {
+    let lexicalScore = 0;
+    let matched = 0;
+    const matchedTerms: string[] = [];
+    for (let index = 0; index < queryAnalysis.uniqueCanonicalTerms.length; index += 1) {
+      const term = queryAnalysis.uniqueCanonicalTerms[index]!;
+      const contentFrequency = item.contentCounts.get(term) ?? 0;
+      const titleFrequency = item.titleCounts.get(term) ?? 0;
+      const frequency = contentFrequency + titleFrequency * 2.5;
+      if (frequency <= 0) continue;
+      matched += 1;
+      matchedTerms.push(displayTermByConcept.get(term) ?? term);
+      const frequencyInDocuments = documentFrequency.get(term) ?? 0;
+      const inverseDocumentFrequency = Math.log(1 + (analyzed.length - frequencyInDocuments + 0.5) / (frequencyInDocuments + 0.5));
+      const lengthAdjustment = frequency + k1 * (1 - b + b * (item.content.canonicalTerms.length / Math.max(1, averageLength)));
+      lexicalScore += inverseDocumentFrequency * ((frequency * (k1 + 1)) / lengthAdjustment);
+    }
+    const parsed = parseLocalEmbedding(item.candidate.embedding);
+    const relatednessScore = parsed.embedding ? Math.max(0, cosineSimilarity(parsed.embedding, queryEmbedding)) : 0;
+    const phraseScore = includesSequence(item.title.canonicalTerms, queryAnalysis.canonicalTerms)
+      ? 1
+      : includesSequence(item.content.canonicalTerms, queryAnalysis.canonicalTerms)
+        ? 0.8
+        : 0;
+    return {
+      ...item,
+      lexicalScore,
+      relatednessScore,
+      coverageScore: matched / queryAnalysis.uniqueCanonicalTerms.length,
+      phraseScore,
+      embeddingStatus: (parsed.embedding ? "current" : parsed.reason ?? "invalid") as LocalHybridRanking<T>["embeddingStatus"],
+      matchedTerms
+    };
+  });
+  const maximumLexicalScore = Math.max(0, ...scored.map((item) => item.lexicalScore));
+
+  return scored
+    .filter((item) => item.lexicalScore > 0 || item.relatednessScore >= 0.1)
+    .map((item) => {
+      const lexicalNormalized = maximumLexicalScore > 0 ? item.lexicalScore / maximumLexicalScore : 0;
+      return {
+        ...item,
+        lexicalNormalized,
+        score: lexicalNormalized * 0.45 + item.coverageScore * 0.2 + item.relatednessScore * 0.25 + item.phraseScore * 0.1
+      };
+    })
+    .sort((left, right) => right.score - left.score || right.lexicalScore - left.lexicalScore || left.originalIndex - right.originalIndex)
+    .map(({ candidate, score, lexicalScore, lexicalNormalized, relatednessScore, coverageScore, phraseScore, embeddingStatus, matchedTerms }) => ({
+      value: candidate.value,
+      score,
+      lexicalScore,
+      lexicalNormalized,
+      relatednessScore,
+      coverageScore,
+      phraseScore,
+      embeddingStatus,
+      matchedTerms
+    }));
 }
 
 export function parseLocalEmbedding(value: unknown): ParsedLocalEmbedding {
   if (!value) return { embedding: null, reason: "missing" };
 
   if (Array.isArray(value)) {
-    if (value.length !== LOCAL_EMBEDDING_DIMENSIONS || !value.every((entry) => typeof entry === "number" && Number.isFinite(entry))) {
+    if (value.length === 0 || !value.every((entry) => typeof entry === "number" && Number.isFinite(entry))) {
       return { embedding: null, reason: "invalid" };
     }
-
-    return {
-      embedding: {
-        schemaVersion: 1,
-        model: LOCAL_EMBEDDING_MODEL,
-        version: "local-hash-v1",
-        dimensions: LOCAL_EMBEDDING_DIMENSIONS,
-        vector: value,
-        normalized: true,
-        createdAt: ""
-      },
-      reason: "outdated"
-    };
+    return { embedding: null, reason: "outdated" };
   }
 
   if (typeof value !== "object") return { embedding: null, reason: "invalid" };
@@ -264,12 +482,17 @@ export function parseLocalEmbedding(value: unknown): ParsedLocalEmbedding {
     candidate.model !== LOCAL_EMBEDDING_MODEL ||
     candidate.version !== LOCAL_EMBEDDING_VERSION ||
     candidate.schemaVersion !== LOCAL_EMBEDDING_SCHEMA_VERSION ||
-    candidate.dimensions !== LOCAL_EMBEDDING_DIMENSIONS ||
+    candidate.dimensions !== LOCAL_EMBEDDING_DIMENSIONS
+  ) {
+    return { embedding: null, reason: "outdated" };
+  }
+  if (
+    candidate.normalized !== true ||
     !Array.isArray(candidate.vector) ||
     candidate.vector.length !== LOCAL_EMBEDDING_DIMENSIONS ||
     !candidate.vector.every((entry) => typeof entry === "number" && Number.isFinite(entry))
   ) {
-    return { embedding: null, reason: "outdated" };
+    return { embedding: null, reason: "invalid" };
   }
 
   return { embedding: candidate as LocalEmbedding };

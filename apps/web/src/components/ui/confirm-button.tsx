@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useState } from "react";
+import { ButtonHTMLAttributes, ReactNode, useState } from "react";
 
 type ConfirmButtonProps = {
   children: ReactNode;
@@ -9,9 +9,9 @@ type ConfirmButtonProps = {
   onConfirm: () => void | Promise<void>;
   className?: string;
   disabled?: boolean;
-};
+} & Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children" | "className" | "disabled" | "onClick">;
 
-export function ConfirmButton({ children, confirmLabel = "Confirm", message, onConfirm, className = "button secondary", disabled }: ConfirmButtonProps) {
+export function ConfirmButton({ children, confirmLabel = "Confirm", message, onConfirm, className = "button secondary", disabled, ...buttonProps }: ConfirmButtonProps) {
   const [confirming, setConfirming] = useState(false);
   const [running, setRunning] = useState(false);
 
@@ -40,7 +40,7 @@ export function ConfirmButton({ children, confirmLabel = "Confirm", message, onC
   }
 
   return (
-    <button className={className} type="button" disabled={disabled} onClick={() => setConfirming(true)}>
+    <button {...buttonProps} className={className} type="button" disabled={disabled} onClick={() => setConfirming(true)}>
       {children}
     </button>
   );

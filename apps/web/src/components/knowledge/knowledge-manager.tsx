@@ -101,6 +101,7 @@ export function KnowledgeManager() {
   const [searchResults, setSearchResults] = useState<KnowledgeSearchResult[]>([]);
   const [searched, setSearched] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [rankingNotice, setRankingNotice] = useState("");
   const [embeddingNotice, setEmbeddingNotice] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -163,6 +164,7 @@ export function KnowledgeManager() {
     setEditDraft(draftFromKnowledgeBase(selectedKb));
     setSearchResults([]);
     setSearched(false);
+    setRankingNotice("");
     setEmbeddingNotice("");
     setFile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -279,6 +281,7 @@ export function KnowledgeManager() {
     setSearching(true);
     setMessage("");
     setError(null);
+    setRankingNotice("");
     setEmbeddingNotice("");
     setSearchResults([]);
     setSearched(true);
@@ -286,9 +289,14 @@ export function KnowledgeManager() {
       const data = await apiClient.knowledge.search(selectedId, { query, limit });
       const results = data.results ?? [];
       setSearchResults(results);
+      const ranking = data.ranking;
+      const scanned = data.pagination?.candidatesScanned;
+      setRankingNotice(
+        `Private local hybrid ranking (non-neural): BM25 plus phrase, stem, concept-alias, and character-similarity signals${typeof scanned === "number" ? ` across ${scanned} chunks` : ""}.${ranking?.candidateSetTruncated ? " The candidate scan reached its safety limit; narrow the knowledge base for exhaustive results." : ""}`
+      );
       const embeddings = data.embeddings as { fallback?: boolean; missing?: number; outdated?: number; invalid?: number };
       if (embeddings?.fallback || embeddings?.missing || embeddings?.outdated || embeddings?.invalid) {
-        setEmbeddingNotice(`Embedding fallback detected: ${embeddings.missing ?? 0} missing, ${embeddings.outdated ?? 0} outdated, ${embeddings.invalid ?? 0} invalid.`);
+        setEmbeddingNotice(`Local-index fallback detected: ${embeddings.missing ?? 0} missing, ${embeddings.outdated ?? 0} outdated, ${embeddings.invalid ?? 0} invalid. Refresh the local index to restore relatedness scoring.`);
       }
       setMessage(results.length ? `Search complete. ${results.length} result${results.length === 1 ? "" : "s"}.` : "No matching chunks found.");
     } catch (err) {
@@ -403,7 +411,7 @@ export function KnowledgeManager() {
       const summary = `Scanned ${result.scanned}, updated ${result.updated}, skipped ${skipped}${result.hasMore ? " (more remaining)" : ""}${reasons ? ` - reasons: ${reasons}` : ""}.`;
       setEmbeddingNotice(summary);
       setMessage(summary);
-      toast({ title: "Embeddings refreshed", message: `${result.updated} updated / ${result.scanned} scanned${result.hasMore ? " (run again for remainder)" : ""}.`, variant: "success" });
+      toast({ title: "Local index refreshed", message: `${result.updated} updated / ${result.scanned} scanned${result.hasMore ? " (run again for remainder)" : ""}.`, variant: "success" });
     } catch (err) {
       const nextError = err instanceof Error ? err.message : String(err);
       setError(nextError);
@@ -611,7 +619,7 @@ export function KnowledgeManager() {
                     <div className="eyebrow">Retrieval</div>
                     <h2>Test search</h2>
                   </div>
-                  <button className="button button--ghost" type="button" disabled={selectedArchived || reembedding} onClick={() => void reembedKnowledgeBase()}>{reembedding ? "Refreshing..." : "Refresh embeddings"}</button>
+                  <button className="button button--ghost" type="button" disabled={selectedArchived || reembedding} onClick={() => void reembedKnowledgeBase()}>{reembedding ? "Refreshing..." : "Refresh local index"}</button>
                 </div>
                 <form className="knowledge-search-form" onSubmit={(event) => void searchKnowledge(event)}>
                   <label>
@@ -633,6 +641,7 @@ export function KnowledgeManager() {
                   </label>
                   <button className="button" type="submit" disabled={selectedArchived || !query.trim() || searching}>{searching ? "Searching..." : "Search knowledge"}</button>
                 </form>
+                {rankingNotice ? <p className="muted" role="status" style={{ fontSize: 13 }}>{rankingNotice}</p> : null}
                 {embeddingNotice ? <p className="warning" role="status">{embeddingNotice}</p> : null}
                 {searched && !searching ? (
                   <p className="muted" role="status" style={{ fontSize: 13 }}>
@@ -681,7 +690,7 @@ export function KnowledgeManager() {
                               <span className="eyebrow">Freshness</span>
                               <span><strong>Document</strong> {freshness?.label ?? "unknown"} ({formatDateTime(freshness?.updatedAt)})</span>
                               <span><strong>Chunk</strong> {formatDateTime(freshness?.chunkCreatedAt)}</span>
-                              <span><strong>Embedding</strong> {freshness?.embeddingStatus ?? result.embeddingStatus ?? "unknown"}</span>
+                              <span><strong>Local index</strong> {freshness?.embeddingStatus ?? result.embeddingStatus ?? "unknown"}</span>
                               {freshness?.embeddingVersion ? <span><strong>Version</strong> {freshness.embeddingVersion}</span> : null}
                               {freshness?.embeddingCreatedAt ? <span><strong>Embedded</strong> {formatDateTime(freshness.embeddingCreatedAt)}</span> : null}
                               {freshness?.embeddingRefreshedAt ? <span><strong>Refreshed</strong> {formatDateTime(freshness.embeddingRefreshedAt)}</span> : null}
@@ -689,9 +698,10 @@ export function KnowledgeManager() {
                             <div className="knowledge-result-debug__section">
                               <span className="eyebrow">Ranking</span>
                               <span><strong>Score</strong> {formatDebugScore(result.score)}</span>
-                              <span><strong>Lexical</strong> {result.lexicalScore ?? 0}</span>
-                              <span><strong>Semantic</strong> {formatDebugScore(result.semanticScore)}</span>
+                              <span><strong>BM25</strong> {formatDebugScore(result.lexicalScore)}</span>
+                              <span><strong>Local relatedness</strong> {formatDebugScore(result.relatednessScore ?? result.semanticScore)}</span>
                               <span><strong>Coverage</strong> {formatDebugScore(result.coverageScore)}</span>
+                              <span><strong>Phrase</strong> {formatDebugScore(result.phraseScore)}</span>
                               {chunkCount ? <span><strong>Document chunks</strong> {chunkCount}</span> : null}
                             </div>
                             <div className="knowledge-result-debug__section">

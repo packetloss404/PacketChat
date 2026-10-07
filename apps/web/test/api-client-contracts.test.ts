@@ -61,6 +61,17 @@ test("approval decisions use the approval endpoint and preserve the decision pay
   assert.deepEqual(result.approval, { id: "approval-1", status: "cancelled" });
 });
 
+test("agent run cancellation DELETEs the scoped run endpoint", async () => {
+  const calls = mockFetchOnce({ runId: "run id", status: "cancelled", cancelled: true });
+
+  const result = await apiClient.agents.cancelRun("agent/id", "run id");
+
+  const call = firstCall(calls);
+  assert.equal(call.input, "/api/agents/agent%2Fid/runs/run%20id");
+  assert.equal(call.init?.method, "DELETE");
+  assert.deepEqual(result, { runId: "run id", status: "cancelled", cancelled: true });
+});
+
 test("provider binding toggles PATCH the account-scoped binding endpoint with the enabled flag", async () => {
   const calls = mockFetchOnce({ providerAccountId: "account/1", bindingId: "binding 2", enabled: false });
 
@@ -147,8 +158,9 @@ test("knowledge search posts retrieval options and exposes result source context
       mimeType: "text/markdown",
       score: 0.92,
       lexicalScore: 4,
-      semanticScore: 0.6,
+      relatednessScore: 0.6,
       coverageScore: 1,
+      phraseScore: 0.8,
       embeddingStatus: "current",
       matchedTerms: ["packet", "policy"],
       source: {
@@ -165,7 +177,7 @@ test("knowledge search posts retrieval options and exposes result source context
         updatedAt: "2026-05-26T05:00:00.000Z",
         chunkCreatedAt: "2026-05-26T05:01:00.000Z",
         embeddingStatus: "current",
-        embeddingVersion: "packetchat-local-hash-v2",
+        embeddingVersion: "packetchat-local-feature-hash-v3",
         embeddingCreatedAt: "2026-05-26T05:01:00.000Z",
         embeddingRefreshedAt: null,
         ageDays: 0,
@@ -175,8 +187,22 @@ test("knowledge search posts retrieval options and exposes result source context
       snippet: "Packet policy details",
       citation: "Policy Notes#chunk-2"
     }],
-    pagination: { limit: 2, offset: 1, total: 3, hasMore: false, candidateLimit: 25 },
-    embeddings: { fallback: false, missing: 0, outdated: 0, invalid: 0 }
+    pagination: { limit: 2, offset: 1, total: 3, hasMore: false, candidateLimit: 25, candidatesScanned: 25, candidateSetTruncated: true },
+    ranking: {
+      strategy: "packetchat-local-hybrid-v3",
+      mode: "private-local-hybrid",
+      neuralSemantic: false,
+      capabilities: ["bm25", "phrases"],
+      candidateSetTruncated: true
+    },
+    embeddings: {
+      model: "packetchat-local-feature-hash",
+      version: "packetchat-local-feature-hash-v3",
+      fallback: false,
+      missing: 0,
+      outdated: 0,
+      invalid: 0
+    }
   });
 
   const result = await apiClient.knowledge.search("kb/id with spaces", {
@@ -198,5 +224,9 @@ test("knowledge search posts retrieval options and exposes result source context
   assert.deepEqual(result.results[0]?.matchedTerms, ["packet", "policy"]);
   assert.equal(result.results[0]?.source?.detectedType, "markdown");
   assert.equal(result.results[0]?.freshness?.label, "updated today");
+  assert.equal(result.results[0]?.relatednessScore, 0.6);
+  assert.equal(result.results[0]?.phraseScore, 0.8);
+  assert.equal(result.ranking.neuralSemantic, false);
+  assert.equal(result.pagination.candidateSetTruncated, true);
   assert.match(result.results[0]?.explanation ?? "", /Matched 2\/2/);
 });

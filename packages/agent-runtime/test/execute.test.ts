@@ -29,13 +29,15 @@ function fakeDeps(overrides: Partial<AgentRunDeps> = {}) {
   let nextStepId = 0;
 
   const deps: AgentRunDeps = {
-    markRunRunning: async () => { recorded.runStatus.push("running"); },
-    markRunWaitingInput: async () => { recorded.runStatus.push("waiting_input"); },
-    markRunCompleted: async () => { recorded.runStatus.push("completed"); },
+    markRunRunning: async () => { recorded.runStatus.push("running"); return true; },
+    markRunWaitingInput: async () => { recorded.runStatus.push("waiting_input"); return true; },
+    markRunCompleted: async () => { recorded.runStatus.push("completed"); return true; },
     markRunFailed: async (input) => {
       recorded.runStatus.push(input.status);
       recorded.failures.push({ status: input.status, errorCode: input.errorCode, message: input.message });
+      return true;
     },
+    maintainRunLease: async () => ({ status: "running", cancelRequested: false }),
     addRunEvent: async (_runId, type, payload) => { recorded.events.push({ type, payload }); },
     addRunStep: async (input) => {
       recorded.steps.push({ sequenceNo: input.sequenceNo, stepType: input.stepType, status: input.status, name: input.name });
@@ -43,7 +45,7 @@ function fakeDeps(overrides: Partial<AgentRunDeps> = {}) {
       return `step-${nextStepId}`;
     },
     completeStep: async (stepId) => { recorded.stepOutcomes.push({ stepId, status: "completed" }); },
-    failStep: async (stepId) => { recorded.stepOutcomes.push({ stepId, status: "failed" }); },
+    failStep: async (stepId, _message, status = "failed") => { recorded.stepOutcomes.push({ stepId, status }); },
     searchKnowledgeContext: async () => [],
     fileContextBlock: async () => "",
     loadProviderAccount: async () => account,
@@ -220,7 +222,57 @@ test("executeRun records a cancelled run when the signal is already aborted", as
     message: "Agent run cancelled"
   }]);
   // The failure lands before the llm step exists, so the step update matches nothing.
-  assert.deepEqual(recorded.stepOutcomes, [{ stepId: null, status: "failed" }]);
+  assert.deepEqual(recorded.stepOutcomes, [{ stepId: null, status: "cancelled" }]);
+});
+
+test("executeRun refuses a run cancelled before this executor starts", async () => {
+  const { deps, recorded } = fakeDeps({ markRunRunning: async () => false });
+
+  await assert.rejects(executeRun(deps, baseInput), /Agent run cancelled/);
+
+  assert.equal(recorded.requests.length, 0);
+  assert.deepEqual(recorded.failures.map((failure) => failure.status), ["cancelled"]);
+  assert.equal(recorded.events.at(-1)?.type, "run.cancelled");
+});
+
+test("executeRun aborts a provider stream when durable cancellation is observed", async () => {
+  let leaseChecks = 0;
+  const { deps, recorded } = fakeDeps({
+    maintainRunLease: async () => {
+      leaseChecks += 1;
+      return leaseChecks === 1
+        ? { status: "running", cancelRequested: false }
+        : { status: "cancelled", cancelRequested: true };
+    },
+    streamChat: async function* (_account, _request, options) {
+      while (!options?.signal?.aborted) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        yield { type: "text_delta", text: "." } as StreamEvent;
+      }
+    }
+  });
+
+  const originalSetInterval = globalThis.setInterval;
+  globalThis.setInterval = ((handler: TimerHandler) => originalSetInterval(handler, 1)) as typeof setInterval;
+  try {
+    await assert.rejects(executeRun(deps, baseInput), /Agent run cancelled/);
+  } finally {
+    globalThis.setInterval = originalSetInterval;
+  }
+
+  assert.ok(leaseChecks >= 2);
+  assert.equal(recorded.failures.at(-1)?.status, "cancelled");
+  assert.deepEqual(recorded.stepOutcomes.at(-1), { stepId: "step-1", status: "cancelled" });
+});
+
+test("a cancellation that wins the terminal race cannot be overwritten by completion", async () => {
+  const { deps, recorded } = fakeDeps({ markRunCompleted: async () => false });
+
+  await assert.rejects(executeRun(deps, baseInput), /Agent run cancelled/);
+
+  assert.equal(recorded.runStatus.includes("completed"), false);
+  assert.equal(recorded.failures.at(-1)?.status, "cancelled");
+  assert.equal(recorded.events.some((event) => event.type === "run.completed"), false);
 });
 
 test("executeRun folds knowledge search results into a context message", async () => {

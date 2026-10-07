@@ -13,17 +13,17 @@ Remaining acceptance notes:
 
 ## Queue-Durable Agent Runs
 
-Agent runs can now be started detached: `POST /api/agents/{agentId}/runs` with `{"async": true}` (or `Prefer: respond-async`) returns `202` with a run id immediately and the run continues after the response, so it survives the caller closing the tab and is not capped by the gateway's request timeout. Callers poll `GET /api/agents/{agentId}/runs/{runId}`, which reconciles runs stranded past 20 minutes to `timed_out`.
+Agent runs can now be started detached: `POST /api/agents/{agentId}/runs` with `{"async": true}` (or `Prefer: respond-async`) returns `202` with a run id immediately and the run continues after the response, so it survives the caller closing the tab and is not capped by the gateway's request timeout. Callers poll `GET /api/agents/{agentId}/runs/{runId}`, which reconciles an expired executor lease to `timed_out` (with a 20-minute `started_at` fallback for pre-lease runs).
 
 Execution is now queue-durable. `executeRun` lives in `@packetchat/agent-runtime`, the route enqueues a `run-agent` job, and the worker rebuilds the run from `agent_runs` plus the agent version it pinned. The run row records the provider account and model it was resolved against (`resolved_provider_account_id`, `resolved_model`), so the worker never re-resolves a binding the caller did not ask for. Ownership is taken by a single conditional update out of `queued`, so a BullMQ retry or a redelivered stalled job cannot execute the same run twice. When the enqueue fails, `web` falls back to executing the run in its own process behind the same claim.
 
 Remaining acceptance notes:
 
-- Cancellation works across process boundaries: a caller can stop a run the worker owns, not only one running in the process that answered them.
+- Done 2026-10-06: Cancellation works across process boundaries. `DELETE /api/agents/{agentId}/runs/{runId}` atomically cancels queued, executing, or approval-blocked runs; the runtime observes durable cancellation through its database heartbeat and aborts the provider signal. Terminal writes are conditional, so a late provider completion cannot overwrite cancellation.
 - The approval-resume path resumes a `waiting_input` run through the queue rather than only within the process that paused it.
-- A worker that dies mid-run still leaves the run stranded until reconcile-on-read; a heartbeat or a visibility timeout would shorten that from 20 minutes.
+- Done 2026-10-06: Executors renew a 30-second Postgres lease every five seconds. Reconcile-on-read uses the expired lease rather than run age, marks the active step failed, appends a terminal event, and writes an idempotent conversation outcome so the user's question is not left unanswered.
 - The in-process fallback is not durable. A run that took it is lost on a `web` restart, exactly as every async run was before.
-- A queued run is aged from `created_at` by the 20-minute reconcile in the single-run GET, so queue time counts against the same window as execution time. A worker outage or a deep backlog therefore lets a caller's own status poll mark its still-valid run `timed_out`; the claim then refuses it, the worker completes the job as skipped, and nothing writes the assistant message, so the conversation keeps the question and never gets an answer. A queued run needs its own clock, and the reconcile should write the outcome message that both executing paths write.
+- Done 2026-10-06: Queue wait and execution clocks are separate. Queued runs have no execution lease and are never reaped for queue age; claiming starts the lease. Recovery and cancellation both write the same de-duplicated conversation outcome as normal execution.
 - A published spec can carry a non-uuid `providerAccountId` — the draft writer only checks that it is a string — which now fails run creation with an unhandled `500` and no run row, because `0006` made it a `uuid` column. Validate it where the draft is written, and shape the insert failure as a `400`.
 
 ## Artifacts and Chat Files
@@ -220,7 +220,7 @@ Acceptance notes:
 ### Phase 2 — Files, RAG and artifacts
 
 - Unified chat uploader. The upload endpoint currently requires `knowledgeBaseId` (`apps/web/src/app/api/files/upload/route.ts:32`), so no chat picker can exist; add a chat-scoped attachment flow with ownership and bounded context injection (the unused `apps/web/src/lib/chat-files/context.ts` is the starting point).
-- Replace the 128-dim FNV-1a hash "embeddings" (`packages/files/src/index.ts:209`) with a real embedding model and pgvector, keeping the existing ingestion worker and re-embed path.
+- Add an optional neural embedding model and pgvector path for general semantic similarity. The private default now uses versioned 256-d local feature hashing plus BM25, phrases, stems, concept aliases, and character similarity, with bounded corpus scanning and an in-place refresh path; it remains deliberately labeled non-neural.
 - Parse and render artifacts. `apps/web/src/lib/artifacts/{model,parse,sanitize}.ts` are dead code; agent instructions mention artifacts (`packages/agent-runtime/src/execute.ts:29`) but output is never parsed. Add sandboxed Mermaid/HTML/SVG previews with persistence per conversation/run (this also satisfies the existing "Artifacts and Chat Files" section above).
 - Reduce the knowledge "Why this result" panel (`knowledge-manager.tsx:657`) from a raw debug dump (attachmentId, objectKey, embedding version/timestamps) to an operator-facing explanation; move internals behind a details toggle.
 

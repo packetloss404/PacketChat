@@ -98,16 +98,19 @@ export type ChildAgentRow = { name: string; spec: AgentSpec };
  * queue worker.
  */
 export type AgentRunDeps = {
-  markRunRunning: (runId: string) => Promise<void>;
-  markRunWaitingInput: (runId: string) => Promise<void>;
-  markRunCompleted: (runId: string) => Promise<void>;
-  markRunFailed: (input: { runId: string; status: RunFailureStatus; errorCode: string; message: string }) => Promise<void>;
+  // False means the run was cancelled or reached another terminal state before
+  // this executor could start/finish it.
+  markRunRunning: (runId: string) => Promise<boolean>;
+  markRunWaitingInput: (runId: string) => Promise<boolean>;
+  markRunCompleted: (runId: string) => Promise<boolean>;
+  markRunFailed: (input: { runId: string; status: RunFailureStatus; errorCode: string; message: string }) => Promise<boolean>;
+  maintainRunLease: (runId: string) => Promise<{ status: string | null; cancelRequested: boolean }>;
   addRunEvent: (runId: string, eventType: string, payload: Record<string, unknown>) => Promise<void>;
   addRunStep: (input: AgentRunStepInput) => Promise<string>;
   // stepId is nullable because a run can fail before the llm step exists; the
   // update then matches nothing, exactly as it did inline in the route.
   completeStep: (stepId: string | null, output: Record<string, unknown>) => Promise<void>;
-  failStep: (stepId: string | null, message: string) => Promise<void>;
+  failStep: (stepId: string | null, message: string, status?: "failed" | "cancelled") => Promise<void>;
   searchKnowledgeContext: (input: { userId: string; runId: string; query: string; knowledgeBaseIds: string[]; limit: number }) => Promise<KnowledgeResult[]>;
   fileContextBlock: (input: { userId: string; knowledgeBaseIds: string[]; maxChars: number }) => Promise<string>;
   loadProviderAccount: (accountId: string) => Promise<ProviderAccountRuntime | null>;

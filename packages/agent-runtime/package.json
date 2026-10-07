@@ -9,6 +9,7 @@
     "@packetchat/auth": "file:../auth",
     "@packetchat/contracts": "file:../contracts",
     "@packetchat/db": "file:../db",
+    "@packetchat/files": "file:../files",
     "@packetchat/observability": "file:../observability",
     "@packetchat/providers": "file:../providers"
   }

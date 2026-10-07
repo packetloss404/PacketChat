@@ -194,8 +194,11 @@ export type KnowledgeSearchResult = {
   mimeType?: string | null;
   score: number;
   lexicalScore?: number;
+  relatednessScore?: number;
+  /** Legacy response field retained for older servers. New local ranking reports relatednessScore. */
   semanticScore?: number;
   coverageScore?: number;
+  phraseScore?: number;
   embeddingStatus?: string;
   matchedTerms?: string[];
   source?: {
@@ -780,9 +783,15 @@ export const apiClient = {
     deleteDocument: (knowledgeBaseId: string, documentId: string) =>
       apiFetch<{ deleted: true }>(`/api/knowledge/${encodePath(knowledgeBaseId)}/documents/${encodePath(documentId)}`, { method: "DELETE" }),
     reembed: (knowledgeBaseId: string, body: { limit?: number; includeCurrent?: boolean } = {}) =>
-      apiFetch<{ knowledgeBaseId: string; scanned: number; updated: number; skippedCurrent: number; reasons: Record<string, number>; hasMore: boolean }>(`/api/knowledge/${encodePath(knowledgeBaseId)}/reembed`, jsonInit("POST", body)),
+      apiFetch<{ knowledgeBaseId: string; model: string; version: string; scanned: number; updated: number; skippedCurrent: number; reasons: Record<string, number>; hasMore: boolean }>(`/api/knowledge/${encodePath(knowledgeBaseId)}/reembed`, jsonInit("POST", body)),
     search: (knowledgeBaseId: string, body: { query: string; limit?: number; offset?: number; candidateLimit?: number }) =>
-      apiFetch<{ query: string; results: KnowledgeSearchResult[]; pagination: Record<string, unknown>; embeddings: Record<string, unknown> }>(`/api/knowledge/${encodePath(knowledgeBaseId)}/search`, jsonInit("POST", body)),
+      apiFetch<{
+        query: string;
+        results: KnowledgeSearchResult[];
+        pagination: { candidateSetTruncated?: boolean; candidatesScanned?: number } & Record<string, unknown>;
+        ranking: { strategy: string; mode: string; neuralSemantic: boolean; capabilities: readonly string[]; candidateSetTruncated: boolean };
+        embeddings: Record<string, unknown>;
+      }>(`/api/knowledge/${encodePath(knowledgeBaseId)}/search`, jsonInit("POST", body)),
     uploadFile: (body: FormData) => apiFetch<Record<string, unknown>>("/api/files/upload", { method: "POST", body })
   },
   agents: {
@@ -801,7 +810,9 @@ export const apiClient = {
     run: (agentId: string, body: AgentRunRequest) =>
       apiFetch<Record<string, unknown>>(`/api/agents/${encodePath(agentId)}/runs`, jsonInit("POST", { ...body, inputText: body.inputText ?? body.input })),
     runDetails: (agentId: string, runId: string, init?: RequestInit) =>
-      apiFetch<{ run: AgentRun; usage: AgentRunUsage; events: AgentRunEvent[]; steps: AgentRunStep[] }>(`/api/agents/${encodePath(agentId)}/runs/${encodePath(runId)}`, init)
+      apiFetch<{ run: AgentRun; usage: AgentRunUsage; events: AgentRunEvent[]; steps: AgentRunStep[] }>(`/api/agents/${encodePath(agentId)}/runs/${encodePath(runId)}`, init),
+    cancelRun: (agentId: string, runId: string) =>
+      apiFetch<{ runId: string; status: string; cancelled: boolean }>(`/api/agents/${encodePath(agentId)}/runs/${encodePath(runId)}`, { method: "DELETE" })
   },
   approvals: {
     list: (init?: RequestInit) => apiFetch<ApprovalsResponse>("/api/approvals", init),

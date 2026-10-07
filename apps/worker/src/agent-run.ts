@@ -95,7 +95,7 @@ export async function runAgentRunJob(
   if (!claim.claimed) return { executed: false, skippedStatus: claim.status };
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.maxRunMs);
+  const timeout = setTimeout(() => controller.abort(new Error("Agent run timed out")), options.maxRunMs);
   let executed = false;
   try {
     const result = await deps.execute({ context, signal: controller.signal });

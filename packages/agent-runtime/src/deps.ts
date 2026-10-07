@@ -1,19 +1,27 @@
 import { getSql } from "@packetchat/db";
+import { analyzeLocalText, rankLocalHybridResults } from "@packetchat/files";
 import { getProviderAdapter } from "@packetchat/providers";
 import { randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
-import { snippetFor, termsFor, textMessageContent } from "./helpers";
+import { snippetFor, textMessageContent } from "./helpers";
 import { getEnabledModelBindingForRuntime, getProviderAccountForRuntime } from "./provider-runtime";
 import { recordUsage } from "./usage";
 import type { AgentRunDeps, AgentRunStepInput, AgentSpec, KnowledgeResult, RunClaim, RunVersion } from "./types";
 
 async function markRunRunning(runId: string) {
   const sql = getSql();
-  await sql`
+  const rows = await sql<{ id: string }[]>`
     update agent_runs
-    set status = 'running', started_at = now()
+    set status = 'running',
+        started_at = coalesce(started_at, now()),
+        heartbeat_at = now(),
+        lease_expires_at = now() + interval '30 seconds'
     where id = ${runId}
+      and status in ('queued', 'preparing', 'running')
+      and cancel_requested_at is null
+    returning id
   `;
+  return rows.length > 0;
 }
 
 /**
@@ -39,9 +47,13 @@ export async function claimRunForExecution(runId: string): Promise<RunClaim> {
   const rows = await sql<{ claimed: number; status: string | null }[]>`
     with claimed as (
       update agent_runs
-      set status = 'running', started_at = now()
+      set status = 'running',
+          started_at = now(),
+          heartbeat_at = now(),
+          lease_expires_at = now() + interval '30 seconds'
       where id = ${runId}
         and status in ('queued', 'preparing')
+        and cancel_requested_at is null
       returning id
     )
     select
@@ -56,41 +68,87 @@ export async function claimRunForExecution(runId: string): Promise<RunClaim> {
   return { claimed: false, status: row?.status ?? null };
 }
 
+/**
+ * Renews the executor's short database lease and returns durable cancellation
+ * state. This is deliberately independent from BullMQ's Redis lock: the web
+ * process can request cancellation and reconcile a dead worker using Postgres,
+ * which both execution paths already share.
+ */
+async function maintainRunLease(runId: string) {
+  const sql = getSql();
+  const rows = await sql<{ status: string; cancel_requested_at: string | null }[]>`
+    update agent_runs
+    set heartbeat_at = now(),
+        lease_expires_at = now() + interval '30 seconds'
+    where id = ${runId}
+      and status = 'running'
+      and cancel_requested_at is null
+    returning status, cancel_requested_at
+  `;
+  if (rows[0]) return { status: rows[0].status, cancelRequested: false };
+
+  const current = await sql<{ status: string; cancel_requested_at: string | null }[]>`
+    select status, cancel_requested_at
+    from agent_runs
+    where id = ${runId}
+    limit 1
+  `;
+  return {
+    status: current[0]?.status ?? null,
+    cancelRequested: Boolean(current[0]?.cancel_requested_at) || current[0]?.status === "cancelled"
+  };
+}
+
 async function markRunWaitingInput(runId: string) {
   const sql = getSql();
-  await sql`
+  const rows = await sql<{ id: string }[]>`
     update agent_runs
-    set status = 'waiting_input'
-    where id = ${runId}
+    set status = 'waiting_input', heartbeat_at = null, lease_expires_at = null
+    where id = ${runId} and status = 'running' and cancel_requested_at is null
+    returning id
   `;
+  return rows.length > 0;
 }
 
 async function markRunCompleted(runId: string) {
   const sql = getSql();
-  await sql`
+  const rows = await sql<{ id: string }[]>`
     update agent_runs
-    set status = 'completed', ended_at = now()
-    where id = ${runId}
+    set status = 'completed', ended_at = now(), heartbeat_at = null, lease_expires_at = null
+    where id = ${runId} and status = 'running' and cancel_requested_at is null
+    returning id
   `;
+  return rows.length > 0;
 }
 
 async function markRunFailed(input: { runId: string; status: string; errorCode: string; message: string }) {
   const sql = getSql();
-  await sql`
+  const rows = await sql<{ id: string }[]>`
     update agent_runs
-    set status = ${input.status}, error_code = ${input.errorCode}, error_message = ${input.message}, ended_at = now()
+    set status = case when cancel_requested_at is not null then 'cancelled' else ${input.status} end,
+        error_code = case when cancel_requested_at is not null then 'agent_run_cancelled' else ${input.errorCode} end,
+        error_message = case when cancel_requested_at is not null then 'Agent run cancelled by user.' else ${input.message} end,
+        ended_at = now(),
+        heartbeat_at = null,
+        lease_expires_at = null
     where id = ${input.runId}
+      and status in ('queued', 'preparing', 'running')
+    returning id
   `;
+  return rows.length > 0;
 }
 
 async function addRunEvent(runId: string, eventType: string, payload: Record<string, unknown>) {
   const sql = getSql();
-  await sql`
-    insert into agent_run_events (run_id, sequence_no, event_type, payload)
-    select ${runId}, coalesce(max(sequence_no), 0) + 1, ${eventType}, ${JSON.stringify(payload)}::jsonb
-    from agent_run_events
-    where run_id = ${runId}
-  `;
+  await sql.begin(async (tx) => {
+    await tx`select pg_advisory_xact_lock(hashtextextended(${'agent-run-event:' + runId}, 0))`;
+    await tx`
+      insert into agent_run_events (run_id, sequence_no, event_type, payload)
+      select ${runId}, coalesce(max(sequence_no), 0) + 1, ${eventType}, ${JSON.stringify(payload)}::jsonb
+      from agent_run_events
+      where run_id = ${runId}
+    `;
+  });
 }
 
 async function addRunStep(input: AgentRunStepInput) {
@@ -121,17 +179,17 @@ async function completeStep(stepId: string | null, output: Record<string, unknow
   `;
 }
 
-async function failStep(stepId: string | null, message: string) {
+async function failStep(stepId: string | null, message: string, status: "failed" | "cancelled" = "failed") {
   const sql = getSql();
   await sql`
     update agent_run_steps
-    set status = 'failed', output = ${JSON.stringify({ error: message })}::jsonb, ended_at = now()
-    where id = ${stepId}
+    set status = ${status}, output = ${JSON.stringify({ error: message })}::jsonb, ended_at = now()
+    where id = ${stepId} and status = 'running'
   `;
 }
 
 async function searchKnowledgeContext(input: { userId: string; runId: string; query: string; knowledgeBaseIds: string[]; limit: number }) {
-  const terms = [...new Set(termsFor(input.query))];
+  const terms = analyzeLocalText(input.query).uniqueTerms;
   if (terms.length === 0 || input.knowledgeBaseIds.length === 0) return [];
 
   const sql = getSql();
@@ -142,6 +200,7 @@ async function searchKnowledgeContext(input: { userId: string; runId: string; qu
     document_id: string;
     chunk_index: number;
     content: string;
+    embedding: unknown;
     title: string;
   }[]>`
     select
@@ -151,6 +210,7 @@ async function searchKnowledgeContext(input: { userId: string; runId: string; qu
       kc.document_id,
       kc.chunk_index,
       kc.content,
+      kc.embedding,
       kd.title
     from knowledge_chunks kc
     join knowledge_documents kd on kd.id = kc.document_id
@@ -164,21 +224,14 @@ async function searchKnowledgeContext(input: { userId: string; runId: string; qu
     limit 2000
   `;
 
-  const results = rows
-    .map((chunk) => {
-      const content = chunk.content.toLowerCase();
-      const title = chunk.title.toLowerCase();
-      let score = 0;
-      for (const term of terms) {
-        score += content.split(term).length - 1;
-        score += (title.split(term).length - 1) * 3;
-      }
-      return { chunk, score };
-    })
-    .filter((result) => result.score > 0)
-    .sort((a, b) => b.score - a.score)
+  const results = rankLocalHybridResults(input.query, rows.map((chunk) => ({
+    value: chunk,
+    title: chunk.title,
+    content: chunk.content,
+    embedding: chunk.embedding
+  })))
     .slice(0, input.limit)
-    .map<KnowledgeResult>(({ chunk, score }) => ({
+    .map<KnowledgeResult>(({ value: chunk, score }) => ({
       knowledgeBaseId: chunk.knowledge_base_id,
       knowledgeBaseName: chunk.knowledge_base_name,
       documentId: chunk.document_id,
@@ -255,6 +308,7 @@ const databaseDeps: AgentRunDeps = {
   markRunWaitingInput,
   markRunCompleted,
   markRunFailed,
+  maintainRunLease,
   addRunEvent,
   addRunStep,
   completeStep,
@@ -272,6 +326,16 @@ const databaseDeps: AgentRunDeps = {
 
 export function createAgentRunDeps(overrides: Partial<AgentRunDeps> = {}): AgentRunDeps {
   return { ...databaseDeps, ...overrides };
+}
+
+const TERMINAL_OUTCOME_STATUSES = new Set(["completed", "failed", "cancelled", "timed_out"]);
+
+export function shouldRecordRunOutcome(existingStatuses: Array<string | null>, nextStatus: string) {
+  if (existingStatuses.includes(nextStatus)) return false;
+  if (TERMINAL_OUTCOME_STATUSES.has(nextStatus) && existingStatuses.some((status) => TERMINAL_OUTCOME_STATUSES.has(status ?? ""))) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -300,6 +364,20 @@ export async function recordRunOutcome(input: {
   const sql = getSql();
   const assistantMessageId = randomUUID();
   await sql.begin(async (tx) => {
+    // Cancellation, recovery, and the executor can converge on the terminal
+    // state at nearly the same time. Serialize message creation per run and
+    // make it idempotent so the conversation receives exactly one answer.
+    await tx`select pg_advisory_xact_lock(hashtextextended(${input.runId}, 0))`;
+    const existing = await tx<{ id: string; status: string | null }[]>`
+      select id, metadata->>'status' as status
+      from messages
+      where conversation_id = ${input.conversationId}
+        and owner_user_id = ${input.userId}
+        and role = 'assistant'
+        and metadata->>'agentRunId' = ${input.runId}
+    `;
+    if (!shouldRecordRunOutcome(existing.map((row) => row.status), input.status)) return;
+
     let parentMessageId = input.userMessageId ?? null;
     if (!parentMessageId) {
       const rows = await tx<{ active_leaf_message_id: string | null }[]>`

@@ -2,7 +2,7 @@
 
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ConfirmButton, LoadingBlock, StatusBadge, useToast } from "../../components/ui";
+import { ConfirmButton, EmptyState, LoadingBlock, StatusBadge, useToast } from "../../components/ui";
 import { Icon } from "../../components/icons";
 import { authFetch, getAccessToken } from "../../lib/auth-client";
 
@@ -24,6 +24,7 @@ When to use context:
 - Reference attached knowledge bases when the user asks domain-specific questions.
 `;
 const TERMINAL_RUN_STATUSES = new Set(["succeeded", "failed", "cancelled", "canceled", "completed", "errored", "waiting_input"]);
+const CANCELLABLE_RUN_STATUSES = new Set(["queued", "preparing", "running", "waiting_input"]);
 
 type Agent = {
   id: string;
@@ -358,6 +359,7 @@ export default function AgentsPage() {
   const [runMode, setRunMode] = useState<"sync" | "async">("sync");
   const [runId, setRunId] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState<string | null>(null);
+  const [runCancelling, setRunCancelling] = useState(false);
   const [runOutput, setRunOutput] = useState("");
   const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
   const [runSteps, setRunSteps] = useState<RunStep[]>([]);
@@ -384,6 +386,7 @@ export default function AgentsPage() {
   const runSelectionRef = useRef<string | null>(null);
   const editorReturnFocusIdRef = useRef<string | null>(null);
   const createMenuRef = useRef<HTMLDivElement | null>(null);
+  const createMenuButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -480,12 +483,18 @@ export default function AgentsPage() {
 
   useEffect(() => {
     if (!createMenuOpen) return;
+    window.requestAnimationFrame(() => {
+      createMenuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    });
     function onDocumentClick(event: MouseEvent) {
       if (!createMenuRef.current) return;
       if (!createMenuRef.current.contains(event.target as Node)) setCreateMenuOpen(false);
     }
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") setCreateMenuOpen(false);
+      if (event.key === "Escape") {
+        setCreateMenuOpen(false);
+        createMenuButtonRef.current?.focus();
+      }
     }
     document.addEventListener("mousedown", onDocumentClick);
     document.addEventListener("keydown", onKey);
@@ -494,6 +503,20 @@ export default function AgentsPage() {
       document.removeEventListener("keydown", onKey);
     };
   }, [createMenuOpen]);
+
+  function onCreateMenuKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+    if (items.length === 0) return;
+    event.preventDefault();
+    const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+    let nextIndex = currentIndex;
+    if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = items.length - 1;
+    else if (event.key === "ArrowDown") nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % items.length;
+    else nextIndex = currentIndex <= 0 ? items.length - 1 : currentIndex - 1;
+    items[nextIndex]?.focus();
+  }
 
   useEffect(() => {
     return () => {
@@ -707,12 +730,11 @@ export default function AgentsPage() {
     }
   }
 
-  async function deleteAgent(agent: Agent, options?: { skipConfirm?: boolean }) {
+  async function deleteAgent(agent: Agent) {
     if (!canDeleteAgent(agent)) {
       toast({ message: "You need owner access to delete this agent.", variant: "warning" });
       return;
     }
-    if (!options?.skipConfirm && !window.confirm(`Delete ${agent.name}?`)) return;
     setIsBusy(true);
     try {
       await request(`/api/agents/${agent.id}`, { method: "DELETE" });
@@ -996,6 +1018,33 @@ export default function AgentsPage() {
     }
   }
 
+  async function cancelRun() {
+    if (!draft || !runId || runCancelling) return;
+    setRunCancelling(true);
+    try {
+      const data = await request<{ runId: string; status: string; cancelled: boolean }>(
+        `/api/agents/${draft.agent_id}/runs/${runId}`,
+        { method: "DELETE" }
+      );
+      if (pollAbortRef.current) pollAbortRef.current.cancelled = true;
+      setRunStatus(data.status);
+      await fetchRun(draft.agent_id, runId).catch(setRunDetailError);
+      await loadRunHistory(draft.agent_id);
+      toast({
+        message: data.cancelled ? "Run cancelled." : `Run is already ${data.status}.`,
+        variant: data.cancelled ? "success" : "warning"
+      });
+    } catch (error) {
+      toast({
+        title: "Could not cancel run",
+        message: error instanceof Error ? error.message : String(error),
+        variant: "error"
+      });
+    } finally {
+      setRunCancelling(false);
+    }
+  }
+
   function updateSpec(next: Partial<Draft["spec"]>) {
     if (!draft) return;
     setDraft({ ...draft, spec: { ...draft.spec, ...next } });
@@ -1105,18 +1154,8 @@ export default function AgentsPage() {
             event.preventDefault();
             void saveDraft();
           }}
-          style={{ display: "flex", flexDirection: "column", gap: 0, width: "100%", maxWidth: 960, margin: "0 auto" }}
         >
-          <header
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              flexWrap: "wrap",
-              paddingBottom: 12,
-              borderBottom: "1px solid var(--line)"
-            }}
-          >
+          <header className="agent-editor__header">
             <button className="button button--ghost" type="button" onClick={closeEditor} aria-label="Back to agents">
               <Icon.chev style={{ transform: "rotate(90deg)" }} />
               Back
@@ -1124,13 +1163,13 @@ export default function AgentsPage() {
             <h1
               ref={editorHeadingRef}
               tabIndex={-1}
-              style={{ margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em", outline: "none" }}
+              className="agent-editor__title"
             >
               {draft ? draft.spec.name ?? draft.name : "Agent"}
             </h1>
             {draft ? <StatusBadge>{draft.status}</StatusBadge> : null}
-            {draft ? <span className="muted" style={{ fontSize: 12 }}>rev {draft.revision}</span> : null}
-            <div style={{ flex: 1 }} />
+            {draft ? <span className="agent-editor__revision">rev {draft.revision}</span> : null}
+            <div className="agent-editor__spacer" />
             {editorCanShare && editorCurrentAgent ? (
               <button className="button button--ghost" type="button" onClick={() => void shareAgent(editorCurrentAgent)}>
                 <Icon.share />
@@ -1143,7 +1182,7 @@ export default function AgentsPage() {
                 message={`Delete ${editorCurrentAgent.name}?`}
                 confirmLabel="Delete"
                 onConfirm={() => {
-                  void deleteAgent(editorCurrentAgent, { skipConfirm: true });
+                  void deleteAgent(editorCurrentAgent);
                 }}
               >
                 Delete
@@ -1157,11 +1196,7 @@ export default function AgentsPage() {
             </button>
           </header>
 
-          <div
-            role="tablist"
-            aria-label="Agent editor sections"
-            style={{ display: "flex", gap: 4, flexWrap: "wrap", paddingTop: 8, borderBottom: "1px solid var(--line)" }}
-          >
+          <div className="agent-editor__tabs" role="tablist" aria-label="Agent editor sections">
             {EDITOR_TABS.map((tab, index) => {
               const active = activeTab === tab.id;
               return (
@@ -1178,18 +1213,7 @@ export default function AgentsPage() {
                   tabIndex={active ? 0 : -1}
                   onClick={() => setActiveTab(tab.id)}
                   onKeyDown={(event) => onTabKeyDown(event, index)}
-                  style={{
-                    background: active ? "var(--bg-3)" : "transparent",
-                    color: active ? "var(--ink)" : "var(--ink-3)",
-                    border: `1px solid ${active ? "var(--line-2)" : "transparent"}`,
-                    borderBottomColor: active ? "var(--bg-3)" : "transparent",
-                    borderRadius: "8px 8px 0 0",
-                    padding: "8px 14px",
-                    fontSize: 13,
-                    fontWeight: active ? 600 : 500,
-                    cursor: "pointer",
-                    marginBottom: -1
-                  }}
+                  className="agent-editor__tab"
                 >
                   {tab.label}
                 </button>
@@ -1202,7 +1226,7 @@ export default function AgentsPage() {
             role="tabpanel"
             aria-labelledby={`agent-tab-${activeTab}`}
             tabIndex={0}
-            style={{ display: "flex", flexDirection: "column", gap: 16, paddingTop: 16, outline: "none" }}
+            className="agent-editor__panel"
           >
             {!draft ? (
               <LoadingBlock title="Loading draft" />
@@ -1290,7 +1314,7 @@ export default function AgentsPage() {
                 {activeTab === "tools" ? (
                   <>
                     <div>
-                      <div className="eyebrow" style={{ margin: "0 0 6px" }}>Capabilities and tools</div>
+                      <div className="eyebrow agent-editor__section-title">Capabilities and tools</div>
                       <div className="agent-tool-grid">
                         <label className="agent-tool-card">
                           <input type="checkbox" checked={Boolean(draft.spec.tools?.knowledgeSearch)} onChange={(event) => updateTool("knowledgeSearch", event.target.checked)} />
@@ -1341,13 +1365,13 @@ export default function AgentsPage() {
                           <span><strong>Agent context</strong><small>Run selected published agents as pre-run context.</small></span>
                         </label>
                       </div>
-                      <p className="muted" style={{ margin: "8px 0 0", fontSize: 12 }}>
-                        Code interpreter and MCP tools are unavailable in this release and are coming soon.
+                      <p className="agent-editor__limitation">
+                        Only the tools shown here are available in this release. MCP and code execution are not enabled.
                       </p>
                     </div>
 
                     <div>
-                      <div className="eyebrow" style={{ margin: "0 0 6px" }}>OpenAPI actions</div>
+                      <div className="eyebrow agent-editor__section-title">OpenAPI actions</div>
                       {(draft.spec.openApiActions ?? []).map((action, index) => (
                         <div className="agent-tool-card" key={action.id ?? index} style={{ display: "grid", gap: 8 }}>
                           <label className="checkbox-row">
@@ -1390,7 +1414,7 @@ export default function AgentsPage() {
                     </div>
 
                     <div>
-                      <div className="eyebrow" style={{ margin: "0 0 6px" }}>Agent context</div>
+                      <div className="eyebrow agent-editor__section-title">Agent context</div>
                       <label>
                         Max child runs
                         <input
@@ -1523,6 +1547,11 @@ export default function AgentsPage() {
                       <div className="cluster">
                         <button className="button button--ghost" type="button" disabled={isBusy} onClick={() => void runAgent()}>Run published version</button>
                         <button className="button button--ghost" type="button" disabled={runHistoryLoading} onClick={() => void loadRunHistory(draft.agent_id)}>Refresh history</button>
+                        {runId && CANCELLABLE_RUN_STATUSES.has(runStatus ?? selectedRun?.status ?? "") ? (
+                          <button className="button button--danger" type="button" disabled={runCancelling} onClick={() => void cancelRun()}>
+                            {runCancelling ? "Cancelling..." : "Cancel run"}
+                          </button>
+                        ) : null}
                         {runId ? <StatusBadge tone={runStatusTone(runStatus ?? selectedRun?.status)}>{runStatus ?? selectedRun?.status ?? "running"}</StatusBadge> : null}
                       </div>
                       {runMode === "async" ? (
@@ -1653,9 +1682,10 @@ export default function AgentsPage() {
               aria-label="Search agents"
             />
           </label>
-          <div className="agents-lib__create" ref={createMenuRef} style={{ position: "relative" }}>
+          <div className="agents-lib__create" ref={createMenuRef}>
             <button className="button button--primary" type="button" onClick={() => openCreate()}>Create agent</button>
             <button
+              ref={createMenuButtonRef}
               className="button button--primary agents-lib__create-chev"
               type="button"
               onClick={() => setCreateMenuOpen((open) => !open)}
@@ -1667,38 +1697,11 @@ export default function AgentsPage() {
               <Icon.chev />
             </button>
             {createMenuOpen ? (
-              <div
-                role="menu"
-                style={{
-                  position: "absolute",
-                  top: "calc(100% + 6px)",
-                  right: 0,
-                  minWidth: 200,
-                  background: "var(--bg-2)",
-                  color: "var(--ink)",
-                  border: "1px solid var(--line)",
-                  borderRadius: 8,
-                  boxShadow: "0 8px 24px rgba(0,0,0,0.16)",
-                  padding: 4,
-                  zIndex: 50
-                }}
-              >
+              <div className="agents-lib__create-menu" role="menu" onKeyDown={onCreateMenuKeyDown}>
                 <button
                   type="button"
                   role="menuitem"
                   onClick={() => openCreate()}
-                  style={{
-                    display: "block",
-                    width: "100%",
-                    textAlign: "left",
-                    padding: "8px 10px",
-                    background: "transparent",
-                    border: 0,
-                    borderRadius: 6,
-                    cursor: "pointer",
-                    color: "inherit",
-                    font: "inherit"
-                  }}
                 >
                   Start from scratch
                 </button>
@@ -1706,18 +1709,6 @@ export default function AgentsPage() {
                   type="button"
                   role="menuitem"
                   onClick={() => openCreate({ instructions: TEMPLATE_INSTRUCTIONS })}
-                  style={{
-                    display: "block",
-                    width: "100%",
-                    textAlign: "left",
-                    padding: "8px 10px",
-                    background: "transparent",
-                    border: 0,
-                    borderRadius: 6,
-                    cursor: "pointer",
-                    color: "inherit",
-                    font: "inherit"
-                  }}
                 >
                   Start from template
                 </button>
@@ -1727,7 +1718,7 @@ export default function AgentsPage() {
         </div>
       </header>
 
-      <div className="agents-lib__layout" style={{ gridTemplateColumns: "minmax(0, 1fr)" }}>
+      <div className="agents-lib__layout agents-lib__layout--single">
         <main className="agents-lib__main">
           <div className="agents-lib__toolbar-row">
             <h2>All agents</h2>
@@ -1767,11 +1758,11 @@ export default function AgentsPage() {
 
           {loading ? <LoadingBlock title="Loading agents" /> : null}
           {!loading && sorted.length === 0 ? (
-            <div className="empty-state">
-              {agents.length === 0
-                ? "No agents yet. Click Create agent to build your first one."
-                : "No agents match your search."}
-            </div>
+            <EmptyState
+              title={agents.length === 0 ? "No agents yet" : "No matching agents"}
+              description={agents.length === 0 ? "Create an agent to combine instructions, context, and tools." : "Try a different name or clear your search."}
+              action={agents.length === 0 ? <button className="button button--primary" type="button" onClick={() => openCreate()}>Create agent</button> : null}
+            />
           ) : null}
 
           <div className={view === "grid" ? "agents-lib__grid" : "agents-lib__list"}>
@@ -1832,16 +1823,17 @@ export default function AgentsPage() {
                         </button>
                       ) : null}
                       {canDelete ? (
-                        <button
+                        <ConfirmButton
                           className="ib"
-                          type="button"
-                          onClick={() => void deleteAgent(agent)}
+                          message={`Delete ${agent.name}?`}
+                          confirmLabel="Delete"
+                          onConfirm={() => deleteAgent(agent)}
                           aria-label="Delete agent"
                           title="Delete"
                           disabled={isBusy}
                         >
                           <Icon.trash />
-                        </button>
+                        </ConfirmButton>
                       ) : null}
                       <button
                         className={`ib ${favored ? "on" : ""}`}
@@ -1864,10 +1856,9 @@ export default function AgentsPage() {
                       </Link>
                     ) : (
                       <span
-                        className="prompt-card__use"
+                        className="prompt-card__use prompt-card__use--disabled"
                         aria-disabled="true"
                         title={agent.published_version_id ? "Runner access is required to chat with this agent." : "Publish this agent before starting a chat."}
-                        style={{ opacity: 0.58, pointerEvents: "none" }}
                       >
                         {chatLabel}
                       </span>

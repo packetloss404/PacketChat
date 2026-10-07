@@ -1103,7 +1103,7 @@ function HeaderBar({ mobileNavOpen = false, mobileNavButtonRef, onMobileNavOpen 
           {modelLabel ? <span className="hdr__model-label">{modelLabel}</span> : null}
         </button>
       ) : (
-        <h1 className="hdr__model" style={{ margin: 0 }}>
+        <h1 className="hdr__model hdr__title">
           <span className="dot" aria-hidden="true" />
           <span className="hdr__model-title">{title}</span>
           {modelLabel ? <span className="hdr__model-label">{modelLabel}</span> : null}

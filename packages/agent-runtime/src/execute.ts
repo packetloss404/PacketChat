@@ -151,24 +151,55 @@ async function runChildAgent(deps: AgentRunDeps, input: { parentRunId: string; r
 // worker. A wedged provider call must not leave a run "running" forever, and the
 // single-run GET reconciles anything that outlives this by a margin.
 export const MAX_RUN_EXECUTION_MS = 15 * 60 * 1000;
+export const RUN_HEARTBEAT_INTERVAL_MS = 5_000;
 
 export async function executeRun(deps: AgentRunDeps, input: ExecuteRunInput): Promise<RunExecutionResult> {
-  await deps.markRunRunning(input.runId);
-  // A resumed run is announced as such so the event stream shows why the model
-  // was called a second time on the same run.
-  if (input.resume) {
-    await deps.addRunEvent(input.runId, "run.resumed", { approvalSequenceNo: input.resume.approvalSequenceNo });
-  } else {
-    await deps.addRunEvent(input.runId, "run.started", {});
-  }
-
   // Resumed runs continue the paused run's sequence numbering; the step table
   // has a unique (run_id, sequence_no), so restarting at 1 would collide.
   let nextStep = input.resume?.nextSequenceNo ?? 1;
   let stepId: string | null = null;
+  const runControl = new AbortController();
+  const signal = input.signal ? AbortSignal.any([input.signal, runControl.signal]) : runControl.signal;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let heartbeatInFlight = false;
+
+  const maintainLease = async () => {
+    if (heartbeatInFlight || signal.aborted) return;
+    heartbeatInFlight = true;
+    try {
+      const state = await deps.maintainRunLease(input.runId);
+      if (state.cancelRequested || state.status !== "running") {
+        runControl.abort(new Error("Agent run cancelled"));
+      }
+    } catch (error) {
+      // A transient database failure should not kill a provider request. If the
+      // process remains disconnected, the lease expires and recovery owns the
+      // terminal outcome; if it reconnects, the next pulse observes cancel.
+      logger.warn("Agent run heartbeat failed", {
+        runId: input.runId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      heartbeatInFlight = false;
+    }
+  };
 
   try {
-    throwIfAborted(input.signal);
+    throwIfAborted(signal);
+    if (!await deps.markRunRunning(input.runId)) throw new Error("Agent run cancelled");
+    await maintainLease();
+    throwIfAborted(signal);
+    heartbeat = setInterval(() => { void maintainLease(); }, RUN_HEARTBEAT_INTERVAL_MS);
+    if (typeof heartbeat === "object" && "unref" in heartbeat) heartbeat.unref();
+
+    // A resumed run is announced as such so the event stream shows why the model
+    // was called a second time on the same run.
+    if (input.resume) {
+      await deps.addRunEvent(input.runId, "run.resumed", { approvalSequenceNo: input.resume.approvalSequenceNo });
+    } else {
+      await deps.addRunEvent(input.runId, "run.started", {});
+    }
+
     const contextBlocks: string[] = [];
     const maxAgentSteps = Math.min(Math.max(Number(input.spec.maxAgentSteps) || 4, 1), 25);
     let remainingToolSteps = maxAgentSteps;
@@ -188,7 +219,7 @@ export async function executeRun(deps: AgentRunDeps, input: ExecuteRunInput): Pr
           input: externalApprovalInput,
           output: { state: "pending" }
         });
-        await deps.markRunWaitingInput(input.runId);
+        if (!await deps.markRunWaitingInput(input.runId)) throw new Error("Agent run cancelled");
         await deps.addRunEvent(input.runId, "approval.required", { approvalId, ...externalApprovalInput });
         return {
           status: "waiting_input",
@@ -203,7 +234,7 @@ export async function executeRun(deps: AgentRunDeps, input: ExecuteRunInput): Pr
       const maxChildRuns = Math.min(Math.max(Number(chain.maxChildRuns) || 3, 1), 5, remainingToolSteps);
       const childResults = [];
       for (const childAgentId of chain.agentIds.slice(0, maxChildRuns)) {
-        const child = await runChildAgent(deps, { parentRunId: input.runId, resourceOwnerUserId: input.resourceOwnerUserId, childAgentId, inputText: input.inputText, signal: input.signal });
+        const child = await runChildAgent(deps, { parentRunId: input.runId, resourceOwnerUserId: input.resourceOwnerUserId, childAgentId, inputText: input.inputText, signal });
         if (child) childResults.push(child);
       }
       remainingToolSteps -= maxChildRuns;
@@ -215,7 +246,7 @@ export async function executeRun(deps: AgentRunDeps, input: ExecuteRunInput): Pr
     }
 
     if (input.spec.openApiActions?.length && remainingToolSteps > 0) {
-      const actionResults = await executeOpenApiActions(deps, { inputText: input.inputText, actions: input.spec.openApiActions, maxActions: Math.min(5, remainingToolSteps), signal: input.signal });
+      const actionResults = await executeOpenApiActions(deps, { inputText: input.inputText, actions: input.spec.openApiActions, maxActions: Math.min(5, remainingToolSteps), signal });
       remainingToolSteps -= actionResults.length;
       if (actionResults.length > 0) {
         await deps.addRunStep({ runId: input.runId, sequenceNo: nextStep++, stepType: "tool_result", status: "completed", name: "OpenAPI actions", input: { count: actionResults.length }, output: { actionResults } });
@@ -258,7 +289,7 @@ export async function executeRun(deps: AgentRunDeps, input: ExecuteRunInput): Pr
     }
 
     if (input.spec.tools?.urlFetch) {
-      const fetched = await fetchUrlContext(deps, input.inputText, input.signal);
+      const fetched = await fetchUrlContext(deps, input.inputText, signal);
       if (fetched.length > 0) {
         await deps.addRunStep({ runId: input.runId, sequenceNo: nextStep++, stepType: "tool_result", status: "completed", name: "URL fetch", input: { inputText: input.inputText }, output: { fetched } });
         await deps.addRunEvent(input.runId, "tool.url_fetch.completed", { fetched });
@@ -312,7 +343,8 @@ export async function executeRun(deps: AgentRunDeps, input: ExecuteRunInput): Pr
       maxOutputTokens: Number.isInteger(input.spec.maxOutputTokens) ? input.spec.maxOutputTokens : undefined
     };
 
-    for await (const event of deps.streamChat(account, chatRequest, { signal: input.signal, sessionId: input.runId })) {
+    for await (const event of deps.streamChat(account, chatRequest, { signal, sessionId: input.runId })) {
+      throwIfAborted(signal);
       if (event.type === "text_delta") {
         outputText += event.text;
         textDeltaCount += 1;
@@ -334,9 +366,10 @@ export async function executeRun(deps: AgentRunDeps, input: ExecuteRunInput): Pr
       await deps.addRunEvent(input.runId, `provider.${event.type}`, event as unknown as Record<string, unknown>);
     }
     await flushTextDeltaSummary();
+    throwIfAborted(signal);
 
+    if (!await deps.markRunCompleted(input.runId)) throw new Error("Agent run cancelled");
     await deps.completeStep(stepId, { text: outputText });
-    await deps.markRunCompleted(input.runId);
     await deps.recordUsage({
       ownerUserId: input.resourceOwnerUserId,
       providerAccountId: input.spec.providerAccountId!,
@@ -355,14 +388,18 @@ export async function executeRun(deps: AgentRunDeps, input: ExecuteRunInput): Pr
     const message = publicRunError(error);
     const status = runFailureStatus(message);
     logger.warn("Agent run failed", { runId: input.runId, error: error instanceof Error ? error.message : String(error) });
-    await deps.failStep(stepId, message);
-    await deps.markRunFailed({
+    await deps.failStep(stepId, message, status === "cancelled" ? "cancelled" : "failed");
+    const terminalized = await deps.markRunFailed({
       runId: input.runId,
       status,
       errorCode: status === "failed" ? "agent_run_failed" : `agent_run_${status}`,
       message
     });
-    await deps.addRunEvent(input.runId, "run.failed", { message });
+    if (terminalized) {
+      await deps.addRunEvent(input.runId, status === "cancelled" ? "run.cancelled" : "run.failed", { message });
+    }
     throw new Error(message);
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
   }
 }

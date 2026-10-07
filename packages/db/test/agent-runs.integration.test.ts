@@ -3,10 +3,9 @@ import { after, before, test } from "node:test";
 import { randomUUID } from "node:crypto";
 import { createTestDatabase, hasTestDatabase, skipWithoutDatabase, type TestDatabase } from "./integration-helpers";
 
-// Detached agent runs execute inside the web process, so a restart can strand a
-// run in a non-terminal state with nothing left to finish it. The single-run GET
-// reconciles that on read. The predicate is only trustworthy if a real Postgres
-// agrees with it, which is what these assert.
+// Executors renew a short database lease. The single-run GET reconciles an
+// expired lease on read; started_at is only a compatibility fallback for rows
+// created before leases existed.
 
 const MAX_RUN_AGE_MINUTES = 20;
 
@@ -21,7 +20,7 @@ after(async () => {
   await db?.close();
 });
 
-async function seedRun(status: string, ageMinutes: number) {
+async function seedRun(status: string, ageMinutes: number, lease?: "expired" | "live" | "none") {
   const sql = db!.sql;
   const [user] = await sql<{ id: string }[]>`
     insert into users (email, display_name, role, status)
@@ -39,11 +38,13 @@ async function seedRun(status: string, ageMinutes: number) {
     returning id
   `;
   const [run] = await sql<{ id: string }[]>`
-    insert into agent_runs (owner_user_id, agent_id, agent_version_id, status, started_at, created_at)
+    insert into agent_runs (owner_user_id, agent_id, agent_version_id, status, started_at, created_at, heartbeat_at, lease_expires_at)
     values (
       ${user!.id}, ${agent!.id}, ${version!.id}, ${status},
       now() - ${`${ageMinutes} minutes`}::interval,
-      now() - ${`${ageMinutes} minutes`}::interval
+      now() - ${`${ageMinutes} minutes`}::interval,
+      ${lease === "none" || !lease ? null : new Date()},
+      ${lease === "expired" ? new Date(Date.now() - 60_000) : lease === "live" ? new Date(Date.now() + 60_000) : null}
     )
     returning id
   `;
@@ -60,7 +61,10 @@ async function reconcile(runId: string) {
     where id = ${runId}
       and status in ('preparing', 'running')
       and started_at is not null
-      and started_at < now() - ${`${MAX_RUN_AGE_MINUTES} minutes`}::interval
+      and (
+        lease_expires_at < now()
+        or (lease_expires_at is null and started_at < now() - ${`${MAX_RUN_AGE_MINUTES} minutes`}::interval)
+      )
     returning id, status, error_code
   `;
 }
@@ -69,8 +73,9 @@ async function reconcile(runId: string) {
 async function claim(runId: string) {
   return db!.sql`
     with claimed as (
-      update agent_runs set status = 'running', started_at = now()
-      where id = ${runId} and status in ('queued', 'preparing')
+      update agent_runs
+      set status = 'running', started_at = now(), heartbeat_at = now(), lease_expires_at = now() + interval '30 seconds'
+      where id = ${runId} and status in ('queued', 'preparing') and cancel_requested_at is null
       returning id
     )
     select (select count(*) from claimed)::integer as claimed,
@@ -92,6 +97,25 @@ test("a run still inside the cap is left alone", skipWithoutDatabase, async () =
   const rows = await reconcile(runId);
 
   assert.equal(rows.length, 0, "a run that may still be working must not be reaped");
+  const [current] = await db!.sql<{ status: string }[]>`select status from agent_runs where id = ${runId}`;
+  assert.equal(current!.status, "running");
+});
+
+test("an expired execution lease is reconciled without waiting twenty minutes", skipWithoutDatabase, async () => {
+  const { runId } = await seedRun("running", 1, "expired");
+
+  const rows = await reconcile(runId);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.status, "timed_out");
+});
+
+test("a live lease protects an old run from reconcile", skipWithoutDatabase, async () => {
+  const { runId } = await seedRun("running", 45, "live");
+
+  const rows = await reconcile(runId);
+
+  assert.equal(rows.length, 0);
   const [current] = await db!.sql<{ status: string }[]>`select status from agent_runs where id = ${runId}`;
   assert.equal(current!.status, "running");
 });
