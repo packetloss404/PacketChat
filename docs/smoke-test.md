@@ -77,8 +77,8 @@ After authenticated smoke passes, use `docs/release-readiness.md` for the concis
 - A non-admin user opening `/admin/providers` sees the admin-access notice instead of the provider form, and `POST /api/providers` returns `403` for that user.
 - A non-admin user sees every enabled provider account in `/providers` and in the chat model picker without any per-user setup.
 - `POST /api/providers/{providerId}/test` succeeds or returns a sanitized provider failure. Admin access is required.
-- To test live provider keys without storing credentials, run `node scripts/provider-health.mjs`. See `docs/provider-testing.md` for all five provider environment variables. The script fails if every provider is skipped unless you pass `--allow-empty`.
-- V1 provider IDs are `openai-compatible`, `azure-openai`, `anthropic`, `perplexity`, and `minimax`; `google` is not accepted by the backend provider APIs.
+- To test the original five provider types with environment credentials, run `node scripts/provider-health.mjs`. See `docs/provider-testing.md`. The script fails if every provider is skipped unless you pass `--allow-empty`. Test the newer providers from `/admin/providers` with a small chat request.
+- Provider IDs include direct OpenAI, Anthropic, Google, xAI, Sugar, OpenCode Go, Ollama Cloud, and ClinePass alongside OpenAI-compatible, Azure OpenAI, Perplexity, and MiniMax. Sync models after adding an account, then make a small chat request to confirm access.
 
 ## Credential-Only Tests
 

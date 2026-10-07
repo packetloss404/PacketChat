@@ -13,7 +13,7 @@ The frontend is a v3 LibreChat-style shell — three columns (left rail, main, c
 - Forced password-reset accounts cannot mint normal sessions until the password is changed.
 - App-wide provider accounts, managed by admins at `/admin/providers` and browsed by everyone at `/providers`. Settings → API Keys links there instead of storing local provider keys.
 - Admin release-readiness surfaces for usage governance, audit events, operations health, pending approvals, and persisted agent run history.
-- Runtime provider adapters for OpenAI-compatible, Azure OpenAI, Anthropic, Perplexity, and MiniMax. Google is not a V1 runtime provider yet.
+- Runtime provider adapters for direct OpenAI, Anthropic, Google Gemini, and xAI; Sugar, OpenCode Go, Ollama Cloud, and ClinePass; and OpenAI-compatible, Azure OpenAI, Perplexity, and MiniMax endpoints. Admins add keys and sync current model catalogs from `/admin/providers`.
 - Custom provider base URLs are validated before save and again before runtime use. Local OpenAI-compatible endpoints are allowed for tools such as Ollama / LM Studio / vLLM; hosted providers must not target loopback, private, link-local, or reserved network addresses.
 - Postgres, Redis, and MinIO as durable / runtime dependencies.
 

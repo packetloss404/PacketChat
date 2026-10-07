@@ -38,8 +38,22 @@ export function providerDisplayName(provider: ProviderId) {
       return "Azure OpenAI";
     case "openai-compatible":
       return "OpenAI-compatible provider";
+    case "openai":
+      return "OpenAI";
     case "anthropic":
       return "Anthropic";
+    case "google":
+      return "Google Gemini";
+    case "xai":
+      return "xAI";
+    case "sugar":
+      return "Sugar";
+    case "opencode-go":
+      return "OpenCode Go";
+    case "ollama-cloud":
+      return "Ollama Cloud";
+    case "cline-pass":
+      return "ClinePass";
     case "perplexity":
       return "Perplexity";
     case "minimax":

@@ -22,11 +22,17 @@ type ProviderMeta = {
 
 const PROVIDERS: Record<string, ProviderMeta> = {
   "openai-compatible": { id: "openai-compatible", name: "OpenAI-compatible", tint: "#10a37f", glyph: "O" },
+  openai: { id: "openai", name: "OpenAI", tint: "#10a37f", glyph: "O" },
   anthropic: { id: "anthropic", name: "Anthropic", tint: "#d97757", glyph: "A" },
   "azure-openai": { id: "azure-openai", name: "Azure OpenAI", tint: "#4b8ad6", glyph: "Az" },
   perplexity: { id: "perplexity", name: "Perplexity", tint: "#1fb8cd", glyph: "P" },
   minimax: { id: "minimax", name: "MiniMax", tint: "#7c3aed", glyph: "M" },
-  google: { id: "google", name: "Google", tint: "#4285f4", glyph: "G" }
+  google: { id: "google", name: "Google", tint: "#4285f4", glyph: "G" },
+  xai: { id: "xai", name: "xAI", tint: "#222222", glyph: "x" },
+  sugar: { id: "sugar", name: "Sugar", tint: "#e18c30", glyph: "S" },
+  "opencode-go": { id: "opencode-go", name: "OpenCode Go", tint: "#a768e5", glyph: "Go" },
+  "ollama-cloud": { id: "ollama-cloud", name: "Ollama Cloud", tint: "#696969", glyph: "Ol" },
+  "cline-pass": { id: "cline-pass", name: "ClinePass", tint: "#3a77cf", glyph: "C" }
 };
 
 function providerMeta(id: string): ProviderMeta {
@@ -96,7 +102,7 @@ const FEATURE_CATALOG = [
   { id: "vision", label: "Vision", providerAllowed: ["anthropic", "openai-compatible", "azure-openai", "google"] },
   { id: "cache", label: "Prompt caching", providerAllowed: ["anthropic"] },
   { id: "system", label: "System role", providerAllowed: ["anthropic", "openai-compatible", "azure-openai"] },
-  { id: "streaming", label: "Streaming", providerAllowed: ["anthropic", "openai-compatible", "azure-openai", "perplexity", "minimax", "google"] },
+  { id: "streaming", label: "Streaming", providerAllowed: ["openai", "anthropic", "google", "xai", "sugar", "opencode-go", "ollama-cloud", "cline-pass", "openai-compatible", "azure-openai", "perplexity", "minimax"] },
   { id: "thinking", label: "Thinking mode", providerAllowed: ["anthropic"] },
   { id: "background", label: "Background mode", providerAllowed: [] }
 ];

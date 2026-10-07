@@ -1,12 +1,13 @@
 import { decryptJsonSecret } from "@packetchat/auth";
 import { getSql } from "@packetchat/db";
+import type { ProviderId } from "@packetchat/contracts";
 
 export async function getProviderAccountForRuntime(accountId: string, options: { includeDisabled?: boolean } = {}) {
   const sql = getSql();
   const includeDisabled = options.includeDisabled === true;
   const rows = await sql<{
     id: string;
-    provider: "openai-compatible" | "azure-openai" | "anthropic" | "perplexity" | "minimax";
+    provider: ProviderId;
     display_name: string;
     base_url: string | null;
     api_version: string | null;
@@ -36,7 +37,7 @@ export async function getProviderAccountForRuntime(accountId: string, options: {
 
 export async function getEnabledModelBindingForRuntime(input: {
   accountId: string;
-  provider: "openai-compatible" | "azure-openai" | "anthropic" | "perplexity" | "minimax";
+  provider: ProviderId;
   model: string;
 }) {
   const sql = getSql();

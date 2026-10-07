@@ -45,7 +45,7 @@ rsh()  { ssh "${SSH_OPTS[@]}" "$TARGET" "$@"; }
 dc()   { rsh "cd '$REMOTE_DIR' && PACKETCHAT_WEB_PORT='${WEB_PORT}' sudo -n docker compose -f infrastructure/compose/docker-compose.yml --env-file '${REMOTE_DIR}/.env' $*"; }
 
 # ---------------------------------------------------------------- preflight
-[[ -d .git ]] || die "run this from the repository root"
+[[ -e .git ]] || die "run this from the repository root"
 git diff --quiet HEAD 2>/dev/null || warn "working tree has uncommitted changes; deploying committed HEAD only"
 
 # Connection multiplexing keeps password auth to a single prompt, but Windows

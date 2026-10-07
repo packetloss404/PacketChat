@@ -125,7 +125,7 @@ async function runChildAgent(deps: AgentRunDeps, input: { parentRunId: string; r
     temperature: typeof child.spec.temperature === "number" ? child.spec.temperature : undefined,
     maxOutputTokens: Math.min(Number(child.spec.maxOutputTokens) || 800, 4000)
   };
-  for await (const event of deps.streamChat(account, chatRequest, { signal: input.signal })) {
+  for await (const event of deps.streamChat(account, chatRequest, { signal: input.signal, sessionId: input.parentRunId })) {
     if (event.type === "text_delta") outputText += event.text;
     if (event.type === "message_end") providerUsage = event.usage ?? null;
     if (event.type === "error") return { agentId: input.childAgentId, name: child.name, error: event.error.message };
@@ -312,7 +312,7 @@ export async function executeRun(deps: AgentRunDeps, input: ExecuteRunInput): Pr
       maxOutputTokens: Number.isInteger(input.spec.maxOutputTokens) ? input.spec.maxOutputTokens : undefined
     };
 
-    for await (const event of deps.streamChat(account, chatRequest, { signal: input.signal })) {
+    for await (const event of deps.streamChat(account, chatRequest, { signal: input.signal, sessionId: input.runId })) {
       if (event.type === "text_delta") {
         outputText += event.text;
         textDeltaCount += 1;

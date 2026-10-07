@@ -339,7 +339,7 @@ export async function POST(request: Request) {
       send(openingEvent);
 
       try {
-        for await (const event of adapter.streamChat(account, providerRequest, { signal: streamAbortController.signal })) {
+        for await (const event of adapter.streamChat(account, providerRequest, { signal: streamAbortController.signal, sessionId: setup.conversationId })) {
           if (event.type === "text_delta") assistantText += event.text;
           if (event.type === "message_end") {
             finishReason = event.finishReason;

@@ -41,7 +41,7 @@ For local operator commands and API examples, see `docs/local-run.md`.
 
 Provider accounts are app-wide. Only admins can create, edit, rotate, test, or delete them, from `/admin/providers`. Every enabled account is available to every user; there is no per-user provider scope.
 
-The V1 runtime provider contract accepts `openai-compatible`, `azure-openai`, `anthropic`, `perplexity`, and `minimax`. Google/Gemini is not wired as a runtime provider in V1; do not document or configure `google` as a provider account type.
+Supported provider IDs are `openai`, `anthropic`, `google`, `xai`, `sugar`, `opencode-go`, `ollama-cloud`, `cline-pass`, `openai-compatible`, `azure-openai`, `perplexity`, and `minimax`. Provider model sync reads each service's current catalog. OpenCode Go, Ollama Cloud, and ClinePass expose public catalogs that do not prove key validity or plan access; use a small live chat request to verify those accounts. ClinePass sync uses its plan-only `clinePass` catalog rather than the usage-billed `/models` catalog.
 
 Provider key API examples are in `docs/local-run.md`.
 
@@ -155,4 +155,4 @@ Compose is the supported V1 deployment shape. Treat a deployment as pilot/prod-r
 - Review the release-readiness surfaces in `docs/release-readiness.md` before pilot/prod handoff.
 - Stop the Compose stack with `npm run compose:down`; do not remove volumes unless intentionally wiping local data.
 
-Outside the V1 promise: multi-tenant workspaces/teams, SSO, high availability orchestration, external managed-service recipes, Kubernetes manifests, scheduled agent runs, evaluations, true multi-step tool loops, and Google/Gemini runtime provider support.
+Outside the V1 promise: multi-tenant workspaces/teams, SSO, high availability orchestration, external managed-service recipes, Kubernetes manifests, scheduled agent runs, evaluations, and true multi-step tool loops.

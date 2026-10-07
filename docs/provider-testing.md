@@ -2,7 +2,7 @@
 
 Use `scripts/provider-health.mjs` to test live provider connectivity without storing credentials in the repository. The script skips providers whose required environment variables are absent, but fails if every provider is skipped. Pass `--allow-empty` only for a local dry run where checking no providers is intentional.
 
-V1 runtime provider testing covers the five provider IDs accepted by the backend contract: `openai-compatible`, `azure-openai`, `anthropic`, `perplexity`, and `minimax`. Google/Gemini is not wired as a V1 runtime provider; UI labels for Google are custom-model/forward-looking metadata and are not accepted by provider account APIs.
+The provider health script covers the original five providers: `openai-compatible`, `azure-openai`, `anthropic`, `perplexity`, and `minimax`. For direct OpenAI, Google Gemini, xAI, Sugar, OpenCode Go, Ollama Cloud, and ClinePass, use `/admin/providers` to add a key, sync the provider's current model catalog, and make a small chat request. The provider adapter tests cover their request and stream formats without live credentials.
 
 ```shell
 node scripts/provider-health.mjs

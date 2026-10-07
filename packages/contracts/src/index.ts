@@ -2,8 +2,15 @@ import { z } from "zod";
 
 export const providerIdSchema = z.enum([
   "openai-compatible",
+  "openai",
   "azure-openai",
   "anthropic",
+  "google",
+  "xai",
+  "sugar",
+  "opencode-go",
+  "ollama-cloud",
+  "cline-pass",
   "perplexity",
   "minimax"
 ]);
