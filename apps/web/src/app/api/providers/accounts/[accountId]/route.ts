@@ -1,11 +1,12 @@
 import { getSql, recordAuditEvent } from "@packetchat/db";
+import type { ProviderId } from "@packetchat/contracts";
 import { validateProviderBaseUrl } from "@packetchat/providers";
 import { requireAdminOrJson } from "../../../../../lib/admin-auth";
 import { jsonError, jsonOk } from "../../../../../lib/http";
 
 type AccountRow = {
   id: string;
-  provider: "openai-compatible" | "azure-openai" | "anthropic" | "perplexity" | "minimax";
+  provider: ProviderId;
 };
 
 async function getManagedAccount(accountId: string) {

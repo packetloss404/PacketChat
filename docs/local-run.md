@@ -125,12 +125,19 @@ Only admins can add provider accounts, and every account is app-wide. Manage the
 Supported provider IDs are:
 
 - `openai-compatible`
+- `openai`
 - `azure-openai`
 - `anthropic`
+- `google`
+- `xai`
+- `sugar`
+- `opencode-go`
+- `ollama-cloud`
+- `cline-pass`
 - `perplexity`
 - `minimax`
 
-Google/Gemini is not accepted by the V1 backend provider contract. If Google appears in the Models UI, treat it as custom-model/forward-looking metadata, not as a runtime provider account type.
+The admin form supplies default endpoints for named providers, so only the key is needed. Sugar uses `https://usesugar.dev/api/v1` and its member API key. OpenCode Go, Ollama Cloud, and ClinePass catalogs can be public; a successful model sync does not confirm subscription access. Run a small chat after adding those keys.
 
 Add an app-wide OpenAI-compatible provider key (admin token required):
 

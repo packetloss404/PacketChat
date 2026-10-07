@@ -34,6 +34,7 @@ export async function POST(request: Request, context: { params: Promise<{ provid
   let models: ProviderModelSnapshot[];
   try {
     models = await adapter.listModels(runtimeAccount);
+    if (models.length === 0) throw new Error("Provider returned no models; existing model choices were preserved");
   } catch (error) {
     const normalized = normalizeFetchError(error, runtimeAccount.provider);
     await recordAuditEvent({

@@ -1,11 +1,10 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import type { ProviderId } from "@packetchat/contracts";
 import { apiClient } from "../../lib/api-client";
 import { authFetch } from "../../lib/auth-client";
 import { ConfirmButton, EmptyState, ErrorState, LoadingBlock, StatusBadge, useToast } from "../ui";
-
-type ProviderId = "openai-compatible" | "azure-openai" | "anthropic" | "perplexity" | "minimax";
 
 type ProviderAccount = {
   id: string;
@@ -37,9 +36,16 @@ type ProvidersResponse = {
 };
 
 const providers: { id: ProviderId; label: string; hint: string }[] = [
-  { id: "openai-compatible", label: "OpenAI-compatible", hint: "Base host for OpenAI-compatible services." },
+  { id: "openai", label: "OpenAI", hint: "Direct OpenAI API key; models sync from OpenAI." },
+  { id: "anthropic", label: "Anthropic", hint: "Direct Claude API key; models sync from Anthropic." },
+  { id: "google", label: "Google Gemini", hint: "Direct Gemini API key; generative models sync from Google." },
+  { id: "xai", label: "xAI", hint: "Direct xAI API key; language models sync from xAI." },
+  { id: "sugar", label: "Sugar", hint: "Sugar member API key; uses the models exposed to that key." },
+  { id: "opencode-go", label: "OpenCode Go", hint: "OpenCode Go subscription key. The public catalog does not verify plan access." },
+  { id: "ollama-cloud", label: "Ollama Cloud", hint: "Ollama Cloud API key. Listed models may require a higher plan." },
+  { id: "cline-pass", label: "ClinePass", hint: "Cline API key. Sync imports only the ClinePass model catalog." },
+  { id: "openai-compatible", label: "OpenAI-compatible", hint: "Custom OpenAI-compatible API; enter its base URL." },
   { id: "azure-openai", label: "Azure OpenAI", hint: "Use your Azure resource endpoint; chat model names are deployment names." },
-  { id: "anthropic", label: "Anthropic", hint: "Claude API provider account." },
   { id: "perplexity", label: "Perplexity", hint: "Hosted search-aware model provider." },
   { id: "minimax", label: "MiniMax", hint: "MiniMax model provider account." }
 ];
@@ -131,7 +137,7 @@ function capabilitySummary(binding: ProviderModelBinding) {
 }
 
 const initialForm = {
-  provider: "openai-compatible" as ProviderId,
+  provider: "openai" as ProviderId,
   displayName: "",
   apiKey: "",
   baseUrl: "",
@@ -444,7 +450,7 @@ export function ProvidersManager() {
           <h2>Add provider</h2>
           <label>
             Provider
-            <select aria-label="Provider" value={form.provider} onChange={(event) => setForm({ ...form, provider: event.target.value as ProviderId })}>
+            <select aria-label="Provider" value={form.provider} onChange={(event) => setForm({ ...form, provider: event.target.value as ProviderId, apiKey: "", baseUrl: "", apiVersion: "", region: "" })}>
               {providers.map((provider) => (
                 <option key={provider.id} value={provider.id}>{provider.label}</option>
               ))}
@@ -471,16 +477,16 @@ export function ProvidersManager() {
               Base URL
               <input className="input" value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder={baseUrlPlaceholder(form.provider)} />
             </label>
-            <label>
+            {form.provider === "azure-openai" ? <label>
               API version
               <input className="input" value={form.apiVersion} onChange={(event) => setForm({ ...form, apiVersion: event.target.value })} placeholder="2024-10-21" />
-            </label>
+            </label> : null}
           </div>
 
-          <label>
+          {form.provider === "azure-openai" ? <label>
             Region
             <input className="input" value={form.region} onChange={(event) => setForm({ ...form, region: event.target.value })} placeholder="eastus" />
-          </label>
+          </label> : null}
 
           <label className="providers-checkbox">
             <input type="checkbox" checked={form.isDefault} onChange={(event) => setForm({ ...form, isDefault: event.target.checked })} />
@@ -600,7 +606,7 @@ export function ProvidersManager() {
                         {accountModels.length > 5 ? <span className="muted">+{accountModels.length - 5} more</span> : null}
                       </>
                     ) : (
-                      <span className="muted">No models discovered yet. Use manual model entry in chat or sync models.</span>
+                      <span className="muted">No models discovered yet. Sync models to make them available in chat.</span>
                     )}
                   </div>
                   <div className="providers-row">
@@ -647,8 +653,15 @@ function providerLabel(providerId: ProviderId) {
 }
 
 function baseUrlPlaceholder(providerId: ProviderId) {
+  if (providerId === "openai") return "https://api.openai.com";
   if (providerId === "azure-openai") return "https://your-resource.openai.azure.com";
   if (providerId === "anthropic") return "https://api.anthropic.com";
+  if (providerId === "google") return "https://generativelanguage.googleapis.com";
+  if (providerId === "xai") return "https://api.x.ai";
+  if (providerId === "sugar") return "https://usesugar.dev/api/v1";
+  if (providerId === "opencode-go") return "https://opencode.ai/zen/go/v1";
+  if (providerId === "ollama-cloud") return "https://ollama.com";
+  if (providerId === "cline-pass") return "https://api.cline.bot/api/v1";
   if (providerId === "perplexity") return "https://api.perplexity.ai";
   if (providerId === "minimax") return "https://api.minimax.io";
   return "https://api.openai.com or compatible root host";
