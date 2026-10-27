@@ -8,6 +8,7 @@ import {
   clearAccessToken,
   getAccessToken,
   getMe,
+  hasSessionHint,
   login as clientLogin,
   logout as clientLogout,
   refreshAccessToken,
@@ -45,6 +46,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function loadCurrentUser() {
     if (!getAccessToken()) {
+      if (!hasSessionHint()) {
+        // No session cookie to exchange: skip the refresh call entirely rather
+        // than provoke a 403 that shows up as a console error.
+        setUser(null);
+        setAccessToken(null);
+        setStatus("anonymous");
+        return null;
+      }
       try {
         await refreshAccessToken();
       } catch {

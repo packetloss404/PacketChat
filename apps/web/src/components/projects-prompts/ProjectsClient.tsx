@@ -228,9 +228,14 @@ export function ProjectsClient() {
               ) : null}
             </div>
             {selectedProject ? (
-              <ConfirmButton className="button button--danger" message="Delete this project?" confirmLabel="Delete" disabled={deletingId === selectedProject.id} onConfirm={() => deleteProject(selectedProject)}>
-                Delete project
-              </ConfirmButton>
+              <div className="projects-prompts-actions">
+                <a className="button" href={`/chat?project=${encodeURIComponent(selectedProject.id)}`}>
+                  Open in chat
+                </a>
+                <ConfirmButton className="button button--danger" message="Delete this project?" confirmLabel="Delete" disabled={deletingId === selectedProject.id} onConfirm={() => deleteProject(selectedProject)}>
+                  Delete project
+                </ConfirmButton>
+              </div>
             ) : null}
           </div>
 

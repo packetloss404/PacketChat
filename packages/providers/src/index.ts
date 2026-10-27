@@ -491,7 +491,14 @@ export const adapters: Record<ProviderId, ProviderAdapter> = {
   minimax: minimaxAdapter
 };
 
-export { isUnsupportedModelDiscovery, normalizeFetchError, validateProviderBaseUrl } from "./provider-http";
+export {
+  assertSafePublicOutboundUrl,
+  isBlockedAddress,
+  isUnsupportedModelDiscovery,
+  normalizeFetchError,
+  validateProviderBaseUrl,
+  validatePublicOutboundUrl
+} from "./provider-http";
 
 export function getProviderAdapter(provider: ProviderId): ProviderAdapter {
   return adapters[provider];

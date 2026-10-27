@@ -81,7 +81,7 @@ For releases, run the migration job once per release. Do not run migrations conc
 
 ## Bootstrap Admin
 
-You can bootstrap from the UI at `http://localhost:3000`, or call the API directly. Use the same `BOOTSTRAP_TOKEN` value from `.env`.
+There is no bootstrap UI; call the API directly. Use the same `BOOTSTRAP_TOKEN` value from `.env`.
 
 ```shell
 curl -i -X POST http://localhost:3000/api/admin/bootstrap \
@@ -232,6 +232,26 @@ npm run verify
 npm run build
 ```
 
+## Browser Tests
+
+The browser suite walks every UI route in a real Chromium and asserts there are no console errors, no uncaught page errors, no same-origin 5xx responses, no horizontal overflow at the canonical breakpoints, that the theme and General preferences persist, and that the account popover and not-found surface behave as documented.
+
+With the Compose stack running and an admin bootstrapped:
+
+```powershell
+$env:PACKETCHAT_E2E_EMAIL = "admin@example.com"
+$env:PACKETCHAT_E2E_PASSWORD = "replace-with-admin-password"
+npm run test:e2e
+```
+
+```shell
+PACKETCHAT_E2E_EMAIL=admin@example.com PACKETCHAT_E2E_PASSWORD=replace-with-admin-password npm run test:e2e
+```
+
+Set `PACKETCHAT_BASE_URL` for a non-local target. `PACKETCHAT_SMOKE_EMAIL` / `PACKETCHAT_SMOKE_PASSWORD` are accepted as fallbacks. The suite logs in once per worker and needs `npx playwright install --with-deps chromium` on a fresh machine; CI installs it for the `e2e` job.
+
+The suite loads many pages and every page load refreshes the session, so a full run makes more than `RATE_LIMIT_AUTH_PER_MINUTE` auth requests against one client. Raise it (CI sets it to `600` for the `e2e` job) or run one spec file at a time, since each file stays under the default `20`.
+
 When credentials are available and the Compose stack is running, also run the authenticated smoke command above because it exercises no-key CRUD, archive/delete, and knowledge text upload/search paths without requiring provider API keys or Resend. For release handoff, pair smoke with the manual checks in `docs/release-readiness.md`.
 
 ## Mobile Use
@@ -301,7 +321,7 @@ curl -i http://localhost:3000/api/agents/AGENT_ID_HERE/runs/RUN_ID_HERE \
   -H "Authorization: Bearer ACCESS_TOKEN_HERE"
 ```
 
-The `worker` service must be running for an async run to execute; with Redis unreachable the run falls back to executing inside `web` and does not survive a restart. Polling a run that has sat queued for more than 20 minutes marks it `timed_out`, and it is not executed afterwards. Synchronous runs (the default, no `async` flag) are unaffected.
+The `worker` service must be running for an async run to execute; with Redis unreachable the run falls back to executing inside `web` and does not survive a restart. Polling a run that has **started** and gone quiet marks it `timed_out` once it is older than 20 minutes, and it is not executed afterwards; a run that is still `queued` (never started) is not reaped for queue age. Synchronous runs (the default, no `async` flag) are unaffected.
 
 ## Stop The Stack
 

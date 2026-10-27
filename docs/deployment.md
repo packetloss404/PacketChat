@@ -32,7 +32,7 @@ Required proxy behavior:
 5. Leave `APP_TRUSTED_PROXY=true` only when the reverse proxy supplies trustworthy forwarded headers.
 6. Start dependencies and app: `npm run compose:up`.
 7. Run migrations: `npm run compose:migrate`.
-8. Visit `/` and bootstrap the first admin account.
+8. Bootstrap the first admin account by calling `POST /api/admin/bootstrap` with your `BOOTSTRAP_TOKEN` (there is no bootstrap UI; `/` redirects to `/chat`). See `docs/local-run.md` for the exact request.
 9. Optional: configure email delivery below if invite and password-reset links should be mailed rather than handed over by the admin.
 
 For local operator commands and API examples, see `docs/local-run.md`.
@@ -83,7 +83,7 @@ The invite or reset token is committed before the send, and the URL is returned 
 
 API rate limits are Redis-backed and use `REDIS_URL`. Auth endpoints use `RATE_LIMIT_AUTH_PER_MINUTE` with a fixed one-minute window. Chat, agent-run, and expensive provider endpoints use `RATE_LIMIT_CHAT_PER_MINUTE` with a sliding one-minute window. File uploads use `RATE_LIMIT_FILE_UPLOAD_PER_MINUTE` with a sliding one-minute window.
 
-Requests over the limit return `429` with `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers plus JSON retry details. Authenticated requests are keyed by user id; anonymous requests fall back to client IP from forwarded headers.
+Requests over the limit return `429` with `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers plus JSON retry details. Authenticated requests are keyed by user id. Anonymous requests are keyed by client IP from forwarded headers when `APP_TRUSTED_PROXY=true`; otherwise they share a single anonymous bucket, so set `APP_TRUSTED_PROXY=true` behind a proxy to keep one client from consuming the anonymous budget. The key is never derived from the caller-controlled `User-Agent`.
 
 ## Background Jobs and Retention
 
@@ -91,7 +91,7 @@ The `worker` service consumes four queues on `REDIS_URL`. `file-ingestion`, `pro
 
 An `agent-run` job is enqueued by `POST /api/agents/{agentId}/runs` when the caller asks for an asynchronous run. If Redis is unreachable the enqueue is refused within five seconds and `web` executes the run in its own process instead, so the caller still gets an answer; that run is durable only until `web` restarts. Either way exactly one executor claims the run, so a retried or redelivered job cannot run it twice.
 
-The 20-minute reconcile that `GET /api/agents/{agentId}/runs/{runId}` performs is aged from the run's start, or from its creation when it never started. A run that is still waiting in the queue therefore counts queue time against that window: if the worker is down, saturated, or backlogged for more than 20 minutes, the caller's own status poll marks the run `timed_out`, and no executor will pick it up afterwards. Keep `worker` running and the queue short, or use synchronous runs.
+The 20-minute reconcile that `GET /api/agents/{agentId}/runs/{runId}` performs only ages runs that have **started** (`status` of `preparing` or `running` with a non-null `started_at`). A run that is still `queued` has no `started_at` and is not reaped for queue age: if the worker is down, saturated, or backlogged, a queued run simply waits rather than being marked `timed_out` by a status poll. Keep `worker` running and the queue short, or use synchronous runs.
 
 A `sync-provider` job is enqueued when an admin creates a provider account and when an admin runs a model sync from `/admin/providers`. A queue error there is logged as a warning and does not fail the request. The worker only syncs accounts whose status is `enabled`, and it never disables a binding on its own — retiring a model that a provider stopped reporting stays an explicit admin action.
 
@@ -105,9 +105,9 @@ Retention cleanup runs daily at 03:15 in the worker container's timezone, which 
 
 The windows are compiled into the worker; changing them is a code change and a redeploy. A one-off job may pass `olderThanDays` to override the window for the targets it selects. The worker re-registers the schedule under a fixed key on every boot, so restarts and multiple replicas do not stack duplicate schedules.
 
-Jobs on all three working queues retry 3 times with exponential backoff, then land in `job_failures` and appear in the job-failure rollup on `/admin/operations`.
+Jobs on all four queues retry 3 times with exponential backoff, then land in `job_failures` and appear in the job-failure rollup on `/admin/operations`.
 
-Two limitations matter operationally: deleting an orphan attachment row does not remove the underlying object from MinIO, and the first scheduled run after this change deploys will delete whatever backlog the deployment has already accumulated. Back up Postgres before that worker restart.
+Two limitations matter operationally: the first scheduled run after this change deploys will delete whatever backlog the deployment has already accumulated, and the `completed-runs` sweep removes terminal `agent_runs` older than 90 days. Back up Postgres before that worker restart. Orphan-attachment cleanup deletes the MinIO object before its row, so a failed object delete leaves the row in place to retry rather than stranding an unidentifiable object.
 
 For the manual trigger, log lines to check, and the full limitation list, see `docs/runbooks/worker-queues.md`.
 
@@ -118,14 +118,18 @@ Run `npm run smoke` and the checklist in `docs/smoke-test.md` after first deploy
 ## UI Routes
 
 - `/login`: local password login.
-- `/chat`: authenticated chat test surface.
-- `/providers`: provider account management.
-- `/projects`: user-owned project workspaces and persistent instructions.
+- `/`: redirects to `/chat`.
+- `/chat`: authenticated chat surface.
+- `/providers`: browsable model library (read-only for non-admins).
+- `/projects`: user-owned project workspaces with persistent instructions and linked chats.
 - `/prompts`: prompt management.
 - `/knowledge`: knowledge base, document management, retrieval test search, and per-result debug metadata.
 - `/agents`: single-pass augmented agent drafts, publishing, sharing, manual/chat-launched runs, and run history.
 - `/approvals`: user approval queue for pending agent action checkpoints.
+- `/share/[token]`: public read-only shared conversation.
+- `/settings`: account, API-key link, and local preferences.
 - `/admin/users`: admin user operations.
+- `/admin/providers`: admin provider-account and key governance.
 - `/admin/usage`: usage governance, run-rate projection, and estimated-cost review.
 - `/admin/audit`: latest audit events and action summaries.
 - `/admin/operations`: provider/model/knowledge/run/job health rollups.
@@ -151,7 +155,7 @@ Compose is the supported V1 deployment shape. Treat a deployment as pilot/prod-r
 - Run `npm run smoke` after first deploy, upgrades, and restore drills. Include `PACKETCHAT_SMOKE_EMAIL` / `PACKETCHAT_SMOKE_PASSWORD` for authenticated coverage.
 - Confirm the worker logged `Cleanup schedule registered` after rollout; without it there is no retention schedule until the next boot.
 - If `EMAIL_PROVIDER` is not `manual`, send one invite to a real mailbox after rollout and confirm the response reports `sent`. A failed send still returns the link, so nothing else signals a broken relay.
-- If callers use asynchronous agent runs, confirm `worker` is up and consuming `agent-run` before rollout; a run left queued past 20 minutes is failed by the first status poll that sees it.
+- If callers use asynchronous agent runs, confirm `worker` is up and consuming `agent-run` before rollout; a run that has started and then gone quiet is failed by the first status poll that sees it past 20 minutes, while a still-queued run is not reaped for queue age.
 - Review the release-readiness surfaces in `docs/release-readiness.md` before pilot/prod handoff.
 - Stop the Compose stack with `npm run compose:down`; do not remove volumes unless intentionally wiping local data.
 

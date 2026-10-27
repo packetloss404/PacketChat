@@ -54,6 +54,8 @@ export const chatRequestControlsSchema = z.object({
   parentMessageId: z.string().nullable().optional(),
   editMessageId: z.string().optional(),
   regenerate: z.boolean().optional(),
+  /** Project whose instructions are injected for this turn and, for a new chat, which owns it. */
+  projectId: z.string().uuid().nullable().optional(),
   /** Chat-scoped attachment ids whose extracted text is injected for this turn. */
   attachmentIds: z.array(z.string().uuid()).max(20).optional()
 });

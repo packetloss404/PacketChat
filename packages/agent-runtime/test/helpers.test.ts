@@ -54,6 +54,29 @@ test("isBlockedAddress covers loopback, link-local and the private ranges", () =
   }
 });
 
+test("isBlockedAddress unwraps IPv4-mapped IPv6 and reserved IPv4 ranges", () => {
+  for (const address of [
+    "::ffff:169.254.169.254",
+    "::ffff:127.0.0.1",
+    "::ffff:10.0.0.5",
+    "::ffff:192.168.1.1",
+    "::ffff:7f00:1",
+    "0:0:0:0:0:ffff:a9fe:a9fe",
+    "::169.254.169.254",
+    "100.64.0.1",
+    "192.0.0.1",
+    "198.18.0.1",
+    "203.0.113.5",
+    "224.0.0.1",
+    "0.0.0.0"
+  ]) {
+    assert.equal(isBlockedAddress(address), true, address);
+  }
+  for (const address of ["::ffff:8.8.8.8", "::ffff:1.1.1.1", "2606:4700:4700::1111"]) {
+    assert.equal(isBlockedAddress(address), false, address);
+  }
+});
+
 test("isBlockedHost blocks literal private addresses without a DNS lookup", async () => {
   assert.equal(await isBlockedHost("localhost", neverResolves), true);
   assert.equal(await isBlockedHost("api.localhost", neverResolves), true);

@@ -51,9 +51,9 @@ Acceptance notes:
 
 Follow-ups opened by the wiring:
 
-- `model_account_bindings` has no unique constraint on `(provider_account_id, model_catalog_id)`. Two overlapping provider-sync jobs for one account can both read an empty binding set and both insert, duplicating every binding. Account creation and a manual model sync can now overlap, so this is reachable.
+- Resolved 2026-10-27: `model_account_bindings` has a partial unique index on `(provider_account_id, model_catalog_id)` (migration `0005`) and the sync writer upserts on it, so overlapping provider-sync jobs converge on one binding instead of duplicating. Bindings with a null `model_catalog_id` are intentionally exempt.
 - Enqueue calls can block instead of failing when Redis is unreachable. The queue connection retries forever with the offline queue enabled, so `POST /api/providers` and the model-sync route can hang past their commit until the proxy times out, and an operator retry creates a duplicate provider account. Bound the enqueue with a timeout, or build the queue connection with `enableOfflineQueue: false`.
-- Orphan-attachment cleanup deletes the `attachments` row but nothing removes the object from MinIO. `CleanupDeps` has no hook for blob deletion, and the daily schedule means the leak now accrues on a timer rather than never.
+- Resolved 2026-10-27: orphan-attachment cleanup deletes the MinIO object before its row. `CleanupDeps` has a `PurgeObject` hook (defaulting to `deleteObject`); a failed object delete keeps the row in place to retry rather than stranding an unidentifiable object.
 - `apps/worker/package.json` does not declare `@packetchat/auth`, which `provider-sync-deps.ts` imports for `decryptJsonSecret`. It resolves only through npm workspace hoisting, and wiring provider sync makes that undeclared dependency load-bearing at runtime for the first time.
 - The model-sync route refreshes models synchronously and also enqueues a background sync, doubling outbound provider list calls per manual refresh. Worth reconsidering whether account creation alone should be the trigger.
 - The Dockerfile rewrites worker `dist` imports with per-file `sed` lines, and this change added five more. Any future relative import in a worker source silently ships a container that dies on `ERR_MODULE_NOT_FOUND`, and `npm run verify` does not catch it. `moduleResolution: NodeNext` for the worker build, or one generic rewrite over `apps/worker/dist`, would remove the class of failure.
@@ -61,7 +61,7 @@ Follow-ups opened by the wiring:
 
 ## Production Dependency Audit
 
-`npm run audit:prod` passes with no production advisories as of 2026-08-27. Next.js is on 15.5.24 and sharp on 0.35.4; PostCSS is pinned to `^8.5.26` by a root `overrides` entry because Next 15 depends on `8.4.31` exactly and npm's only offered fix is Next 16.
+`npm run audit:prod` gates high-severity production advisories. As of 2026-10-27 a non-breaking `npm audit fix` moved Next.js to 15.5.28 and nodemailer to 10.2.1, clearing the Next.js cache-poisoning/RCE/DoS and nodemailer addressparser advisories. One high advisory remains in `zod` (`GHSA-mrhx-c7xc-m3w5`, memory exhaustion on oversized constrained collections); its only fix is `zod` 4, a breaking upgrade deferred, so the gate is expected to fail on that single line until then. PostCSS is pinned to `^8.5.26` by a root `overrides` entry because Next 15 depends on `8.4.31` exactly and npm's only offered fix is Next 16.
 
 The Next 16 upgrade remains deferred. It is a major version and the App Router, middleware, auth cookie, SSE chat, and agent-run flows all need verification against it.
 
@@ -113,7 +113,7 @@ _Findings from a 2026-07-17 code audit. The worker-queue wiring items were actio
 ### Later / deferred
 
 - **[noise/M]** License Key activation UI is a stub, validation service not connected
-  - Fix: Needs an external license-validation backend not yet built (README.md:106). UI accepts+stores input; connect a POST validate endpoint when the service exists. Deliberate.
+  - Resolved 2026-10-27: the License Key stub section was removed from `/settings` in the Wave 1 cleanup; no license UI remains to wire. (The old "README.md:106" reference is gone.)
 - **[low/M]** Plugin marketplace / install is UI-only, persists to localStorage
   - Fix: apps/web/src/app/plugins/marketplace/page.tsx stores interest/install in localStorage (MARKETPLACE_KEY). Deliberate per README ('no notification backend'); needs a plugins API + notification backend to persist server-side.
 - **[low/L]** MCP runtime is local-draft only; chat/agents do not consume MCP entries
@@ -219,7 +219,7 @@ Acceptance notes:
 
 ### Phase 2 — Files, RAG and artifacts
 
-- Unified chat uploader. The upload endpoint currently requires `knowledgeBaseId` (`apps/web/src/app/api/files/upload/route.ts:32`), so no chat picker can exist; add a chat-scoped attachment flow with ownership and bounded context injection (the unused `apps/web/src/lib/chat-files/context.ts` is the starting point).
+- Resolved 2026-10-27: chat-scoped uploads exist. `POST /api/files/upload` accepts a chat scope with no `knowledgeBaseId`, the chat page ships a file picker, and selected files inject bounded extracted-text context for one turn with ownership enforced. Real neural embeddings (pgvector) remain pending (see the next bullet).
 - Add an optional neural embedding model and pgvector path for general semantic similarity. The private default now uses versioned 256-d local feature hashing plus BM25, phrases, stems, concept aliases, and character similarity, with bounded corpus scanning and an in-place refresh path; it remains deliberately labeled non-neural.
 - Parse and render artifacts. `apps/web/src/lib/artifacts/{model,parse,sanitize}.ts` are dead code; agent instructions mention artifacts (`packages/agent-runtime/src/execute.ts:29`) but output is never parsed. Add sandboxed Mermaid/HTML/SVG previews with persistence per conversation/run (this also satisfies the existing "Artifacts and Chat Files" section above).
 - Reduce the knowledge "Why this result" panel (`knowledge-manager.tsx:657`) from a raw debug dump (attachmentId, objectKey, embedding version/timestamps) to an operator-facing explanation; move internals behind a details toggle.

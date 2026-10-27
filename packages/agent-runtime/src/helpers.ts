@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { isBlockedAddress } from "@packetchat/providers";
 import type { AgentSpec, RunFailureStatus } from "./types";
 
 export function textOrNull(value: unknown) {
@@ -143,22 +144,13 @@ export function timeoutSignal(timeoutMs: number, parent?: AbortSignal) {
   };
 }
 
-export function isBlockedAddress(address: string) {
-  if (address.startsWith("127.") || address.startsWith("0.") || address.startsWith("10.") || address.startsWith("169.254.") || address.startsWith("192.168.")) return true;
-  const ipv4Private = address.match(/^172\.(\d+)\./);
-  if (ipv4Private && Number(ipv4Private[1]) >= 16 && Number(ipv4Private[1]) <= 31) return true;
-  const normalized = address.toLowerCase();
-  return normalized === "::1" || normalized === "::" || normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd");
-}
+export { isBlockedAddress };
 
 // The SSRF guard. `resolveHost` is injected so the literal-address rules stay
 // testable without DNS; a lookup that returns nothing is treated as blocked.
 export async function isBlockedHost(hostname: string, resolveHost: (host: string) => Promise<string[]>) {
-  const host = hostname.toLowerCase();
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (host === "localhost" || host.endsWith(".localhost")) return true;
-  if (/^(127\.|10\.|0\.|169\.254\.|192\.168\.)/.test(host)) return true;
-  const match = host.match(/^172\.(\d+)\./);
-  if (match && Number(match[1]) >= 16 && Number(match[1]) <= 31) return true;
   if (isIP(host)) return isBlockedAddress(host);
   const addresses = await resolveHost(host);
   if (addresses.length === 0) return true;

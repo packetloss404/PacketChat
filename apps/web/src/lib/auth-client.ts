@@ -46,6 +46,18 @@ export function getAccessToken() {
   return memoryAccessToken;
 }
 
+/**
+ * Best-effort client-side check for an existing session. The refresh cookie is
+ * httpOnly, but the non-httpOnly CSRF cookie is set alongside it on login and
+ * refresh and cleared on logout, so its presence means "a refresh token is
+ * probably present". Used to skip a guaranteed-403 refresh call for a visitor
+ * who is plainly signed out, which otherwise logs a console error on every
+ * public page load.
+ */
+export function hasSessionHint() {
+  return Boolean(readCsrfToken());
+}
+
 export function storeAccessToken(accessToken: string) {
   memoryAccessToken = accessToken;
   emitAuthClient({ type: "token", accessToken });

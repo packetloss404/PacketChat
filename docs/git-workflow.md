@@ -46,7 +46,7 @@ Run the production dependency audit before release branches or pilot/prod rollou
 npm run audit:prod
 ```
 
-As of the May 2026 local hardening pass this audit gates high-severity production advisories and may still print a moderate Next.js/PostCSS advisory. Keep that visible locally until those dependencies can be upgraded without taking on a framework migration.
+As of the current hardening pass this audit gates high-severity production advisories. It currently reports one high advisory in `zod` (`GHSA-mrhx-c7xc-m3w5`, "Zod can exhaust memory while validating oversized constrained collections") whose only fix is `zod` 4, a breaking upgrade deliberately deferred; the Next.js and nodemailer advisories were cleared by a non-breaking dependency bump. Fix or document any new advisory before release.
 
 For Docker or deployment changes, validate the Compose file and application image targets:
 
@@ -62,12 +62,19 @@ If the local Compose stack is running and migrated, run the smoke check too:
 npm run smoke
 ```
 
+Run the browser end-to-end suite when the stack is running and an admin exists (see `docs/local-run.md` for the credentials variables):
+
+```shell
+npm run test:e2e
+```
+
 For a full local readiness pass from a fresh checkout, use:
 
 ```shell
 npm run compose:up
 npm run compose:migrate
 npm run smoke
+npm run test:e2e
 ```
 
 ## Commit And Push

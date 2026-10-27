@@ -31,7 +31,7 @@ PACKETCHAT_ENV_FILE=.env.local npm run seed:demo
 - `Demo:` projects with instructions.
 - `Demo:` prompt templates and initial versions.
 - `Demo:` conversations with seeded system, user, and assistant messages.
-- A `Demo:` knowledge base, ready markdown document, and searchable chunks with local deterministic embeddings.
+- A `Demo:` knowledge base, ready markdown document, and searchable chunks. The seeded chunks carry an older embedding profile (`packetchat-local-hash`, 128-dim) that the current app treats as `outdated`, so retrieval ranks them lexically (BM25) until you re-embed the knowledge base.
 - An active `Demo:` agent with a draft, published version, owner permission, and knowledge binding.
 
 The script is non-destructive and idempotent where practical. Re-running it updates the same named demo records and message/chunk seed markers instead of deleting unrelated data. It does not contact model providers, object storage, Redis, or email services.

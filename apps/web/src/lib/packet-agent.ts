@@ -2,6 +2,10 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { bearerTokenFromHeaders, decryptJsonSecret, encryptJsonSecret } from "@packetchat/auth";
 import { getConfig } from "@packetchat/config";
 import {
+  assertSafePublicOutboundUrl,
+  validatePublicOutboundUrl
+} from "@packetchat/providers";
+import {
   packetAgentRunDisplayState,
   packetAgentWorkerMessageSchema,
   resolveRunCardUpsert,
@@ -150,7 +154,13 @@ export async function callPacketAgent(
 ): Promise<Response> {
   const credentials = decryptJsonSecret<PacketAgentConnectionCredentials>(connection.agentCredentials);
   const base = connection.agentBaseUrl.endsWith("/") ? connection.agentBaseUrl.slice(0, -1) : connection.agentBaseUrl;
-  const target = `${base}${path.startsWith("/") ? path : `/${path}`}`;
+  // The stored base URL was checked at creation, but re-check the literal here
+  // so a row written before that guard (or edited out of band) cannot reach a
+  // private address. No DNS lookup on the hot path; creation does the full
+  // resolve-and-block.
+  const baseValidation = validatePublicOutboundUrl(base);
+  if (!baseValidation.ok) throw new PacketAgentError(baseValidation.message);
+  const target = `${baseValidation.value.replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PACKET_AGENT_TIMEOUT_MS);
   const headers = new Headers(init.headers);
@@ -181,10 +191,16 @@ export async function callPacketAgentJson<T>(
 
 /** Fetches a signed callback URL server-side. The URL is never logged or returned. */
 export async function fetchSignedCallback(url: string): Promise<{ status: number; body: unknown }> {
+  // The callback URL is minted by the Agent from operator config but arrives on
+  // the ingest path, so it is not trusted: block loopback/private/link-local/
+  // reserved targets (and names resolving there) before the server fetches it.
+  const safe = await assertSafePublicOutboundUrl(url);
+  if (!safe.ok) throw new PacketAgentError(safe.message, 502);
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), CALLBACK_TIMEOUT_MS);
   try {
-    const response = await fetch(url, { signal: controller.signal, redirect: "manual", headers: { accept: "application/json" } });
+    const response = await fetch(safe.value, { signal: controller.signal, redirect: "manual", headers: { accept: "application/json" } });
     const body = await response.json().catch(() => null);
     return { status: response.status, body };
   } catch {
@@ -275,6 +291,21 @@ export function normalizeAgentBaseUrl(value: unknown): string | null {
   if (url.search || url.hash) return null;
   if (url.pathname !== "/" && url.pathname !== "") return null;
   return url.origin;
+}
+
+/**
+ * Shape-checks the Agent base URL and resolves its host, rejecting a target on
+ * loopback/private/link-local/reserved address space. Throws a PacketAgentError
+ * (status 400) so the connection route can report it as a bad request.
+ */
+export async function assertSafeAgentBaseUrl(value: unknown): Promise<string> {
+  const normalized = normalizeAgentBaseUrl(value);
+  if (!normalized) {
+    throw new PacketAgentError("agentBaseUrl must be an http(s) origin with no userinfo, query, or hash", 400);
+  }
+  const safe = await assertSafePublicOutboundUrl(normalized);
+  if (!safe.ok) throw new PacketAgentError(safe.message, 400);
+  return safe.value;
 }
 
 export function buildIngestEndpointUrl(): string {

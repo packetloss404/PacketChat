@@ -106,6 +106,8 @@ export type ChatRequestBody = {
   editMessageId?: string;
   /** Regenerate the assistant sibling under the given message instead of inserting a user message. */
   regenerate?: boolean;
+  /** Project whose instructions are injected for this turn and, for a new chat, which owns it. */
+  projectId?: string | null;
   /** Chat-scoped attachments whose extracted text is injected for this turn. */
   attachmentIds?: string[];
 };

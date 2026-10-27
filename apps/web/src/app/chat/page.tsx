@@ -782,6 +782,14 @@ function ChatPage() {
       if (request.kind === "new") {
         body.parentMessageId = serverMessageId(request.parentMessageId);
         if (request.attachmentIds?.length) body.attachmentIds = request.attachmentIds;
+        // A brand-new chat started from a project link inherits that project,
+        // so its instructions are applied and the project counts the chat.
+        // Later turns inherit it from the conversation server-side, so the
+        // parameter is only read while the chat has no conversation yet.
+        if (!conversationId && typeof window !== "undefined") {
+          const projectParam = new URLSearchParams(window.location.search).get("project");
+          if (projectParam) body.projectId = projectParam;
+        }
       } else if (request.kind === "edit") {
         body.editMessageId = request.editMessageId;
       } else {

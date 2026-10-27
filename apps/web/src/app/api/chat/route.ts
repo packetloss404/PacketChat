@@ -124,30 +124,59 @@ export async function POST(request: Request) {
     attachmentContextText = context.contextText;
   }
 
-  // Attachment text is injected as an extra system message for this turn only;
-  // it is never persisted as a tree node, mirroring the agent file-context path.
-  const providerRequest: NormalizedChatRequest = attachmentContextText
-    ? {
-        ...parsed.data,
-        messages: [
-          { role: "system", content: [{ type: "text", text: attachmentContextText }] },
-          ...parsed.data.messages
-        ]
-      }
-    : parsed.data;
-
-  // The injected attachment context is for the live provider call only. Storing
-  // the full request would copy extracted file text into conversation_runs.request
-  // and the usage estimate, so the persisted request keeps the caller's original
-  // messages; the user message metadata's attachmentIds remains the reference.
-  const persistedRequest: NormalizedChatRequest = parsed.data;
-
   const conversationId =
     typeof controls.data.conversationId === "string" && controls.data.conversationId.trim() ? controls.data.conversationId.trim() : null;
   const explicitParentId =
     typeof controls.data.parentMessageId === "string" && controls.data.parentMessageId.trim() ? controls.data.parentMessageId.trim() : null;
   const editMessageId = typeof controls.data.editMessageId === "string" && controls.data.editMessageId.trim() ? controls.data.editMessageId.trim() : null;
   const regenerate = controls.data.regenerate === true;
+
+  // Project context: a requested project owns a brand-new chat and supplies its
+  // reusable instructions; an existing chat inherits the project it already
+  // belongs to. Instructions are injected for this turn only, like attachment
+  // context below, and are never persisted as a tree node.
+  const requestedProjectId =
+    typeof controls.data.projectId === "string" && controls.data.projectId.trim() ? controls.data.projectId.trim() : null;
+  let projectInstructions: string | null = null;
+  if (requestedProjectId) {
+    const rows = await sql<{ instructions: string | null }[]>`
+      select instructions from projects
+      where id = ${requestedProjectId} and owner_user_id = ${user.id}
+      limit 1
+    `;
+    if (!rows[0]) return jsonError("Project not found", 404);
+    projectInstructions = rows[0].instructions ?? null;
+  } else if (conversationId) {
+    const rows = await sql<{ instructions: string | null }[]>`
+      select p.instructions
+      from conversations c
+      join projects p on p.id = c.project_id and p.owner_user_id = c.owner_user_id
+      where c.id = ${conversationId} and c.owner_user_id = ${user.id}
+      limit 1
+    `;
+    projectInstructions = rows[0]?.instructions ?? null;
+  }
+
+  // Injected context is a system prelude for the live provider call only; it is
+  // never persisted as a tree node, mirroring the agent file-context path.
+  const systemPreludes = [projectInstructions, attachmentContextText].filter(
+    (text): text is string => Boolean(text && text.trim())
+  );
+  const providerRequest: NormalizedChatRequest = systemPreludes.length > 0
+    ? {
+        ...parsed.data,
+        messages: [
+          ...systemPreludes.map((text) => ({ role: "system" as const, content: [{ type: "text" as const, text }] })),
+          ...parsed.data.messages
+        ]
+      }
+    : parsed.data;
+
+  // Storing the full request would copy injected file/project text into
+  // conversation_runs.request and the usage estimate, so the persisted request
+  // keeps the caller's original messages; the user message metadata's
+  // attachmentIds remains the reference.
+  const persistedRequest: NormalizedChatRequest = parsed.data;
 
   const userMessageId = randomUUID();
   const assistantMessageId = randomUUID();
@@ -169,8 +198,8 @@ export async function POST(request: Request) {
 
       if (!conversation) {
         const rows = await tx<{ id: string; title: string; active_leaf_message_id: string | null }[]>`
-          insert into conversations (owner_user_id, title)
-          values (${user.id}, ${titleFromMessage(lastUserMessage)})
+          insert into conversations (owner_user_id, title, project_id)
+          values (${user.id}, ${titleFromMessage(lastUserMessage)}, ${requestedProjectId})
           returning id, title, active_leaf_message_id
         `;
         conversation = rows[0]!;

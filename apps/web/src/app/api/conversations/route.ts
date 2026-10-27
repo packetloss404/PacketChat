@@ -38,11 +38,19 @@ export async function POST(request: Request) {
   const title = String(body?.title ?? "New chat").trim() || "New chat";
   const mode = body?.mode === "agent_test" ? "agent_test" : "chat";
   const temporary = Boolean(body?.temporary);
+  const requestedProjectId = typeof body?.projectId === "string" && body.projectId.trim() ? body.projectId.trim() : null;
 
   const sql = getSql();
+  if (requestedProjectId) {
+    const owned = await sql<{ id: string }[]>`
+      select id from projects where id = ${requestedProjectId} and owner_user_id = ${user.id} limit 1
+    `;
+    if (!owned[0]) return jsonError("Project not found", 404);
+  }
+
   const conversations = await sql`
-    insert into conversations (owner_user_id, title, mode, temporary)
-    values (${user.id}, ${title.slice(0, 160)}, ${mode}, ${temporary})
+    insert into conversations (owner_user_id, title, mode, temporary, project_id)
+    values (${user.id}, ${title.slice(0, 160)}, ${mode}, ${temporary}, ${requestedProjectId})
     returning id, project_id, title, mode, temporary, archived_at, active_leaf_message_id, created_at, updated_at
   `;
 

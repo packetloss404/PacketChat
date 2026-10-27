@@ -18,7 +18,13 @@ process.env.ENCRYPTION_KEY_BASE64 ??= Buffer.alloc(32, 7).toString("base64");
 
 import { encryptJsonSecret } from "@packetchat/auth";
 import { apiClient } from "../src/lib/api-client";
-import { callPacketAgent, interpretInspectResponse, interpretOpenResponse } from "../src/lib/packet-agent";
+import {
+  assertSafeAgentBaseUrl,
+  callPacketAgent,
+  fetchSignedCallback,
+  interpretInspectResponse,
+  interpretOpenResponse
+} from "../src/lib/packet-agent";
 
 type FetchCall = { input: RequestInfo | URL; init?: RequestInit };
 
@@ -132,4 +138,45 @@ test("inspect maps an Agent 401/410 to expired and strips credentials from detai
     assert.equal("token" in detail, false);
     assert.deepEqual(detail.nested, { value: 1 });
   }
+});
+
+test("assertSafeAgentBaseUrl rejects loopback, private, mapped, and credentialed Agent targets", async () => {
+  for (const value of [
+    "http://127.0.0.1:8080",
+    "http://169.254.169.254",
+    "http://10.0.0.5",
+    "http://192.168.1.1",
+    "http://[::1]",
+    "http://[::ffff:169.254.169.254]",
+    "http://localhost",
+    "http://user:pass@agent.example.test",
+    "not a url"
+  ]) {
+    await assert.rejects(() => assertSafeAgentBaseUrl(value), `expected ${value} to be rejected`);
+  }
+});
+
+test("callPacketAgent refuses a private base URL without making the request", async () => {
+  let fetchCalled = false;
+  globalThis.fetch = (async () => {
+    fetchCalled = true;
+    return new Response("{}");
+  }) as typeof fetch;
+  const agentCredentials = encryptJsonSecret({ token: "agent-token", workspaceId: "workspace-1" });
+
+  await assert.rejects(() =>
+    callPacketAgent({ agentBaseUrl: "http://169.254.169.254", workspaceId: "workspace-1", agentCredentials }, "/api/worker-deployments/x")
+  );
+  assert.equal(fetchCalled, false);
+});
+
+test("fetchSignedCallback refuses a private callback URL without fetching it", async () => {
+  let fetchCalled = false;
+  globalThis.fetch = (async () => {
+    fetchCalled = true;
+    return new Response("{}");
+  }) as typeof fetch;
+
+  await assert.rejects(() => fetchSignedCallback("http://169.254.169.254/latest/meta-data/"));
+  assert.equal(fetchCalled, false);
 });

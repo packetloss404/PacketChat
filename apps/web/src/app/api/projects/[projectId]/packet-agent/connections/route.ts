@@ -3,10 +3,11 @@ import { authenticateRequest, encryptJsonSecret } from "@packetchat/auth";
 import { packetAgentRouteConfigTemplate } from "@packetchat/contracts";
 import { getSql } from "@packetchat/db";
 import {
+  assertSafeAgentBaseUrl,
   buildIngestEndpointUrl,
   connectionMetadataFromRow,
   createIngestToken,
-  normalizeAgentBaseUrl,
+  PacketAgentError,
   type PacketAgentConnectionRow
 } from "../../../../../../lib/packet-agent";
 import { jsonError, jsonOk } from "../../../../../../lib/http";
@@ -60,8 +61,13 @@ export async function POST(request: Request, context: RouteContext) {
   const agentToken = text(body.agentToken);
   if (!agentToken) return jsonError("agentToken is required", 400);
 
-  const agentBaseUrl = normalizeAgentBaseUrl(body.agentBaseUrl);
-  if (!agentBaseUrl) return jsonError("agentBaseUrl must be an http(s) origin with no userinfo, query, or hash", 400);
+  let agentBaseUrl: string;
+  try {
+    agentBaseUrl = await assertSafeAgentBaseUrl(body.agentBaseUrl);
+  } catch (error) {
+    if (error instanceof PacketAgentError) return jsonError(error.message, error.status ?? 400);
+    throw error;
+  }
 
   const deploymentId = text(body.deploymentId);
 

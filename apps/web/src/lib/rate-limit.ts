@@ -1,7 +1,7 @@
 import { getConfig } from "@packetchat/config";
 import { checkRateLimit, type RateLimitAlgorithm } from "@packetchat/jobs";
 import { logger } from "@packetchat/observability";
-import { jsonError, requestIp, userAgent } from "./http";
+import { jsonError, requestIp } from "./http";
 
 type RateLimitSubject = {
   userId?: string | null;
@@ -22,7 +22,14 @@ function clientIdentifier(request: Request, subject?: RateLimitSubject | null) {
   const ip = requestIp(request);
   if (ip) return `ip:${ip}`;
 
-  return `anonymous:${userAgent(request) ?? "unknown"}`;
+  // No authenticated subject and no trusted client IP (APP_TRUSTED_PROXY is
+  // off, or the proxy did not set a forwarded header). Key on a fixed bucket
+  // rather than the User-Agent: the UA is caller-controlled, so keying on it
+  // lets an attacker mint a fresh bucket per request and bypass the limit
+  // entirely. A shared bucket bounds brute force instead; set
+  // APP_TRUSTED_PROXY=true behind a proxy so real clients get their own IP
+  // bucket.
+  return "anonymous";
 }
 
 // Redis is reached through a connection configured with maxRetriesPerRequest:

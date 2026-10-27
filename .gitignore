@@ -24,6 +24,11 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Playwright browser tests
+playwright-report/
+test-results/
+tests/e2e/.auth/
+
 # Docker/local runtime state
 Dockerfile.local
 postgres-data/

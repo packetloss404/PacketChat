@@ -13,7 +13,7 @@ Run this checklist after a local start, release deployment, restore drill, or op
 
 ## Health
 
-CI runs the static production gate plus `npm run compose:check`. It intentionally does not run this live smoke script because readiness depends on a started stack, applied migrations, object storage buckets, and optional deployment credentials.
+CI runs the static production gate (`npm run prod:check`), then validates the Compose config and builds the `web`, `worker`, and `migrate` images. It intentionally does not run this live smoke script because readiness depends on a started stack, applied migrations, object storage buckets, and optional deployment credentials.
 
 - Run the lightweight API smoke script:
 
@@ -51,8 +51,8 @@ For non-local targets, also set `PACKETCHAT_BASE_URL` to the deployment URL. The
 `npm run smoke` currently covers these routes without provider API keys or Resend:
 
 - Public health: `GET /api/healthz`, `GET /api/readyz`.
-- Anonymous protection checks: `GET /api/auth/me`, `GET /api/projects`, `POST /api/projects`, `GET /api/prompts`, `POST /api/prompts`, `GET /api/conversations`, `POST /api/conversations`, `GET /api/knowledge`, `POST /api/knowledge`, `POST /api/knowledge/{knowledgeBaseId}/search`, `GET /api/providers`, `POST /api/chat`.
-- With `PACKETCHAT_SMOKE_EMAIL` and `PACKETCHAT_SMOKE_PASSWORD`: `POST /api/auth/login`, `GET /api/auth/me`, project create/update/delete, prompt create/update/delete, conversation create/list/message list/rename/archive/delete, agent create/list/update/archive/delete, knowledge base create/list/update/archive/delete, text document upload/rename/delete, and knowledge search.
+- Anonymous protection checks: `GET /api/auth/me`, `GET /api/projects`, `POST /api/projects`, `GET /api/prompts`, `POST /api/prompts`, `GET /api/conversations`, `POST /api/conversations`, `GET /api/knowledge`, `POST /api/knowledge`, `POST /api/knowledge/{knowledgeBaseId}/search`, `GET /api/providers`, `GET /api/approvals`, `PATCH /api/approvals/{approvalId}`, `GET /api/admin/usage`, `GET /api/admin/audit`, `GET /api/admin/operations`, `GET /api/admin/approvals`, `GET /api/agents/{agentId}/runs`, `GET /api/agents/{agentId}/runs/{runId}`, `POST /api/chat`.
+- With `PACKETCHAT_SMOKE_EMAIL` and `PACKETCHAT_SMOKE_PASSWORD`: `POST /api/auth/login`, `GET /api/auth/me`, project create/update/delete, prompt create/update/delete, conversation create/list/message list/rename/archive/delete, agent create/list/update/archive/delete, agent-run list, approvals + recent-actions surfaces, admin usage/audit/operations/approvals surfaces (or `403` for a non-admin), knowledge base create/list/update/archive/delete, text document upload/rename/delete, and knowledge search.
 
 The authenticated smoke path creates timestamped test records and deletes them before exit. Knowledge text upload waits briefly for worker ingestion; if the document is still queued, the script reports that search validation was skipped for local non-strict runs. With `PACKETCHAT_SMOKE_REQUIRE_AUTH=1`, unfinished ingestion fails the smoke run.
 
@@ -105,7 +105,7 @@ These checks still require external credentials, provider configuration, or emai
 - Redis readiness remains `ok` after login and chat activity.
 - Creating a provider account or running a model sync from `/admin/providers` enqueues a `sync-provider` job; `worker` logs `Provider sync job completed` and no new job failure appears.
 - Worker logs remain clean during provider sync or queued work.
-- Starting an agent run with `{"async": true}` returns `202` with a run id; `worker` logs `Agent run job received` and then `Agent run job completed`, and `GET /api/agents/{agentId}/runs/{runId}` reaches a terminal status. A run still `queued` after the worker has been idle means the queue is not being consumed - it is marked `timed_out` once it is 20 minutes old.
+- Starting an agent run with `{"async": true}` returns `202` with a run id; `worker` logs `Agent run job received` and then `Agent run job completed`, and `GET /api/agents/{agentId}/runs/{runId}` reaches a terminal status. A run still `queued` after the worker has been idle means the queue is not being consumed; a queued run is not reaped for queue age, so investigate the worker rather than waiting for a `timed_out`.
 - `/admin/operations` shows provider account status, model binding status, knowledge ingestion status, seven-day agent run status, and recent job failures.
 
 ## Shutdown

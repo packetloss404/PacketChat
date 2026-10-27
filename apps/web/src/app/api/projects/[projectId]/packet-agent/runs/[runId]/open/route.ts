@@ -2,7 +2,8 @@ import { authenticateRequest, decryptJsonSecret } from "@packetchat/auth";
 import { getSql } from "@packetchat/db";
 import {
   fetchSignedCallback,
-  interpretOpenResponse
+  interpretOpenResponse,
+  PacketAgentError
 } from "../../../../../../../../lib/packet-agent";
 import { jsonError, jsonOk } from "../../../../../../../../lib/http";
 
@@ -39,7 +40,13 @@ export async function GET(request: Request, context: RouteContext) {
 
   // The signed callback is fetched server-side; only the Agent's plain UI URL is
   // returned to the caller, so the signed URL is never exposed to the browser.
-  const result = await fetchSignedCallback(openUrl);
+  let result: { status: number; body: unknown };
+  try {
+    result = await fetchSignedCallback(openUrl);
+  } catch (error) {
+    if (error instanceof PacketAgentError) return jsonError(error.message, error.status ?? 502);
+    throw error;
+  }
   const outcome = interpretOpenResponse(result.status, result.body);
   if (outcome.expired) return jsonOk(outcome);
   if (!outcome.ok) {

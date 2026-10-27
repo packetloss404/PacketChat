@@ -2,7 +2,7 @@
 
 PacketChat is a privately deployed, multi-user AI workspace. V1 targets local JWT auth, app-wide admin-managed provider keys, private user-owned chats / projects / prompts / knowledge / agents, and a Docker Compose deployment.
 
-The frontend is a v3 LibreChat-style shell — three columns (left rail, main, collapsible right rail), monochrome dark theme with a light-mode toggle, route-aware header pill, and an account popover.
+The frontend is a v3 LibreChat-style shell — two columns (left rail plus main content), monochrome dark theme with a light-mode toggle, route-aware header pill, and an account popover.
 
 ## Current Scope
 
@@ -34,7 +34,7 @@ This repository is on branch `main` with origin `git@github.com:packetloss404/Pa
 
 - Keep `.env`, `.env.*`, `secrets/`, local data directories, backups, build outputs, logs, `node_modules/`, and `*.tsbuildinfo` out of git.
 - Keep `.env.example` tracked as the non-secret configuration template.
-- Before committing, run `npm run verify` (typecheck, JS syntax/workspace lint, and tests). For local production readiness checks, run `npm run audit:prod`, `npm run prod:check`, and `npm run compose:check` when Docker is available; `audit:prod` gates high-severity production advisories and may still print lower-severity dependency advisories. If the Compose stack is running, also run `npm run smoke`.
+- Before committing, run `npm run verify` (typecheck, JS syntax/workspace lint, and tests). For local production readiness checks, run `npm run audit:prod`, `npm run prod:check`, and `npm run compose:check` when Docker is available; `audit:prod` gates high-severity production advisories and currently reports one high advisory in `zod` (`GHSA-mrhx-c7xc-m3w5`) that has no `3.x` fix — it needs a deliberate `zod` 4 upgrade. With the Compose stack running, also run `npm run smoke` and `npm run test:e2e` (browser tests).
 
 See `docs/git-workflow.md` for the branch, commit, and pull-request workflow.
 
@@ -42,13 +42,14 @@ See `docs/git-workflow.md` for the branch, commit, and pull-request workflow.
 
 | Route | What it does | Wired? |
 | --- | --- | --- |
-| `/` | Welcome dashboard with quick actions, system status (`/api/healthz`), Resume-last-chat | ✅ |
+| `/` | Redirects to `/chat`. There is no separate welcome dashboard. | ✅ |
 | `/login` | Local password login, invite acceptance, password-reset completion | ✅ |
-| `/chat` | Empty-state greet + pill composer; restyled transcript with turn copy, markdown rendering (tables, blockquotes, images, hr, nested lists), and active-path / branch navigation; user edit-and-rerun and assistant regenerate **persist** as new sibling branches; the header shows the conversation title and model label; reads and applies the General preferences (send-on-Enter, draft autosave, token counts, composer font size); bookmarks are stored in localStorage only and are not server-backed; left rail supports conversation search, rename, archive, delete, and export (md/json/txt); SSE streaming for normal chat; `?conversation=<id>` restores transcripts; `?prompt=<id>` opens a prompt in the composer; `?agent=<id>` runs published single-pass augmented agents with chat persistence; per-message timestamps; speech-recognition mic when supported | ✅ |
+| `/chat` | Empty-state greet + pill composer; restyled transcript with turn copy, markdown rendering (tables, blockquotes, images, hr, nested lists), and active-path / branch navigation; user edit-and-rerun and assistant regenerate **persist** as new sibling branches; the header shows the conversation title and model label; reads and applies the General preferences (send-on-Enter, draft autosave, token counts, composer font size); bookmarks are stored in localStorage only and are not server-backed; left rail supports conversation search, rename, archive, delete, export (md/json/txt), and share-link create/revoke; SSE streaming for normal chat; `?conversation=<id>` restores transcripts; `?prompt=<id>` opens a prompt in the composer; `?agent=<id>` runs published single-pass augmented agents with chat persistence; `?project=<id>` starts a chat owned by that project and injects its instructions; per-message timestamps; speech-recognition mic when supported | ✅ |
+| `/share/[token]` | Public, read-only view of a shared conversation. The token is the sole credential and the route fails closed for a missing or revoked share. | ✅ |
 | `/agents` | Library grid with deterministic avatars + Create / Search / Sort / Pin; Create modal (scratch or template); builder with provider/model/parameters, file search, file context, artifact instructions, OpenAPI actions, pre-run agent context, supported tools, ACL sharing, manual runs, and persisted run history with steps/events/usage for published single-pass augmented agents | ✅ |
-| `/providers` | Read-only model library — synced model bindings, pricing coverage, and capability metadata for every app-wide provider account. Runtime provider IDs are limited to OpenAI-compatible, Azure OpenAI, Anthropic, Perplexity, and MiniMax. | ✅ |
+| `/providers` | Model library — synced model bindings, pricing coverage, and capability metadata for every app-wide provider account, browsable by everyone. Runtime use is available for all twelve provider IDs listed above. The per-binding enable/disable toggle is rendered for everyone but the API requires an admin, so a non-admin sees a `403` toast. | ✅ |
 | `/admin/providers` | Admin-only provider and key governance — add/edit/delete app-wide provider accounts, rotate keys, enable/disable, set the default route, connection test, and model sync. Operator HTTPS-proxy URL / OpenAI Organization ID and manual custom-model registration were **not** added: the backend has no field or endpoint for them, so they are intentionally absent rather than faked client-side. | ✅ |
-| `/projects` | User-owned project workspaces with reusable instructions, default-model readiness, linked chat counts, create/edit/delete, and workspace search | ✅ |
+| `/projects` | User-owned project workspaces with reusable instructions, default-model readiness (the preset is shown for reference only — the projects API does not accept one), linked chat counts, create/edit/delete, workspace search, and an Open-in-chat action that starts a chat owned by the project. A project's instructions are injected as a system prelude for chats in that project. | ✅ |
 | `/prompts` | Prompt Library — Add prompt modal, Browse-templates modal that creates real prompts, search + tag filter + Title / Recently-updated sort, list/grid views, star favorites (localStorage), Use in chat opens the body in the chat composer | ✅ |
 | `/knowledge` | Knowledge bases — create, edit, archive, delete; drag-drop file upload with type-filtered accept; documents list with rename / delete; reembed with detailed counts; Enter-to-search retrieval plus per-result debug details for score, matched terms, source, freshness, and embedding metadata | ✅ |
 | `/approvals` | User approval queue for pending agent action checkpoints, approve/reject decisions, and recent safe action activity | ✅ |
@@ -71,15 +72,9 @@ Click the avatar / display name in the left-rail footer to open the account drop
 
 The settings gear (next to the popover trigger) routes to `/settings`.
 
-## Right-rail drawers
+## Bookmarks
 
-The 48-px right rail expands a 320-px panel when an icon is selected. There are exactly three drawers — Memories, Parameters, and Bookmarks — each reading/writing localStorage so values survive reloads. None of them is consumed by chat or agent runs yet:
-
-- **Memories** — local listing + add-memory textarea (`packetchat.memories`), empty by default.
-- **Parameters** — temperature, top-p, max tokens, system prompt + Reset (`packetchat.parameters`); these are not sent with chat requests.
-- **Bookmarks** — reads `packetchat.chat.bookmarks` written by the chat-turn bookmark button (localStorage only, not server-backed).
-
-`Esc` closes the drawer.
+The right-rail Memories / Parameters / Bookmarks drawers were removed; the shell is left rail plus content. The only surviving behavior is the per-message bookmark button in `/chat`, which reads and writes `packetchat.chat.bookmarks` in localStorage. Bookmarks are not server-backed and nothing else consumes them.
 
 ## Wiring status — what's stubbed vs wired
 
@@ -92,21 +87,19 @@ The 48-px right rail expands a 320-px panel when an icon is selected. There are 
 - Invite and password-reset email delivery through SMTP or Resend. `manual` (the default) sends nothing. A configured provider that cannot send reports `failed` rather than passing as manual delivery, in the API response, on `/admin/users`, and in the audit event; the token and its link survive either way. There is no retry — re-issue the invite or reset to try again.
 - Runtime model use is checked against enabled model bindings for chat and agent runs.
 - Worker background queues: file ingestion, provider-sync model discovery, queue-durable agent runs, and scheduled retention cleanup. A provider-sync job is enqueued when an admin creates a provider account or runs a model sync; the worker registers a daily cleanup schedule on boot. Cadence, retention windows, the manual trigger, and known limitations are in `docs/runbooks/worker-queues.md`.
-- Provider-account toggles persist via the existing `providers.updateAccount` path (account-level granularity; the backend has no per-binding toggle yet).
+- Provider-account toggles persist via `providers.updateAccount` (account-level granularity), and each model binding has its own enable/disable toggle at `PATCH /api/providers/accounts/{accountId}/bindings/{bindingId}` (admin-only), surfaced in `/admin/providers` and `/providers`.
 - Theme in `/settings` → Appearance and the account-popover toggle share one persisted implementation (`packetchat.settings.appearance.theme`) that toggles `.light` on `<html>`; a pre-hydration script in `app/layout.tsx` applies the stored choice before paint to avoid a dark flash. The header model pill renders the conversation title and model label published through `apps/web/src/lib/chat-header-store.ts` (a store the chat page drives; clicking the pill calls `requestModelPicker()`), falling back to the route title. The General preferences (autosave drafts, send on Enter, token counts, composer font size) persist to `localStorage` under `packetchat.settings.general.<key>` and are read and applied by the chat page; no agent-run path reads them.
 
 **Stubbed (UI-complete, backend pending):**
 
-- Per-binding model toggle — not exposed by the backend; the account-level toggle is what fires.
-- Code interpreter and MCP tools — visible in the agent builder as unavailable until their runtimes are configured.
+- Code interpreter and MCP tools — the agent builder shows a note that MCP and code execution are not enabled; they are not rendered as selectable tools until their runtimes exist.
 
 **Known gaps (private-first scope):**
 
 - Bookmarks are stored in `localStorage` only and are not server-backed.
-- In-chat file attachments are not implemented. There is no chat file picker: `POST /api/files/upload` requires a `knowledgeBaseId`, so uploads only happen from a Knowledge base.
+- In-chat file attachments are wired: `/chat` has a file picker and `POST /api/files/upload` accepts a chat scope without a knowledge base, injecting bounded extracted text as a system prelude for that turn.
 - Retrieval uses a local-embedding fallback plus lexical scoring (`apps/web/src/app/api/knowledge/[knowledgeBaseId]/search/route.ts`), not a production embedding/vector store.
-- Right-rail Memories/Parameters/Bookmarks persist locally and are not consumed by chat or agent runs (the General preferences are, via the chat page).
-- Agent-run conversations are persisted flat (every message has a null parent), so the chat page falls back to a chronological thread for them instead of a strict parent walk; branching applies to normal chat only.
+- Agent-run conversations persist a parent/active-leaf message tree like normal chat for runs created after the message-tree change; only legacy runs (written before it) are flat, so the chat page falls back to a chronological thread for those.
 
 ## Deployment Notes
 
@@ -115,7 +108,7 @@ The 48-px right rail expands a 320-px panel when an icon is selected. There are 
 - Use immutable image tags for pilot / prod.
 - Treat Compose as the supported V1 deployment shape. Kubernetes, multi-region HA, external managed databases, SSO, and Google provider runtime support are not included in the V1 promise.
 - Email delivery is off by default (`EMAIL_PROVIDER=manual`). Before relying on emailed invites or resets, set the SMTP or Resend credentials and a correct `APP_BASE_URL` — the link in the message is built from it — and send one invite to a real mailbox to confirm the response reports `sent`.
-- Asynchronous agent runs are executed by `worker`. With Redis unreachable the run falls back to executing inside `web` and is lost if that process restarts, and a run that sits queued longer than 20 minutes is marked `timed_out` by the next status poll and is not executed afterwards. Keep `worker` running, or use synchronous runs.
+- Asynchronous agent runs are executed by `worker`. With Redis unreachable the run falls back to executing inside `web` and is lost if that process restarts. A run that has **started** and then gone quiet is marked `timed_out` by the next status poll once it is older than 20 minutes; a run that is still `queued` (never started) is not reaped for queue age, so a stalled queue can leave a run waiting indefinitely. Keep `worker` running, or use synchronous runs.
 - The worker runs a daily retention cleanup: job failures 30 days, terminal agent runs 90 days, orphan attachments 7 days. An orphan attachment's object is deleted from MinIO before its row, so a failed object delete leaves the row in place to retry rather than stranding an unidentifiable object. Back up Postgres before the first worker restart that carries this change — the first pass deletes whatever backlog already exists.
 - Run a restore drill before calling a deployment production-ready.
 - Use `npm run backup`, `npm run backup:postgres`, or `npm run backup:minio` for local Compose backup artifacts before upgrades.
@@ -133,7 +126,7 @@ A private project can connect a PacketAgent deployment, start a worker run, and 
 5. **Set `callbackBaseUrl` and `callbackSecret`** in that route config to the operator's PacketAgent callback host and secret. PacketAgent puts the signed `open`/`inspect` URLs it mints into each notification; PacketChat encrypts them and fetches/redirects server-side.
 6. **Rotate or revoke** the connection from the project panel. Rotating mints a new token (shown once, old one rejected immediately); revoking deletes the connection and cascades its runs and events.
 
-Signed callback URLs are never returned to the browser or logged: `GET .../runs/{id}/inspect` and `GET .../runs/{id}/open` fetch the signed callback server-side and return only the Agent's read-only detail or plain UI URL. An expired callback returns `{ ok: false, expired: true }`, which the project panel explains honestly rather than opening a dead link. The endpoints are listed in "Wiring status" below.
+Signed callback URLs are never returned to the browser or logged: `GET .../runs/{id}/inspect` and `GET .../runs/{id}/open` fetch the signed callback server-side and return only the Agent's read-only detail or plain UI URL. An expired callback returns `{ ok: false, expired: true }`, which the project panel explains honestly rather than opening a dead link. The Agent base URL and every signed callback URL are validated before use and must resolve to a public address: loopback, private, link-local, and reserved targets (including IPv4-mapped IPv6 forms) are rejected, so a connection cannot be used to reach internal services. The endpoints are listed in "Wiring status" below.
 
 ## Front-end conventions
 

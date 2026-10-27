@@ -30,7 +30,7 @@ npm run backup:postgres
 npm run backup:minio
 ```
 
-The Postgres backup uses `pg_dump -Fc` from the running `postgres` service. The MinIO backup streams a tar archive of `/data` from the running `minio` service. Override paths with `PACKETCHAT_ENV_FILE`, `PACKETCHAT_COMPOSE_FILE`, or `PACKETCHAT_BACKUP_DIR`.
+The Postgres backup uses `pg_dump -Fc` from the running `postgres` service. The MinIO backup tars the MinIO volume by mounting it read-only into a throwaway `busybox:stable` container, because the MinIO image itself has no `tar`. Override paths with `PACKETCHAT_ENV_FILE`, `PACKETCHAT_COMPOSE_FILE`, or `PACKETCHAT_BACKUP_DIR`.
 
 Check the newest local backup artifacts without restoring anything:
 
@@ -50,8 +50,10 @@ Equivalent manual commands:
 
 ```shell
 docker compose --env-file .env -f infrastructure/compose/docker-compose.yml exec -T postgres pg_dump -U packetchat -d packetchat -Fc > backups/postgres.dump
-docker compose --env-file .env -f infrastructure/compose/docker-compose.yml exec -T minio tar -C /data -cf - . > backups/minio-data.tar
+docker run --rm -v packetchat_minio-data:/data:ro busybox:stable tar -C /data -cf - . > backups/minio-data.tar
 ```
+
+The MinIO command mounts the volume into a throwaway `busybox:stable` container because the MinIO image has no `tar` (`compose exec minio tar` exits 127). Replace `packetchat_minio-data` with your Compose project's MinIO volume name if it differs.
 
 These commands do not remove containers, volumes, buckets, or database objects.
 

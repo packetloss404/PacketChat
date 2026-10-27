@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { getProviderAdapter, validateProviderBaseUrl, type ProviderAccountRuntime } from "../src/index";
+import {
+  assertSafePublicOutboundUrl,
+  getProviderAdapter,
+  validateProviderBaseUrl,
+  validatePublicOutboundUrl,
+  type ProviderAccountRuntime
+} from "../src/index";
 
 const originalFetch = globalThis.fetch;
 
@@ -63,6 +69,36 @@ test("provider base URL validation rejects embedded credentials", () => {
 
   assert.equal(result.ok, false);
   if (!result.ok) assert.equal(result.code, "provider_base_url_credentials_blocked");
+});
+
+test("public outbound URL validation blocks literal private and mapped addresses", () => {
+  for (const url of [
+    "http://127.0.0.1/hook",
+    "http://10.0.0.5/hook",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://[::1]/hook",
+    "http://[::ffff:169.254.169.254]/hook",
+    "http://localhost/hook",
+    "http://agent.localhost/hook",
+    "http://user:pass@example.com/hook",
+    "ftp://example.com/hook"
+  ]) {
+    const result = validatePublicOutboundUrl(url);
+    assert.equal(result.ok, false, url);
+  }
+
+  const publicUrl = validatePublicOutboundUrl("https://agent.example.test/hook?token=abc");
+  assert.equal(publicUrl.ok, true);
+  if (publicUrl.ok) assert.equal(publicUrl.value, "https://agent.example.test/hook?token=abc");
+});
+
+test("assertSafePublicOutboundUrl blocks a literal private host without a DNS lookup", async () => {
+  const blocked = await assertSafePublicOutboundUrl("http://169.254.169.254/latest/meta-data/");
+  assert.equal(blocked.ok, false);
+  if (!blocked.ok) assert.equal(blocked.code, "outbound_url_private_blocked");
+
+  const localhost = await assertSafePublicOutboundUrl("https://localhost/hook");
+  assert.equal(localhost.ok, false);
 });
 
 test("Anthropic model discovery uses runtime base URL safety checks", async () => {

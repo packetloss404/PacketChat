@@ -101,8 +101,32 @@ function isBlockedIpv6(address: string) {
   );
 }
 
-function isBlockedAddress(address: string) {
+// An IPv6 address can embed an IPv4 address (IPv4-mapped `::ffff:a.b.c.d`,
+// IPv4-compatible `::a.b.c.d`, or the expanded `0:0:0:0:0:ffff:a9fe:a9fe`
+// form). isIP() reports these as family 6, so without unwrapping them the
+// private-range rules would never see the IPv4 they actually target.
+function ipv4FromMappedIpv6(normalized: string): string | null {
+  const dotted = normalized.match(/^(?:0:0:0:0:0:ffff:|::ffff:|::)(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (dotted) return dotted[1] ?? null;
+  const hex = normalized.match(/^(?:0:0:0:0:0:ffff:|::ffff:)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (hex) {
+    const high = Number.parseInt(hex[1]!, 16);
+    const low = Number.parseInt(hex[2]!, 16);
+    return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+  }
+  return null;
+}
+
+/**
+ * True when an address literal must not be reached by an outbound request:
+ * loopback, private, link-local, CGNAT, multicast, or otherwise reserved.
+ * Shared by the provider base-URL guard, the agent-runtime URL tools, and the
+ * PacketAgent client so a fix here covers every outbound fetch.
+ */
+export function isBlockedAddress(address: string) {
   const normalized = addressForCheck(address);
+  const mapped = ipv4FromMappedIpv6(normalized);
+  if (mapped) return isBlockedIpv4(mapped);
   if (isLoopbackAddress(normalized)) return true;
   const family = isIP(normalized);
   if (family === 4) return isBlockedIpv4(normalized);
@@ -181,6 +205,58 @@ export async function assertSafeProviderBaseUrl(provider: ProviderId, rawBaseUrl
   }
 
   return validation.value;
+}
+
+export type PublicUrlValidation =
+  | { ok: true; value: string }
+  | { ok: false; code: string; message: string };
+
+/**
+ * Shape + literal-address validation for an outbound http(s) URL that must
+ * reach a public host (PacketAgent base URLs and its signed callback URLs).
+ * Callers that can afford a DNS lookup should follow up with
+ * `assertSafePublicOutboundUrl`, which also blocks a name resolving anywhere
+ * private.
+ */
+export function validatePublicOutboundUrl(rawUrl: string): PublicUrlValidation {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return { ok: false, code: "outbound_url_invalid", message: "URL must be an absolute http(s) URL." };
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return { ok: false, code: "outbound_url_protocol_blocked", message: "URL must use http or https." };
+  }
+  if (url.username || url.password) {
+    return { ok: false, code: "outbound_url_credentials_blocked", message: "URL must not include embedded credentials." };
+  }
+  const hostname = addressForCheck(url.hostname);
+  if (isLoopbackHostname(hostname) || (isIP(hostname) && isBlockedAddress(hostname))) {
+    return { ok: false, code: "outbound_url_private_blocked", message: "URL must not target loopback, private, link-local, or reserved network addresses." };
+  }
+  return { ok: true, value: url.toString() };
+}
+
+/**
+ * Validates an outbound URL and resolves its host, blocking a name that
+ * resolves anywhere loopback/private/link-local/reserved. A lookup that
+ * returns nothing is treated as blocked, so a transient DNS failure cannot
+ * open the door.
+ */
+export async function assertSafePublicOutboundUrl(rawUrl: string): Promise<PublicUrlValidation> {
+  const validation = validatePublicOutboundUrl(rawUrl);
+  if (!validation.ok) return validation;
+
+  const url = new URL(validation.value);
+  const hostname = addressForCheck(url.hostname);
+  if (!isIP(hostname)) {
+    const records = await lookup(hostname, { all: true, verbatim: true }).catch(() => []);
+    if (records.length === 0 || records.some((record) => isBlockedAddress(record.address))) {
+      return { ok: false, code: "outbound_url_dns_blocked", message: "URL could not be resolved to a public address." };
+    }
+  }
+  return validation;
 }
 
 export async function providerBaseUrlForRequest(provider: ProviderId, defaultBaseUrl: string, rawBaseUrl: string | null | undefined) {
