@@ -23,7 +23,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ accou
 
   await sql`
     update provider_credentials
-    set encrypted_payload = ${JSON.stringify(encryptJsonSecret({ apiKey: String(body.apiKey) }))}::jsonb,
+    set encrypted_payload = ${sql.json(encryptJsonSecret({ apiKey: String(body.apiKey) }))},
         key_version = key_version + 1,
         updated_at = now()
     where provider_account_id = ${accountId}

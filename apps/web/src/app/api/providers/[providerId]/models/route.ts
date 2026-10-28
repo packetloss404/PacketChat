@@ -2,7 +2,7 @@ import { getSql, recordAuditEvent } from "@packetchat/db";
 import { getProviderAdapter, isUnsupportedModelDiscovery, normalizeFetchError, type ProviderModelSnapshot } from "@packetchat/providers";
 import { requireAdminOrJson } from "../../../../../lib/admin-auth";
 import { jsonError, jsonOk } from "../../../../../lib/http";
-import { getProviderAccountForRuntime } from "../../../../../lib/providers";
+import { resolveProviderAccountOrJson } from "../../../../../lib/providers";
 import { providerRateLimit } from "../../../../../lib/rate-limit";
 
 function toJsonValue(value: unknown) {
@@ -26,8 +26,9 @@ export async function POST(request: Request, context: { params: Promise<{ provid
   if (!body?.providerAccountId) return jsonError("providerAccountId is required", 400);
 
   const sql = getSql();
-  const runtimeAccount = await getProviderAccountForRuntime(String(body.providerAccountId), { includeDisabled: true });
-  if (!runtimeAccount) return jsonError("Provider account not found", 404);
+  const accountResult = await resolveProviderAccountOrJson(String(body.providerAccountId), { includeDisabled: true });
+  if ("error" in accountResult) return accountResult.error;
+  const runtimeAccount = accountResult.account;
   if (runtimeAccount.provider !== providerId) return jsonError("Provider mismatch", 400);
 
   const adapter = getProviderAdapter(runtimeAccount.provider);

@@ -122,6 +122,7 @@ _Findings from a 2026-07-17 code audit. The worker-queue wiring items were actio
 ### Known limitations (deliberate — not planned)
 
 - Cloud sync UI is a localStorage draft, backend not wired
+- Admin user management can create a user and issue a password reset, but there is no delete or deactivate endpoint (`/api/admin/users` is GET/POST only). Removing a user means a direct database change. A test sweep that creates a throwaway user cannot clean it up through the API.
 
 ## LibreChat Parity Program — 2026-09-21
 

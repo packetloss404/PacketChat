@@ -15,7 +15,7 @@ import { logger } from "@packetchat/observability";
 import { getProviderAdapter } from "@packetchat/providers";
 import { attachmentInputsFromRows, buildAttachmentContext } from "../../../lib/chat-files/context";
 import { jsonError } from "../../../lib/http";
-import { getEnabledModelBindingForRuntime, getProviderAccountForRuntime } from "../../../lib/providers";
+import { getEnabledModelBindingForRuntime, resolveProviderAccountOrJson } from "../../../lib/providers";
 import { chatRateLimit } from "../../../lib/rate-limit";
 import { recordUsage } from "../../../lib/usage";
 
@@ -90,8 +90,9 @@ export async function POST(request: Request) {
   const controls = chatRequestControlsSchema.safeParse(body ?? {});
   if (!controls.success) return jsonError("Invalid chat request", 400, controls.error.flatten());
 
-  const account = await getProviderAccountForRuntime(String(body.providerAccountId));
-  if (!account) return jsonError("Provider account not found", 404);
+  const accountResult = await resolveProviderAccountOrJson(String(body.providerAccountId));
+  if ("error" in accountResult) return accountResult.error;
+  const account = accountResult.account;
   if (account.provider !== parsed.data.provider) return jsonError("Provider mismatch", 400);
   const modelBinding = await getEnabledModelBindingForRuntime({
     accountId: String(body.providerAccountId),

@@ -372,13 +372,43 @@ export function encryptJsonSecret(value: unknown): Record<string, string> {
   };
 }
 
+/**
+ * The stored envelope must be an object with base64url `iv`, `tag`, and
+ * `ciphertext`. A JSON string is also accepted: provider routes used to write
+ * `JSON.stringify(envelope)::jsonb`, which Postgres reads back as a JSON string,
+ * so an account created before that write-path fix still holds a stringified
+ * envelope. Anything else fails closed with a clear message instead of the
+ * cryptic Buffer error `Buffer.from(undefined)` produced.
+ */
+function secretEnvelope(payload: unknown): Record<string, string> {
+  let value: unknown = payload;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      value = null;
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Encrypted payload is not a secret envelope");
+  }
+  const record = value as Record<string, unknown>;
+  for (const field of ["iv", "tag", "ciphertext"] as const) {
+    if (typeof record[field] !== "string" || record[field] === "") {
+      throw new Error(`Encrypted payload is missing ${field}`);
+    }
+  }
+  return record as Record<string, string>;
+}
+
 export function decryptJsonSecret<T>(payload: Record<string, string>): T {
+  const envelope = secretEnvelope(payload);
   const key = Buffer.from(getConfig().ENCRYPTION_KEY_BASE64, "base64");
   if (key.byteLength !== 32) throw new Error("ENCRYPTION_KEY_BASE64 must decode to 32 bytes");
-  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(payload.iv, "base64url"));
-  decipher.setAuthTag(Buffer.from(payload.tag, "base64url"));
+  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(envelope.iv, "base64url"));
+  decipher.setAuthTag(Buffer.from(envelope.tag, "base64url"));
   const decrypted = Buffer.concat([
-    decipher.update(Buffer.from(payload.ciphertext, "base64url")),
+    decipher.update(Buffer.from(envelope.ciphertext, "base64url")),
     decipher.final()
   ]);
   return JSON.parse(decrypted.toString("utf8")) as T;

@@ -91,7 +91,7 @@ export async function POST(request: Request) {
     `;
     await tx`
       insert into provider_credentials (provider_account_id, encrypted_payload)
-      values (${accounts[0]!.id}, ${JSON.stringify(encryptJsonSecret({ apiKey: String(body.apiKey) }))}::jsonb)
+      values (${accounts[0]!.id}, ${sql.json(encryptJsonSecret({ apiKey: String(body.apiKey) }))})
     `;
     return accounts;
   });

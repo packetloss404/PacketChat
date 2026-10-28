@@ -2,7 +2,7 @@ import { getProviderAdapter } from "@packetchat/providers";
 import { recordAuditEvent } from "@packetchat/db";
 import { requireAdminOrJson } from "../../../../../lib/admin-auth";
 import { jsonError, jsonOk } from "../../../../../lib/http";
-import { getProviderAccountForRuntime } from "../../../../../lib/providers";
+import { resolveProviderAccountOrJson } from "../../../../../lib/providers";
 import { providerRateLimit } from "../../../../../lib/rate-limit";
 
 export async function POST(request: Request, context: { params: Promise<{ providerId: string }> }) {
@@ -15,8 +15,9 @@ export async function POST(request: Request, context: { params: Promise<{ provid
   const body = await request.json().catch(() => null);
   if (!body?.providerAccountId) return jsonError("providerAccountId is required", 400);
 
-  const account = await getProviderAccountForRuntime(String(body.providerAccountId));
-  if (!account) return jsonError("Provider account not found", 404);
+  const accountResult = await resolveProviderAccountOrJson(String(body.providerAccountId));
+  if ("error" in accountResult) return accountResult.error;
+  const account = accountResult.account;
   if (account.provider !== providerId) return jsonError("Provider mismatch", 400);
 
   const adapter = getProviderAdapter(account.provider);
