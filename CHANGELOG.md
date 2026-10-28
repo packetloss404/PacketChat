@@ -35,6 +35,7 @@ All notable PacketChat changes are tracked here.
 - PWA splash and icon background colours realigned with `--bg` (`#0a0b10`); both had drifted while claiming in comments to match it.
 - A signed-out visitor no longer triggers a background `/api/auth/refresh` call that logged a `403` to the console on every public page load. The client only refreshes when the CSRF cookie shows a session may exist.
 - The documentation no longer advertises surfaces that were removed or never wired: the right-rail Memories/Parameters/Bookmarks drawers, the `/` welcome dashboard, a "read-only" `/providers` with no toggle, in-chat attachments as a known gap, the per-binding model toggle as stubbed, agent-run conversations as always flat, and the queued-run timeout. The README route table, `docs/deployment.md`, `docs/local-run.md`, `docs/smoke-test.md`, `docs/demo-seed.md`, and the worker-queues and backup-restore runbooks were corrected against the code.
+- A fresh `npm run compose:up` can no longer pull `minio/minio`: MinIO deleted its community images from Docker Hub in September 2026 and closed the Quay mirror. `npm run compose:up:ci` and `npm run compose:migrate:ci` add `infrastructure/compose/docker-compose.ci.yml`, which substitutes Bitnami's archived MinIO build for an environment without the cached images; the production compose keeps the pinned images, so an existing deployment is unchanged. The browser-test CI job uses the override.
 
 ### Security
 

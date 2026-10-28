@@ -28,6 +28,8 @@ The frontend is a v3 LibreChat-style shell — two columns (left rail plus main 
 
 See `docs/local-run.md` for local operator commands, API examples, health checks, migrations, and stack shutdown.
 
+> **MinIO images.** MinIO deleted its community images from Docker Hub in September 2026 and closed the Quay mirror, so `npm run compose:up` cannot pull `minio/minio` on a machine that does not already have it. Use `npm run compose:up:ci` and `npm run compose:migrate:ci` instead — they add `infrastructure/compose/docker-compose.ci.yml`, which substitutes a pullable MinIO build. A host that already runs the pinned images (like an existing deployment) is unaffected and keeps them.
+
 ## Git Workflow
 
 This repository is on branch `main` with origin `git@github.com:packetloss404/PacketChat.git`.

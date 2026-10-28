@@ -30,8 +30,8 @@ Required proxy behavior:
 3. Set `APP_BASE_URL` to the public HTTPS URL served by your proxy.
 4. Set `COOKIE_SECURE=true` for HTTPS deployments.
 5. Leave `APP_TRUSTED_PROXY=true` only when the reverse proxy supplies trustworthy forwarded headers.
-6. Start dependencies and app: `npm run compose:up`.
-7. Run migrations: `npm run compose:migrate`.
+6. Start dependencies and app: `npm run compose:up`. If the machine cannot pull `minio/minio` (MinIO removed its community images from Docker Hub in September 2026), use `npm run compose:up:ci`, which adds `infrastructure/compose/docker-compose.ci.yml` and substitutes a pullable MinIO build. An existing deployment that already runs the pinned images is unaffected.
+7. Run migrations: `npm run compose:migrate` (or `npm run compose:migrate:ci` with the override).
 8. Bootstrap the first admin account by calling `POST /api/admin/bootstrap` with your `BOOTSTRAP_TOKEN` (there is no bootstrap UI; `/` redirects to `/chat`). See `docs/local-run.md` for the exact request.
 9. Optional: configure email delivery below if invite and password-reset links should be mailed rather than handed over by the admin.
 

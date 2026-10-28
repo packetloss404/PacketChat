@@ -120,10 +120,10 @@ jobs:
           sed -i 's/^RATE_LIMIT_AUTH_PER_MINUTE=.*/RATE_LIMIT_AUTH_PER_MINUTE=600/' .env
 
       - name: Start the stack
-        run: npm run compose:up
+        run: npm run compose:up:ci
 
       - name: Run migrations
-        run: npm run compose:migrate
+        run: npm run compose:migrate:ci
 
       - name: Wait for readiness and bootstrap the admin
         run: |
@@ -145,4 +145,4 @@ jobs:
 
       - name: Stack logs on failure
         if: failure()
-        run: docker compose --env-file .env -f infrastructure/compose/docker-compose.yml logs --tail 120 || true
+        run: docker compose --env-file .env -f infrastructure/compose/docker-compose.yml -f infrastructure/compose/docker-compose.ci.yml logs --tail 120 || true

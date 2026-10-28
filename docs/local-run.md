@@ -67,6 +67,15 @@ npm run compose:up
 
 This starts `web`, `worker`, `postgres`, `redis`, `minio`, and the MinIO bucket initializer. The `web` service is published at `http://localhost:3000` by default.
 
+MinIO deleted its community images from Docker Hub in September 2026, so on a machine that does not already have `minio/minio` the command above fails to pull it. Use the CI override, which swaps in a pullable MinIO build:
+
+```shell
+npm run compose:up:ci
+npm run compose:migrate:ci
+```
+
+A host that already runs the pinned MinIO images is unaffected and keeps them.
+
 The `worker` service runs file ingestion, provider-sync model discovery, and a daily retention cleanup it schedules itself. See `docs/runbooks/worker-queues.md` for retention windows and the manual cleanup trigger.
 
 ## Run Migrations
